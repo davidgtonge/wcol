@@ -1,0 +1,50 @@
+# Data (regenerate locally — see README)
+*.sav
+*.parquet
+*.wcol
+data/
+demo/data/*.wcol
+
+# Dependencies & build
+node_modules/
+target/
+dist/
+pkg/
+rust/wcol-wasm/pkg/
+*.wasm
+*.tsbuildinfo
+
+# Engine-shell submodule build
+engine-shell/node_modules/
+engine-shell/target/
+
+# Archive & perf (local benchmarks only)
+archive/
+perf/
+.cursor/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Env & logs
+.env
+.env.*
+*.log
+
+# Internal planning docs (not for public repo)
+docs/repo-file-action-plan.md
+docs/prototype-plan-index.md
+docs/prototype-*-plan.md
+docs/PLAN_STATUS.md
+docs/ec2-clickbench.md
+docs/synth-groupby-runner.md
+docs/scaling-proof.md
+docs/thread-engine-v3.md
+docs/local-disk-pressure.md
+
+# Stray
+/1
+*.tmp

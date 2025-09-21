@@ -1,0 +1,11 @@
+[workspace]
+members = [
+  "wcol-cli",
+  "wcol-wasm",
+  "wcol-encoder",
+  "wcol-decoder",
+  "wcol-format",
+  "wcol-sql-parser",
+  "wcol-synth-groupby",
+]
+resolver = "2"

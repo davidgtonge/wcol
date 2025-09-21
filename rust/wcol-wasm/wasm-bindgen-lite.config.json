@@ -1,0 +1,22 @@
+{
+  "outDir": "./pkg",
+  "artifactBaseName": "wcol_wasm",
+  "autoInit": "lazy",
+  "emitNode": true,
+  "emitBrowser": true,
+  "emitTypes": false,
+  "targets": {
+    "baseline": true,
+    "simd": true,
+    "simdFeatures": "simd_like_raw"
+  },
+  "wasmOpt": {
+    "mode": "auto",
+    "args": [
+      "-Oz",
+      "--enable-simd",
+      "--enable-bulk-memory",
+      "--enable-nontrapping-float-to-int"
+    ]
+  }
+}

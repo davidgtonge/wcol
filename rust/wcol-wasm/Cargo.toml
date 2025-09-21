@@ -1,0 +1,18 @@
+[package]
+name = "wcol_wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wcol-decoder = { path = "../wcol-decoder" }
+
+[features]
+bench_api = ["wcol-decoder/bench_api"]
+sql_api = ["wcol-decoder/sql_api"]
+timing = ["wcol-decoder/timing"]
+simd_like_raw = ["wcol-decoder/simd_like_raw"]
+simd_like_dict = ["wcol-decoder/simd_like_dict"]
+simd_all = ["wcol-decoder/simd_all"]

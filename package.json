@@ -1,0 +1,46 @@
+{
+  "name": "wcol",
+  "version": "0.1.0",
+  "description": "Browser-first columnar analytics for .wcol files — Rust/Wasm runtime and crates.io explorer",
+  "type": "module",
+  "license": "MIT",
+  "packageManager": "npm@11.17.0",
+  "scripts": {
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "build:wasm:speed": "WCOL_WASM_PROFILE=speed node scripts/build-wasm.mjs",
+    "build:wasm:size": "WCOL_WASM_PROFILE=size WCOL_WASM_OPT_LEVEL=z node scripts/build-wasm.mjs",
+    "build:browser": "node scripts/build-browser.mjs",
+    "build:engine-wasm": "node scripts/build-engine-wasm.mjs",
+    "generate:types": "cargo run --manifest-path rust/wcol-engine/Cargo.toml --features typegen --bin export-types",
+    "prebuild:demo": "npm run generate:types",
+    "build:demo": "npm run build:wasm && npm run build:engine-wasm && node scripts/build-demo.mjs",
+    "build:pages": "npm run build:demo",
+    "demo": "npm run build:demo",
+    "demo:serve": "npx --yes serve dist/browser -p 5173",
+    "prepare:demo": "node scripts/prepare-demo-datasets.mjs",
+    "prepare:datasets": "node scripts/prepare-demo-datasets.mjs",
+    "test:cbor-interop": "node scripts/test-cbor-interop.mjs",
+    "test": "tsx --test tests/runtime.test.ts tests/worker-core.test.ts tests/plan.test.ts tests/projection.test.ts",
+    "test:explorer": "tsx --test tests/explorer-queries.test.ts tests/dependency-queries.test.ts tests/categories-queries.test.ts tests/maintainers-queries.test.ts tests/trends-queries.test.ts tests/hits-queries.test.ts",
+    "check:wasm": "cargo check -p wcol_wasm --target wasm32-unknown-unknown --manifest-path rust/Cargo.toml",
+    "check:decoder": "cargo check -p wcol-decoder --manifest-path rust/Cargo.toml",
+    "check:encoder": "cargo check -p wcol-encoder --manifest-path rust/Cargo.toml",
+    "check:cli": "cargo check -p wcol-cli --manifest-path rust/Cargo.toml",
+    "check:rust": "npm run check:decoder && npm run check:encoder && npm run check:cli && npm run check:wasm",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@dtonge/engine-shell": "file:./engine-shell/ts",
+    "cbor-x": "^1.6.4",
+    "preact": "^10.29.2",
+    "reselect": "^5.2.0",
+    "wasm-bindgen-lite": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "esbuild": "^0.25.1",
+    "playwright": "^1.49.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>wcol — columnar queries in your browser</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: "media",
+        content: ["./index.html", "./app.js"],
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Inter", "system-ui", "sans-serif"],
+              mono: ["IBM Plex Mono", "ui-monospace", "monospace"],
+            },
+            colors: {
+              wcol: {
+                accent: "#3d8bfd",
+                glow: "#5b9dff",
+                surface: "#1a2332",
+                border: "#2a3548",
+              },
+            },
+            animation: {
+              "fade-in": "fadeIn 0.35s ease-out",
+              "slide-up": "slideUp 0.4s ease-out",
+              shimmer: "shimmer 1.4s ease-in-out infinite",
+            },
+            keyframes: {
+              fadeIn: { from: { opacity: "0" }, to: { opacity: "1" } },
+              slideUp: {
+                from: { opacity: "0", transform: "translateY(8px)" },
+                to: { opacity: "1", transform: "translateY(0)" },
+              },
+              shimmer: {
+                "0%, 100%": { opacity: "0.45" },
+                "50%": { opacity: "0.9" },
+              },
+            },
+          },
+        },
+      };
+    </script>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="font-sans antialiased">
+    <div id="root"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

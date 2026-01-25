@@ -1,0 +1,46 @@
+import type { ViewModel } from "../protocol/types.ts";
+
+export function emptyViewModel(overrides: Partial<ViewModel> = {}): ViewModel {
+  return {
+    loadPhase: "idle",
+    loadStatus: "Starting…",
+    loadError: false,
+    urlInput: "",
+    dataDrawerOpen: false,
+    meta: null,
+    schema: [],
+    workers: 4,
+    queryDraft: {
+      mode: "aggregate",
+      searchText: "",
+      searchColumn: "",
+      filters: [],
+      groupKeys: [],
+      aggColumn: "",
+      selectColumns: [],
+      topK: 25,
+    },
+    planPreview: "{}",
+    queryPhase: "idle",
+    queryStatus: "",
+    queryError: false,
+    warmMs: null,
+    result: null,
+    columns: [],
+    presets: [],
+    explore: {
+      route: "explore",
+      shareableUrl: "#",
+      canUndo: false,
+      canRedo: false,
+      selectedCrate: null,
+      crateDetail: null,
+      crateDetailPhase: "idle",
+      crateDetailStatus: "",
+      pinnedCrates: [],
+      savedViews: [],
+      pinnedFilterCount: 0,
+    },
+    ...overrides,
+  };
+}

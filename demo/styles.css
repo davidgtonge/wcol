@@ -1,0 +1,162 @@
+/* Global + chart styling — Tailwind Play CDN can't target SVG text fills. */
+:root {
+  color-scheme: light dark;
+  --chart-muted: #5c6b82;
+  --chart-text: #1a2332;
+  --wcol-accent: #3d8bfd;
+  --wcol-glow: rgba(61, 139, 253, 0.35);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chart-muted: #8b9cb3;
+    --chart-text: #e7ecf3;
+    --wcol-glow: rgba(91, 157, 255, 0.4);
+  }
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, var(--wcol-glow), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 0%, rgba(61, 139, 253, 0.08), transparent);
+}
+
+@media (prefers-color-scheme: light) {
+  body {
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(61, 139, 253, 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 100% 0%, rgba(61, 139, 253, 0.06), transparent);
+  }
+}
+
+.chart svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.chart-label,
+.chart-tick {
+  fill: var(--chart-muted);
+  font-size: 11px;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+.chart-value {
+  fill: var(--chart-text);
+  font-size: 10px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.bar-fill {
+  cursor: default;
+  transition: opacity 0.15s, filter 0.15s;
+}
+
+.bar-fill:hover {
+  opacity: 0.88;
+  filter: brightness(1.08);
+}
+
+.bar-animate .bar-fill {
+  transform-origin: left center;
+  animation: barGrow 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.bar-animate-v .bar-fill {
+  transform-origin: center bottom;
+  animation: barGrowV 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.bar-animate .bar-fill:nth-child(2),
+.bar-animate-v .bar-fill:nth-of-type(2) {
+  animation-delay: 0.03s;
+}
+
+@keyframes barGrow {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes barGrowV {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.timing-digit {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.preset-card {
+  transition:
+    border-color 0.15s,
+    background-color 0.15s,
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.preset-card:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.preset-card:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.preset-card-active {
+  box-shadow: 0 0 0 1px var(--wcol-accent), 0 4px 24px var(--wcol-glow);
+}
+
+.result-enter {
+  animation: slideUp 0.4s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.skeleton-bar {
+  background: linear-gradient(
+    90deg,
+    rgba(139, 156, 179, 0.12) 0%,
+    rgba(139, 156, 179, 0.28) 50%,
+    rgba(139, 156, 179, 0.12) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+details.plan-details > summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+details.plan-details > summary::-webkit-details-marker {
+  display: none;
+}

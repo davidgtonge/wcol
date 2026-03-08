@@ -92,6 +92,16 @@ Wasm (wcol-decoder)  — page decode, filters, group-by, aggregates
 
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FORMAT.md](docs/FORMAT.md).
 
+## Comparisons
+
+| | Parquet / DuckDB | wcol |
+|--|------------------|------|
+| **Storage** | baseline | **59–73%** of Parquet size on crates + ClickBench subsets ([details](docs/COMPARISONS.md#storage-parquet-vs-wcol)) |
+| **Native query speed** (500k ClickBench rows) | DuckDB in-process on Parquet | **~2–3× faster** on filter/group-by; DuckDB faster on exact `COUNT(DISTINCT)` ([details](docs/COMPARISONS.md#query-speed-duckdb-native-vs-wcol-native)) |
+| **In-browser engine** | duckdb-wasm ~**6.9 MB** gz | Wasm **77–114 KB** gz + ~14 KB JS ([details](docs/COMPARISONS.md#decoder--query-engine-size-duckdb-wasm-vs-wcol-wasm)) |
+
+Reproduce locally: `npm run compare` (needs `data/` fixtures and `cargo build -p wcol-cli --release`).
+
 ## Tests
 
 ```bash

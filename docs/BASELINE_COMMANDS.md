@@ -22,6 +22,15 @@ gzip -c rust/wcol-wasm/pkg/wasm/wcol_wasm.simd.wasm | wc -c
 
 Default `npm run build` uses the speed-oriented profile (~117 KB gzipped).
 
+## Comparisons (Parquet / DuckDB / wasm sizes)
+
+```bash
+cargo build -p wcol-cli --release --manifest-path rust/Cargo.toml
+npm run compare
+```
+
+See [COMPARISONS.md](COMPARISONS.md) for methodology and tables.
+
 ## CLI smoke
 
 ```bash

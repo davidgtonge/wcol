@@ -20,9 +20,11 @@
     "check:cli": "cargo check -p wcol-cli --manifest-path rust/Cargo.toml",
     "check:rust": "npm run check:decoder && npm run check:encoder && npm run check:cli && npm run check:wasm",
     "test": "tsx --test tests/runtime.test.ts tests/worker-core.test.ts tests/plan.test.ts tests/projection.test.ts",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "compare": "node scripts/compare-report.mjs"
   },
   "devDependencies": {
+    "@duckdb/node-api": "^1.5.3-r.3",
     "@types/node": "^25.1.0",
     "esbuild": "^0.25.1",
     "tsx": "^4.21.0",

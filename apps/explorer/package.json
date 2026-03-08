@@ -7,7 +7,7 @@
   "scripts": {
     "generate:types": "cargo run --manifest-path engine/Cargo.toml --features typegen --bin export-types",
     "prebuild": "npm run generate:types",
-    "build": "node ../../scripts/build-wasm.mjs && node scripts/build-engine-wasm.mjs && node scripts/build-demo.mjs",
+    "build": "WCOL_WASM_PROFILE=speed node ../../scripts/build-wasm.mjs && node scripts/build-engine-wasm.mjs && node scripts/build-demo.mjs",
     "build:engine-wasm": "node scripts/build-engine-wasm.mjs",
     "build:ui": "node scripts/build-demo.mjs",
     "serve": "npx --yes serve dist/browser -p 5173",

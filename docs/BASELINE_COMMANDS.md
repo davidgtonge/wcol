@@ -14,9 +14,13 @@ npm run test               # JS runtime unit tests
 ## Wasm size profile
 
 ```bash
-npm run build:wasm:size    # optimize for size (Rust `z` + wasm-opt `-Oz`)
+npm run build:wasm:size    # Rust `opt-level=z` + wasm-opt `-Oz`
+# simd: ~77 KB gzipped, ~196 KB raw (Jun 2026)
 ls -lh rust/wcol-wasm/pkg/wasm/
+gzip -c rust/wcol-wasm/pkg/wasm/wcol_wasm.simd.wasm | wc -c
 ```
+
+Default `npm run build` uses the speed-oriented profile (~117 KB gzipped).
 
 ## CLI smoke
 

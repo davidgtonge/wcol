@@ -40,3 +40,5 @@ See [demo/data/README.md](./demo/data/README.md) for the full list.
 | `scripts/` | Wasm + esbuild bundle for static hosting |
 
 Output: `apps/explorer/dist/browser/` (uploaded to GitHub Pages in CI).
+
+CI and `npm run build` here use the **speed** Wasm profile (`build:wasm:speed` on the root package) for interactive query performance.

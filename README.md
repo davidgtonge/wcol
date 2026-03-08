@@ -7,7 +7,7 @@
 I wanted to see if I could build a columnar format that:
 
 1. **Compresses like Parquet** — dictionary encoding, typed pages, LZ4 chunk compression, range-friendly layout for HTTP `Range` reads.
-2. **Decodes in a tiny Wasm module** — the design target is a **&lt;100 KB** gzipped decoder; the current SIMD build is larger (~335 KB) and still being trimmed.
+2. **Decodes in a tiny Wasm module** — design target **&lt;100 KB gzipped** over the wire. With `npm run build:wasm:size` the SIMD decoder is **~77 KB gzipped** (~196 KB raw). The default release build trades size for speed (**~117 KB gzipped**, ~335 KB raw).
 3. **Queries like DuckDB** — filters, group-by, aggregates, top-K, late `SELECT` projection over millions of rows without loading everything into JS heap.
 4. **Scales across processes** — browser `Worker` pool for chunk-parallel scans; native thread pool in `wcol-cli` for the same plan on disk.
 
@@ -75,6 +75,8 @@ npm run serve -w @wcol/explorer   # http://localhost:5173
 **Live demo:** https://davidgtonge.github.io/wcol/ (built from `apps/explorer` in CI)
 
 Large `.wcol` fixtures are not in git. Stage locally with `npm run prepare:datasets -w @wcol/explorer` after generating parquet/wcol under `/data`.
+
+GitHub Pages builds with the **speed** Wasm profile (`npm run build:wasm:speed`) for faster queries in the browser.
 
 ## Architecture (summary)
 

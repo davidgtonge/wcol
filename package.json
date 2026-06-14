@@ -14,7 +14,7 @@
     "generate:types": "cargo run --manifest-path rust/wcol-engine/Cargo.toml --features typegen --bin export-types",
     "prebuild:demo": "npm run generate:types",
     "build:demo": "npm run build:wasm && npm run build:engine-wasm && node scripts/build-demo.mjs",
-    "build:pages": "npm run build:demo",
+    "build:pages": "npm run build:wasm && npm run build:engine-wasm && node scripts/build-demo.mjs",
     "demo": "npm run build:demo",
     "demo:serve": "npx --yes serve dist/browser -p 5173",
     "prepare:demo": "node scripts/prepare-demo-datasets.mjs",

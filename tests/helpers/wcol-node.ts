@@ -1,7 +1,7 @@
 import { open, readFile, stat } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { QueryPlan } from "../../demo/query/plan-types.ts";
+import type { QueryPlan } from "../../apps/explorer/demo/query/plan-types.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -78,9 +78,9 @@ class NodeFileSource {
 export async function defaultCratesFixture(): Promise<string> {
   if (process.env.WCOL_CRATES_FILE) return resolve(process.env.WCOL_CRATES_FILE);
   const candidates = [
-    join(ROOT, "demo/data/crates_versions.wcol"),
+    join(ROOT, "apps/explorer/demo/data/crates_versions.wcol"),
     join(ROOT, "data/crates_versions.wcol"),
-    join(ROOT, "dist/browser/data/crates_versions.wcol"),
+    join(ROOT, "apps/explorer/apps/explorer/dist/browser/data/crates_versions.wcol"),
   ];
   for (const path of candidates) {
     if (await fixtureExists(path)) return path;
@@ -91,9 +91,9 @@ export async function defaultCratesFixture(): Promise<string> {
 export async function defaultDepsFixture(): Promise<string> {
   if (process.env.WCOL_DEPS_FILE) return resolve(process.env.WCOL_DEPS_FILE);
   const candidates = [
-    join(ROOT, "demo/data/crates_dependencies.wcol"),
+    join(ROOT, "apps/explorer/demo/data/crates_dependencies.wcol"),
     join(ROOT, "data/crates_dependencies.wcol"),
-    join(ROOT, "dist/browser/data/crates_dependencies.wcol"),
+    join(ROOT, "apps/explorer/dist/browser/data/crates_dependencies.wcol"),
   ];
   for (const path of candidates) {
     if (await fixtureExists(path)) return path;
@@ -104,9 +104,9 @@ export async function defaultDepsFixture(): Promise<string> {
 export async function defaultCategoriesFixture(): Promise<string> {
   if (process.env.WCOL_CATEGORIES_FILE) return resolve(process.env.WCOL_CATEGORIES_FILE);
   const candidates = [
-    join(ROOT, "demo/data/crates_categories.wcol"),
+    join(ROOT, "apps/explorer/demo/data/crates_categories.wcol"),
     join(ROOT, "data/crates_categories.wcol"),
-    join(ROOT, "dist/browser/data/crates_categories.wcol"),
+    join(ROOT, "apps/explorer/dist/browser/data/crates_categories.wcol"),
   ];
   for (const path of candidates) {
     if (await fixtureExists(path)) return path;
@@ -117,9 +117,9 @@ export async function defaultCategoriesFixture(): Promise<string> {
 export async function defaultMaintainersFixture(): Promise<string> {
   if (process.env.WCOL_MAINTAINERS_FILE) return resolve(process.env.WCOL_MAINTAINERS_FILE);
   const candidates = [
-    join(ROOT, "demo/data/crate_maintainers.wcol"),
+    join(ROOT, "apps/explorer/demo/data/crate_maintainers.wcol"),
     join(ROOT, "data/crate_maintainers.wcol"),
-    join(ROOT, "dist/browser/data/crate_maintainers.wcol"),
+    join(ROOT, "apps/explorer/dist/browser/data/crate_maintainers.wcol"),
   ];
   for (const path of candidates) {
     if (await fixtureExists(path)) return path;
@@ -130,9 +130,9 @@ export async function defaultMaintainersFixture(): Promise<string> {
 export async function defaultTrendsFixture(): Promise<string> {
   if (process.env.WCOL_TRENDS_FILE) return resolve(process.env.WCOL_TRENDS_FILE);
   const candidates = [
-    join(ROOT, "demo/data/version_downloads_daily.wcol"),
+    join(ROOT, "apps/explorer/demo/data/version_downloads_daily.wcol"),
     join(ROOT, "data/version_downloads_daily.wcol"),
-    join(ROOT, "dist/browser/data/version_downloads_daily.wcol"),
+    join(ROOT, "apps/explorer/dist/browser/data/version_downloads_daily.wcol"),
   ];
   for (const path of candidates) {
     if (await fixtureExists(path)) return path;
@@ -143,7 +143,7 @@ export async function defaultTrendsFixture(): Promise<string> {
 export async function defaultTrendsCrate30dFixture(): Promise<string> {
   if (process.env.WCOL_TRENDS_CRATE_30D_FILE) return resolve(process.env.WCOL_TRENDS_CRATE_30D_FILE);
   const candidates = [
-    join(ROOT, "demo/data/trends_crate_downloads_30d.wcol"),
+    join(ROOT, "apps/explorer/demo/data/trends_crate_downloads_30d.wcol"),
     join(ROOT, "data/trends_crate_downloads_30d.wcol"),
   ];
   for (const path of candidates) {
@@ -157,7 +157,7 @@ export async function defaultTrendsSerdeVersionsFixture(): Promise<string> {
     return resolve(process.env.WCOL_TRENDS_SERDE_VERSIONS_FILE);
   }
   const candidates = [
-    join(ROOT, "demo/data/trends_serde_version_downloads.wcol"),
+    join(ROOT, "apps/explorer/demo/data/trends_serde_version_downloads.wcol"),
     join(ROOT, "data/trends_serde_version_downloads.wcol"),
   ];
   for (const path of candidates) {
@@ -177,9 +177,9 @@ export async function resolveTrendsQueryFixture(
 export async function defaultHitsFixture(): Promise<string> {
   if (process.env.WCOL_HITS_FILE) return resolve(process.env.WCOL_HITS_FILE);
   const candidates = [
-    join(ROOT, "demo/data/hits_subset_500k.wcol"),
+    join(ROOT, "apps/explorer/demo/data/hits_subset_500k.wcol"),
     join(ROOT, "data/hits_subset_500k.wcol"),
-    join(ROOT, "dist/browser/data/hits_subset_500k.wcol"),
+    join(ROOT, "apps/explorer/dist/browser/data/hits_subset_500k.wcol"),
   ];
   for (const path of candidates) {
     if (await fixtureExists(path)) return path;
@@ -227,7 +227,7 @@ export async function runPlan(
 export async function groupLabels(file: WcolFileHandle, result: QueryResult, limit = 5): Promise<string[]> {
   const g = result.groups;
   if (!g?.keys?.length) return [];
-  const { resolveGroupKey } = await import("../../demo/data/resolve-values.ts");
+  const { resolveGroupKey } = await import("../../apps/explorer/demo/data/resolve-values.ts");
   const out: string[] = [];
   for (let i = 0; i < Math.min(limit, g.keys.length); i += 1) {
     out.push(await resolveGroupKey(file, g.keyInfo?.[0], g.keys[i]));
@@ -242,7 +242,7 @@ export async function projectionRows(
 ): Promise<Record<string, string | number | boolean | null>[]> {
   const proj = result.projection;
   if (!proj) return [];
-  const { resolveProjectionCell } = await import("../../demo/data/resolve-values.ts");
+  const { resolveProjectionCell } = await import("../../apps/explorer/demo/data/resolve-values.ts");
   const rows: Record<string, string | number | boolean | null>[] = [];
   const n = Math.min(limit, result.rows?.length ?? 0);
   for (let r = 0; r < n; r += 1) {

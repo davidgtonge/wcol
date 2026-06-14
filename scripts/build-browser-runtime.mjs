@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(scriptDir, "..");
-const outDir = resolve(rootDir, "dist", "browser");
+const outDir = process.env.WCOL_BROWSER_OUT
+  ? resolve(process.env.WCOL_BROWSER_OUT)
+  : resolve(rootDir, "dist", "browser");
 const wasmDir = resolve(outDir, "wasm");
 const wasmSrc = resolve(
   rootDir,

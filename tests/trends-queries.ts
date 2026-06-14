@@ -5,7 +5,7 @@ import {
   TRENDS_LAST_WEEK_CUTOFF,
   TRENDS_MAY_CUTOFF,
   TRENDS_MID_MAY_CUTOFF,
-} from "../demo/data/query-dates.ts";
+} from "../apps/explorer/demo/data/query-dates.ts";
 
 const topK = (n: number) => n;
 

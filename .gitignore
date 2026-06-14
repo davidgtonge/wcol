@@ -3,7 +3,9 @@
 *.parquet
 *.wcol
 /data/
-demo/data/*.wcol
+apps/explorer/demo/data/*.wcol
+apps/explorer/dist/
+apps/explorer/pkg/
 
 # Dependencies & build
 node_modules/

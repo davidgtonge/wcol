@@ -1,4 +1,4 @@
-import type { QueryPlan } from "../demo/query/plan-types.ts";
+import type { QueryPlan } from "../apps/explorer/demo/query/plan-types.ts";
 
 /**
  * Catalog of crates.io explorer questions we want the product to answer.

@@ -1,0 +1,28 @@
+{
+  "name": "@wcol/explorer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Optional crates.io explorer demo — Preact UI on top of wcol runtime",
+  "type": "module",
+  "scripts": {
+    "generate:types": "cargo run --manifest-path engine/Cargo.toml --features typegen --bin export-types",
+    "prebuild": "npm run generate:types",
+    "build": "node ../../scripts/build-wasm.mjs && node scripts/build-engine-wasm.mjs && node scripts/build-demo.mjs",
+    "build:engine-wasm": "node scripts/build-engine-wasm.mjs",
+    "build:ui": "node scripts/build-demo.mjs",
+    "serve": "npx --yes serve dist/browser -p 5173",
+    "prepare:datasets": "node scripts/prepare-demo-datasets.mjs",
+    "test:cbor-interop": "node scripts/test-cbor-interop.mjs",
+    "test:explorer": "tsx --test ../../tests/explorer-queries.test.ts ../../tests/dependency-queries.test.ts ../../tests/categories-queries.test.ts ../../tests/maintainers-queries.test.ts ../../tests/trends-queries.test.ts ../../tests/hits-queries.test.ts"
+  },
+  "dependencies": {
+    "@dtonge/engine-shell": "file:../../engine-shell/ts",
+    "cbor-x": "^1.6.4",
+    "preact": "^10.29.2",
+    "reselect": "^5.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.1",
+    "tsx": "^4.21.0"
+  }
+}

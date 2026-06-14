@@ -24,7 +24,7 @@ path = "examples/export_cbor.rs"
 
 [dependencies]
 ciborium = "0.2"
-engine-kernel = { path = "../../engine-shell/rust/engine-kernel" }
+engine-kernel = { path = "../../../engine-shell/rust/engine-kernel" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ts-rs = { version = "10", optional = true }

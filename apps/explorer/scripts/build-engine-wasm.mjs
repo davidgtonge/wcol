@@ -3,14 +3,14 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const crate = join(root, "rust/wcol-engine");
-const outDir = join(root, "pkg");
+const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const crate = join(appRoot, "engine");
+const outDir = join(appRoot, "pkg");
 
 const result = spawnSync(
   "wasm-pack",
   ["build", crate, "--target", "web", "--out-dir", outDir, "--release"],
-  { stdio: "inherit", cwd: root }
+  { stdio: "inherit", cwd: appRoot },
 );
 
 if (result.status !== 0) {

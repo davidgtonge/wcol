@@ -7,9 +7,10 @@ import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const dataDir = join(root, "data");
-const demoData = join(root, "demo/data");
+const appRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = join(appRoot, "../..");
+const dataDir = join(repoRoot, "data");
+const demoData = join(appRoot, "demo/data");
 
 mkdirSync(demoData, { recursive: true });
 

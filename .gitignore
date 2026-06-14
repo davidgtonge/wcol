@@ -44,7 +44,29 @@ docs/synth-groupby-runner.md
 docs/scaling-proof.md
 docs/thread-engine-v3.md
 docs/local-disk-pressure.md
+docs/AGENTS.md
+docs/PERF_BASELINE.md
+docs/SAV_ANALYSIS.md
+docs/SIZE_ANALYSIS.md
+docs/clickbench-*.md
+docs/demo-and-validation-plan.md
+docs/deployable-prototype-plan.md
+docs/design.md
+docs/groupby-memory-cache-flow.md
+docs/minimal-wcol-stabilization-plan.md
+docs/next-steps.md
+docs/q34-q35-group-hotspots.md
+docs/query-ast-and-engine-plan.md
+docs/repo-reset-and-triage-plan.md
+docs/sql-vs-microbench-handoff.md
+docs/string-*.md
+docs/technical-*.md
+docs/tasks/
 
-# Stray
-/1
-*.tmp
+# Scratch SQL at repo root
+*.sql
+next-steps.md
+
+# Publish tooling (local only)
+scripts/create-publish-history.sh
+

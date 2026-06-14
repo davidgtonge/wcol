@@ -1,0 +1,85 @@
+{
+  "kind": "response",
+  "patches": [
+    {
+      "op": "replace",
+      "path": [
+        "urlInput"
+      ],
+      "value": "https://example.com/x"
+    }
+  ],
+  "viewModel": {
+    "loadPhase": "idle",
+    "loadStatus": "Open data settings to load a .wcol file",
+    "loadError": false,
+    "urlInput": "https://example.com/x",
+    "dataDrawerOpen": false,
+    "meta": null,
+    "schema": [],
+    "workers": 4,
+    "queryDraft": {
+      "mode": "aggregate",
+      "searchText": "",
+      "searchColumn": "crate_name",
+      "filters": [],
+      "groupKeys": [
+        "crate_name"
+      ],
+      "aggColumn": "downloads",
+      "selectColumns": [
+        "crate_name",
+        "license",
+        "downloads"
+      ],
+      "topK": 25
+    },
+    "planPreview": "{\n  \"aggregates\": [\n    {\n      \"column\": \"downloads\"\n    }\n  ],\n  \"groupBy\": {\n    \"keys\": [\n      \"crate_name\"\n    ],\n    \"value\": \"downloads\"\n  },\n  \"groupOrderByCount\": true,\n  \"limit\": 25\n}",
+    "queryPhase": "idle",
+    "queryStatus": "",
+    "queryError": false,
+    "warmMs": null,
+    "result": null,
+    "columns": [],
+    "presets": [
+      {
+        "id": "topCrates",
+        "label": "Top crates",
+        "description": "Sum downloads by crate"
+      },
+      {
+        "id": "byLicense",
+        "label": "By license",
+        "description": "Aggregate downloads per license"
+      },
+      {
+        "id": "editionYanked",
+        "label": "Edition × yanked",
+        "description": "Two-key group-by"
+      },
+      {
+        "id": "select",
+        "label": "Projection",
+        "description": "Filter high downloads, materialize columns"
+      },
+      {
+        "id": "filter",
+        "label": "Popular versions",
+        "description": "Filter on downloads, return row ids"
+      }
+    ],
+    "explore": {
+      "route": "explore",
+      "shareableUrl": "#%7B%22route%22%3A%22explore%22%2C%22queryDraft%22%3A%7B%22mode%22%3A%22aggregate%22%2C%22searchText%22%3A%22%22%2C%22searchColumn%22%3A%22crate_name%22%2C%22filters%22%3A%5B%5D%2C%22groupKeys%22%3A%5B%22crate_name%22%5D%2C%22aggColumn%22%3A%22downloads%22%2C%22selectColumns%22%3A%5B%22crate_name%22%2C%22license%22%2C%22downloads%22%5D%2C%22topK%22%3A25%7D%2C%22selectedCrate%22%3Anull%2C%22pinnedCrates%22%3A%5B%5D%2C%22activeSavedViewId%22%3Anull%7D",
+      "canUndo": false,
+      "canRedo": false,
+      "selectedCrate": null,
+      "crateDetail": null,
+      "crateDetailPhase": "idle",
+      "crateDetailStatus": "",
+      "pinnedCrates": [],
+      "savedViews": [],
+      "pinnedFilterCount": 0
+    }
+  }
+}

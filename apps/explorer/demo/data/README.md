@@ -1,23 +1,25 @@
 # Demo datasets
 
-Bundled `.wcol` files are staged here by `npm run prepare:datasets` (also runs before `build:demo`).
+Five `.wcol` fixtures are **committed in git** (~50 MB total) so the explorer demo works from a fresh clone and in CI.
 
 | File | Kind | Rows | Queries |
 |------|------|------|---------|
-| `crates_versions.wcol` | crates | ~2.4M | rankings, search, profiles |
-| `crates_dependencies.wcol` | dependencies | ~27M | dependency graph, reverse-deps |
+| `hits_subset_500k.wcol` | hits (ClickBench) | 500k | filters, group-by, SELECT |
+| `trends_crate_downloads_30d.wcol` | trends rollup | ~271k | fastest-growing rankings |
+| `trends_serde_version_downloads.wcol` | trends rollup | ~315 | serde version adoption |
 | `crates_categories.wcol` | categories | ~237k | category rankings, browse |
 | `crate_maintainers.wcol` | maintainers | ~307k | owner search, portfolios |
-| `hits_subset_500k.wcol` | hits (ClickBench) | 500k | filters, group-by, SELECT |
 
-## Build from CSV dump
+`npm run prepare:datasets` copies these from `data/` when you have larger local encodes; otherwise the committed copies are kept.
+
+## Optional full datasets (not in git)
+
+Larger tables (`crates_versions`, `crates_dependencies`, `version_downloads_daily`) can be generated under `data/` for local development:
 
 ```bash
 ./scripts/prepare-crates-parquet.sh   # duckdb → data/*.parquet
-./scripts/encode-datasets.sh        # parquet → .wcol (uses ../wcol/rust wcol-cli)
-npm run prepare:datasets
+./scripts/encode-datasets.sh        # parquet → .wcol
+npm run prepare:datasets -w @wcol/explorer
 ```
 
-Set `WCOL_CLI_ROOT` if wcol-cli lives outside `../wcol/rust`.
-
-Future: `version_downloads_daily.parquet` for download trends (encode when needed).
+Set `WCOL_CLI_ROOT` if wcol-cli lives outside `rust/`.

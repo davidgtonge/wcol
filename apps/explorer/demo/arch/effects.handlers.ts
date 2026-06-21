@@ -62,7 +62,7 @@ const openSource = async (source: OpenSource, label: string): Promise<Event[]> =
     const message = errMsg(err);
     const hint =
       message.includes("fetch") || message.includes("404")
-        ? `${message} — run npm run demo to build demo/data/crates_versions.wcol`
+        ? `${message} — bundled datasets live in apps/explorer/demo/data/`
         : message;
     return [{ type: "FILE_OPEN_FAILED", message: hint }];
   }

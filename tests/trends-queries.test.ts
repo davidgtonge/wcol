@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { before, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import { TRENDS_EXPLORER_QUERIES } from "./trends-queries.ts";
 import {
-  defaultTrendsFixture,
   fixtureExists,
   groupLabels,
   openCratesFile,
@@ -12,15 +11,18 @@ import {
   runPlan,
 } from "./helpers/wcol-node.ts";
 
-const dailyOk = await fixtureExists(await defaultTrendsFixture());
+const queryCases = await Promise.all(
+  TRENDS_EXPLORER_QUERIES.map(async (query) => {
+    const fixturePath = await resolveTrendsQueryFixture(query);
+    return { query, fixturePath, ok: await fixtureExists(fixturePath) };
+  })
+);
 
-describe("trends explorer queries", { skip: !dailyOk && "version_downloads_daily.wcol not found" }, () => {
-  for (const query of TRENDS_EXPLORER_QUERIES) {
-    it(`${query.id}: ${query.question}`, async () => {
-      const fixturePath = await resolveTrendsQueryFixture(query);
-      if (!(await fixtureExists(fixturePath))) {
-        assert.fail(`missing fixture: ${fixturePath}`);
-      }
+describe("trends explorer queries", () => {
+  for (const { query, fixturePath, ok } of queryCases) {
+    const run = ok ? it : it.skip;
+
+    run(`${query.id}: ${query.question}`, async () => {
       const file = await openCratesFile(fixturePath);
       const { result, ms } = await runPlan(file, query.plan);
       assert.ok(rowCount(result) >= (query.expect.minResults ?? 1));

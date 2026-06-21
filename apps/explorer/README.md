@@ -16,20 +16,17 @@ npm run serve -w @wcol/explorer
 
 ## Datasets
 
-`.wcol` bundles are gitignored. Stage fixtures into `demo/data/`:
+Five bundled `.wcol` files (~50 MB) are committed under `demo/data/` so the demo works from a fresh clone and in CI:
 
-```bash
-# From repo root, after preparing parquet/wcol under /data
-npm run prepare:datasets -w @wcol/explorer
-```
+| File | Rows (approx) | Size |
+|------|----------------|------|
+| `hits_subset_500k.wcol` | 500k | ~34 MB |
+| `trends_crate_downloads_30d.wcol` | ~271k | ~4 MB |
+| `crate_maintainers.wcol` | ~307k | ~9 MB |
+| `crates_categories.wcol` | ~237k | ~3.5 MB |
+| `trends_serde_version_downloads.wcol` | ~315 | ~4 KB |
 
-| File | Rows (approx) |
-|------|----------------|
-| `crates_versions.wcol` | ~2.4M |
-| `crates_dependencies.wcol` | ~27M |
-| `version_downloads_daily.wcol` | ~35M |
-
-See [demo/data/README.md](./demo/data/README.md) for the full list.
+Larger tables (`crates_versions`, `crates_dependencies`, `version_downloads_daily`) are optional — encode under `data/` and run `npm run prepare:datasets` to copy them in locally. See [demo/data/README.md](./demo/data/README.md).
 
 ## Layout
 

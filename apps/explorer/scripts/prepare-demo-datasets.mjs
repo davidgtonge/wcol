@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Stage .wcol fixtures into demo/data/ for the static demo bundle.
- * Sources live under data/ (gitignored); copies are skipped when missing.
+ * Five minimal datasets are committed in git; larger tables can be copied from data/.
  */
 import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -17,35 +17,26 @@ mkdirSync(demoData, { recursive: true });
 /** @type {{ dest: string; sources: string[] }[]} */
 const STAGE = [
   {
-    dest: "crates_versions.wcol",
-    sources: [
-      join(dataDir, "crates_versions.wcol"),
-      join(demoData, "crates_versions.wcol"),
-    ],
-  },
-  {
-    dest: "crates_dependencies.wcol",
-    sources: [join(dataDir, "crates_dependencies.wcol")],
-  },
-  {
     dest: "crates_categories.wcol",
-    sources: [join(dataDir, "crates_categories.wcol")],
+    sources: [join(dataDir, "crates_categories.wcol"), join(demoData, "crates_categories.wcol")],
   },
   {
     dest: "crate_maintainers.wcol",
-    sources: [join(dataDir, "crate_maintainers.wcol")],
-  },
-  {
-    dest: "version_downloads_daily.wcol",
-    sources: [join(dataDir, "version_downloads_daily.wcol")],
+    sources: [join(dataDir, "crate_maintainers.wcol"), join(demoData, "crate_maintainers.wcol")],
   },
   {
     dest: "trends_crate_downloads_30d.wcol",
-    sources: [join(dataDir, "trends_crate_downloads_30d.wcol")],
+    sources: [
+      join(dataDir, "trends_crate_downloads_30d.wcol"),
+      join(demoData, "trends_crate_downloads_30d.wcol"),
+    ],
   },
   {
     dest: "trends_serde_version_downloads.wcol",
-    sources: [join(dataDir, "trends_serde_version_downloads.wcol")],
+    sources: [
+      join(dataDir, "trends_serde_version_downloads.wcol"),
+      join(demoData, "trends_serde_version_downloads.wcol"),
+    ],
   },
   {
     dest: "hits_subset_500k.wcol",
@@ -53,6 +44,7 @@ const STAGE = [
       join(dataDir, "hits_subset_500k.refactor.wcol"),
       join(dataDir, "hits_subset_500k.wcol"),
       join(dataDir, "hits_subset_500k.plan_impl.1t.wcol"),
+      join(demoData, "hits_subset_500k.wcol"),
     ],
   },
 ];
@@ -73,16 +65,16 @@ for (const { dest, sources } of STAGE) {
   }
   const src = sources.find((p) => existsSync(p) && statSync(p).size > 0);
   if (!src) {
-    console.warn(`skip  ${dest} — none of: ${sources.map((p) => p.replace(root + "/", "")).join(", ")}`);
+    console.warn(`skip  ${dest} — none of: ${sources.map((p) => p.replace(repoRoot + "/", "")).join(", ")}`);
     skipped += 1;
     continue;
   }
   copyFileSync(src, out);
-  console.log(`copy  ${dest} ← ${src.replace(root + "/", "")} (${mb(out)})`);
+  console.log(`copy  ${dest} ← ${src.replace(repoRoot + "/", "")} (${mb(out)})`);
   staged += 1;
 }
 
 console.log(`\nStaged ${staged} dataset(s) in demo/data/ (${skipped} missing source).`);
 if (skipped > 0) {
-  console.log("Build parquet/wcol under data/ or run scripts/prepare-crates-parquet.sh first.");
+  console.log("Encode parquet under data/ or copy committed fixtures from demo/data/.");
 }

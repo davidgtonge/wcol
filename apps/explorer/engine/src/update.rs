@@ -22,8 +22,8 @@ pub fn reduce(state: &mut AppState, event: &AppEvent) -> Transition {
             state,
             "Fetching dataset…",
             vec![EffectCommand::OpenSource {
-                source: "sample:crates-versions".into(),
-                label: "crates_versions.wcol".into(),
+                source: "sample:clickbench-hits-500k".into(),
+                label: "hits_subset_500k.wcol".into(),
             }],
         ),
         AppEvent::LoadDataset { id } => loading(

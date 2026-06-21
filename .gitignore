@@ -4,6 +4,11 @@
 *.wcol
 /data/
 apps/explorer/demo/data/*.wcol
+!apps/explorer/demo/data/crates_categories.wcol
+!apps/explorer/demo/data/crate_maintainers.wcol
+!apps/explorer/demo/data/trends_crate_downloads_30d.wcol
+!apps/explorer/demo/data/trends_serde_version_downloads.wcol
+!apps/explorer/demo/data/hits_subset_500k.wcol
 apps/explorer/dist/
 apps/explorer/pkg/
 

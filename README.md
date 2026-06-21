@@ -74,7 +74,7 @@ npm run serve -w @wcol/explorer   # http://localhost:5173
 
 **Live demo:** https://davidgtonge.github.io/wcol/ (built from `apps/explorer` in CI)
 
-Large `.wcol` fixtures are not in git. Stage locally with `npm run prepare:datasets -w @wcol/explorer` after generating parquet/wcol under `/data`.
+Bundled demo datasets (~50 MB) ship in `apps/explorer/demo/data/`. Larger crates.io tables can be encoded locally under `data/` — see [apps/explorer/demo/data/README.md](apps/explorer/demo/data/README.md).
 
 GitHub Pages builds with the **speed** Wasm profile (`npm run build:wasm:speed`) for faster queries in the browser.
 
@@ -107,7 +107,7 @@ Reproduce locally: `npm run compare` (needs `data/` fixtures and `cargo build -p
 ```bash
 npm run check:rust     # cargo check all core crates
 npm run test           # JS runtime + plan unit tests
-npm run test -w @wcol/explorer   # explorer query catalog (needs staged .wcol data)
+npm run test -w @wcol/explorer   # explorer query catalog (uses committed demo/data fixtures)
 ```
 
 ## Related

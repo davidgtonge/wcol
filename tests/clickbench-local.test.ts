@@ -245,7 +245,7 @@ const ONE_ROW_GROUP = new Set(["Q36", "Q37", "Q38", "Q40", "Q41"]);
 /** Unbounded GROUP BYs whose exchanged groups pass the JSON answer cap (exports in the ladder). */
 const JSON_TOO_LARGE = new Set(["S7", "S10"]);
 
-describe("clickbench on the local ABI host", { concurrency: 1 }, () => {
+describe("clickbench on the local ABI host", { concurrency: 1, skip: !fs.existsSync(parquet) && "hits subset missing" }, () => {
   it("runs every planner-supported query against hits_subset_500k", async () => {
     const { unsupported, failures, ran } = await runSuite({ maxNodes: 1, hashReducers: 1, requireMultiplex: false });
     assert.deepEqual(unsupported.sort(), ["Q18", "Q35", "Q42"]);

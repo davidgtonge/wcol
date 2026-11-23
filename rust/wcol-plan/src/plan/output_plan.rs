@@ -12,7 +12,11 @@ pub enum OutputFormat {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OutputLayout {
     SingleFile,
+    /// One object per writing task.
     Partitioned,
+    /// One object or more per `partitionBy` value per task, under Hive paths. The node sink
+    /// frames its files (`formats::parquet::partitioned`), and the host splits them.
+    Hive,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

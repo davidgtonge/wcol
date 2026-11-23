@@ -11,7 +11,7 @@ import { attachBytesInputs } from "../../../src/runtime/host/pool-streams.ts";
 import { graphNodeStub, r2Bucket } from "../node/node.ts";
 import { loadWasm, outputBucket, pinnedFooters, planRequest, type Prepared, readSources } from "./plan.ts";
 import { attemptObjectKeyJobs } from "../../../src/runtime/host/parquet-attempt-key.ts";
-import { ParquetUploadSink } from "../../../src/runtime/host/parquet-upload-sink.ts";
+import { exportSink, type ExportObject } from "../../../src/runtime/host/hive-upload-sink.ts";
 import { r2BindingSession } from "../r2.ts";
 import { type GraphJobContext, type GraphJobRecord } from "./record.ts";
 import type { TaskFacts } from "./live.ts";
@@ -79,14 +79,11 @@ export async function runParquetGatherPrepared(
   const plan = prepared.graph as Extract<ExecutionPlan, { kind: "graph" }>;
   const bucketName = prepared.descriptor.bucket;
   const bucket = bucketName ? r2Bucket(ctx.env, bucketName) : outputBucket(ctx.env);
-  const uploadTask = async (taskId: number, slot: number, program: Uint8Array, inputs: Uint8Array[]): Promise<ObjectPart> => {
+  const layout = plan.output?.layout ?? "single_file";
+  const asParts = (taskId: number, objects: ExportObject[]): ObjectPart[] =>
+    objects.map((object) => ({ ...object, parts: 1, taskId }));
+  const uploadTask = async (taskId: number, slot: number, program: Uint8Array, inputs: Uint8Array[]): Promise<ObjectPart[]> => {
     const key = attemptObjectKeyJobs(job.jobId, taskId, attempt);
-    const session = r2BindingSession(bucket, key);
-    const sink = new ParquetUploadSink(session, key);
-    const host = {
-      writePort: sink.writePort,
-      yield: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
-    };
     if (slot !== COORDINATOR_SLOT) {
       const uploaded = await graphNodeStub(ctx.env, job.jobId, attempt, slot).runParquetShardTask({
         jobId: job.jobId,
@@ -99,37 +96,39 @@ export async function runParquetGatherPrepared(
         inputs,
         objectKey: key,
         outputBucket: bucketName ?? "",
+        layout,
         failTaskId: attempt === 1 ? failTaskId : undefined,
         trace: ctx.env.WCOL_DISPATCH_TRACE === "1",
         etags: prepared.descriptor.sources.map((source) => source.etag),
       });
-      return {
-        objectKey: key,
-        partitionValues: [],
-        bytes: uploaded.bytes,
-        parts: 1,
-        taskId,
-      };
+      return asParts(taskId, uploaded.objects);
     }
-    await runWcolEngine({
+    const sink = exportSink(layout, (objectKey) => r2BindingSession(bucket, objectKey), key);
+    try {
+      await runWcolEngine({
         wasm,
         plan: program,
         scratchBytes: 1024 * 1024,
         layout: { inputs: inputs.length, outputs: 1 },
         onPoolReady: attachBytesInputs(inputs),
         host: {
-          ...host,
+          writePort: (port, chunk) => sink.writePort(port, chunk),
+          yield: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
           readAt: inputs.length ? undefined : readSources(ctx.env, prepared.descriptor.sources),
         },
       });
-    const bytes = await sink.finish();
-    return { objectKey: key, partitionValues: [], bytes, parts: 1, taskId };
+      return asParts(taskId, await sink.finish());
+    } catch (error) {
+      await sink.abort(error);
+      throw error;
+    }
   };
 
   if (plan.edges.length === 0) {
-    return Promise.all(
+    const perTask = await Promise.all(
       plan.tasks.map((task) => uploadTask(task.id, task.slot, task.program, [])),
     );
+    return perTask.flat();
   }
 
   const outputs = new Map<number, Uint8Array>();
@@ -140,7 +139,7 @@ export async function runParquetGatherPrepared(
     for (const task of ready) {
       const incoming = edgesInto(task.id, plan.edges).map((edge) => outputs.get(edge.from)!);
       if (task.id === plan.rootTaskId) {
-        parts.push(await uploadTask(task.id, task.slot, task.program, incoming));
+        parts.push(...(await uploadTask(task.id, task.slot, task.program, incoming)));
         outputs.set(task.id, new Uint8Array());
       } else {
         const bytes =

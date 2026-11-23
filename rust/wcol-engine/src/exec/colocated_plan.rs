@@ -51,13 +51,7 @@ pub fn open_fragment_graph(
                 target_row_group_rows,
                 partition_columns,
             } => {
-                if !partition_columns.is_empty() {
-                    return Err(
-                        "partitioned parquet is written by the host demux, not one node file"
-                            .to_string(),
-                    );
-                }
-                parquet_rows = Some(*target_row_group_rows);
+                parquet_rows = Some((*target_row_group_rows, partition_columns.clone()));
             }
             FragmentStep::HashPartition { .. }
             | FragmentStep::RangePartition { .. }
@@ -149,7 +143,7 @@ pub fn open_fragment_graph(
     }
     stream_ops.extend(row_steps);
     let mut graph = LinearColocatedGraph::from_plan_parts(source, stream_ops, Vec::new(), false);
-    if let Some(row_group_rows) = parquet_rows {
+    if let Some((row_group_rows, partition_columns)) = parquet_rows {
         let ids = project_ids.unwrap_or_else(|| {
             fragment
                 .decode
@@ -158,14 +152,22 @@ pub fn open_fragment_graph(
                 .unwrap_or_default()
         });
         let columns = sink_columns(&catalog, &ids)?;
-        let encode = crate::formats::parquet::ParquetEncode::open_typed(
-            columns,
-            crate::formats::parquet::ParquetEncodeConfig {
-                max_row_group_rows: row_group_rows as usize,
-                max_row_groups: 8_192,
-            },
-        )?;
-        graph.attach_sink(Box::new(encode));
+        let config = crate::formats::parquet::ParquetEncodeConfig {
+            max_row_group_rows: row_group_rows as usize,
+            max_row_groups: 8_192,
+        };
+        if partition_columns.is_empty() {
+            let encode = crate::formats::parquet::ParquetEncode::open_typed(columns, config)?;
+            graph.attach_sink(Box::new(encode));
+        } else {
+            let encode = crate::formats::parquet::PartitionedParquetEncode::open(
+                columns,
+                &ids,
+                &partition_columns,
+                config,
+            )?;
+            graph.attach_sink(Box::new(encode));
+        }
     } else {
         graph.set_emit_rows();
     }

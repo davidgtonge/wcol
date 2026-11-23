@@ -45,7 +45,9 @@ export type ExecutionEdge = {
 export type RootOutputKind = "partial" | "rows" | "parquet";
 
 export type OutputFormat = "json" | "parquet";
-export type OutputLayout = "single_file" | "partitioned";
+/** `hive`: files split by `partitionBy` values, framed by the node sink (`HiveUploadSink`). */
+export type OutputLayout = "single_file" | "partitioned" | "hive";
+const OUTPUT_LAYOUTS: readonly OutputLayout[] = ["single_file", "partitioned", "hive"];
 
 export type OutputDestination = {
   bucket: string;
@@ -176,7 +178,8 @@ export function decodeExecutionPlanWire(out: Uint8Array): ExecutionPlan {
       at += 1;
       const format: OutputFormat = out[at]! === 1 ? "parquet" : "json";
       at += 1;
-      const layout: OutputLayout = out[at]! === 1 ? "partitioned" : "single_file";
+      const layout = OUTPUT_LAYOUTS[out[at]!];
+      if (!layout) throw new Error(`unknown output layout ${out[at]}`);
       at += 1;
       const bucket = readStr();
       const prefix = readStr();

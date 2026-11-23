@@ -17,7 +17,6 @@ pub mod node_fragment;
 pub mod output_plan;
 pub mod page_compaction;
 pub mod parquet_concat;
-pub mod partition_writer;
 pub mod physical_plan;
 pub mod query_dispatch;
 pub mod range_sample;
@@ -39,9 +38,9 @@ pub use coordinator_fragment::{
 };
 pub use distributed::{
     attempt_object_key, coordinator_reduce_finalize_rows, coordinator_reduce_partials,
-    estimate_output_bytes, partition_path_value, verify_output_manifest, verify_scan_task_coverage,
-    workers_for_target_file, OutputObjectRecord, ParquetOutputPolicy, PartitionValue,
-    PartitionWriterConfig, ScanTaskInput, SourceVersion, TaskId,
+    estimate_output_bytes, verify_output_manifest, verify_scan_task_coverage,
+    workers_for_target_file, OutputObjectRecord, ParquetOutputPolicy, ScanTaskInput, SourceVersion,
+    TaskId,
 };
 pub use execution_graph::{
     attach_output_plan, edge_transport, encode_execution_plan_wire, execution_plan_from_dispatch,
@@ -76,7 +75,6 @@ pub use parquet_concat::{
     concat_parquet_row_groups, CommittedParquetShard, ConcatPolicy,
     DEFAULT_CONCAT_FOOTER_BUDGET_BYTES,
 };
-pub use partition_writer::PartitionDemux;
 pub use physical_plan::{
     estimated_distinct_groups, hash_reducer_count, lower_to_physical, AggExpr, AggKind, ByteSpan,
     ChunkMeta, CmpOp, Compare, FetchPiece, FetchRequest, Literal, LogicalOp, LogicalRead, NodeId,

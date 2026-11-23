@@ -5,6 +5,7 @@ import { FATAL_TASK_MARK, isFatalTaskError } from "../../../src/runtime/coordina
 import { shouldArmAlarm, sinkTaskIds, sinksToReplay, type GraphPlan } from "../../../src/runtime/coordinator/job-replay.ts";
 import { preferHashFailure, type ObjectPart } from "../../../src/runtime/coordinator/run-hash-job.ts";
 import { r2Bucket } from "../node/node.ts";
+import type { R2OutputBucket } from "../r2.ts";
 import { allowUnpinned, loadDescriptor, loadGraph, loadWasm, pinsMatch, prepare, type Prepared, preparedFromStorage, rejectUnexecutable, unpinned, writeImmutable } from "./plan.ts";
 import { failJob, publishParquet } from "./publish.ts";
 import { finishPrepared } from "./finish.ts";
@@ -12,6 +13,8 @@ import { startRenewal } from "./renewal.ts";
 import { runPrepared, type GraphRun } from "./run.ts";
 import {
   ALARM_MS,
+  type CommittedObject,
+  readDurableRow,
   errorMessage,
   type GraphJobContext,
   type GraphJobRecord,
@@ -45,29 +48,40 @@ export async function arm(ctx: GraphJobContext, when = Date.now() + ALARM_MS): P
   await ctx.setAlarm(when);
 }
 
-async function durableIds(ctx: GraphJobContext, jobId: string, graph: GraphPlan, bucketName: string | undefined): Promise<Set<number>> {
-  const ids = new Set<number>();
-  if (!bucketName) return ids;
-  const bucket = r2Bucket(ctx.env, bucketName);
+/** Each durable task's committed objects, read from the attempt lists its rows name. */
+async function durableOutputs(ctx: GraphJobContext, jobId: string, graph: GraphPlan, bucket: R2OutputBucket): Promise<Map<number, CommittedObject[]>> {
+  const lists = new Map<string, CommittedObject[]>();
+  const byTask = new Map<number, CommittedObject[]>();
   for (const task of graph.tasks) {
-    const row = (await ctx.store.get(taskKey(jobId, task.id))) as { state?: string; objectKey?: string; bytes?: number } | undefined;
-    if (row?.state !== "durable" || !row.objectKey) continue;
-    const object = await bucket.get(row.objectKey);
-    if (!object || object.body === null) continue;
-    if (object.size != null && row.bytes != null && object.size !== row.bytes) continue;
-    ids.add(task.id);
+    const row = readDurableRow(await ctx.store.get(taskKey(jobId, task.id)));
+    if (!row) continue;
+    if (!lists.has(row.outputsKey)) {
+      const object = await bucket.get(row.outputsKey);
+      lists.set(row.outputsKey, object?.body ? (JSON.parse(await object.text()) as CommittedObject[]) : []);
+    }
+    const objects = lists.get(row.outputsKey)!.filter((object) => object.taskId === task.id);
+    if (objects.length > 0) byTask.set(task.id, objects);
+  }
+  return byTask;
+}
+
+/** Tasks whose committed objects are all still in R2 at their recorded size. */
+async function durableIds(bucket: R2OutputBucket, outputs: ReadonlyMap<number, CommittedObject[]>): Promise<Set<number>> {
+  const ids = new Set<number>();
+  for (const [taskId, objects] of outputs) {
+    const verified = await Promise.all(
+      objects.map(async ({ objectKey, bytes }) => {
+        const object = bucket.head ? await bucket.head(objectKey) : await bucket.get(objectKey);
+        return object != null && (object.size == null || object.size === bytes);
+      }),
+    );
+    if (verified.every(Boolean)) ids.add(taskId);
   }
   return ids;
 }
 
-async function ledgerOutputs(ctx: GraphJobContext, jobId: string, graph: GraphPlan): Promise<ObjectPart[]> {
-  const outputs: ObjectPart[] = [];
-  for (const taskId of sinkTaskIds(graph)) {
-    const row = (await ctx.store.get(taskKey(jobId, taskId))) as { state?: string; objectKey?: string; bytes?: number } | undefined;
-    if (row?.state !== "durable" || !row.objectKey) continue;
-    outputs.push({ objectKey: row.objectKey, partitionValues: [], bytes: row.bytes ?? 0, parts: 1, taskId });
-  }
-  return outputs;
+function ledgerOutputs(graph: GraphPlan, outputs: ReadonlyMap<number, CommittedObject[]>): ObjectPart[] {
+  return sinkTaskIds(graph).flatMap((taskId) => (outputs.get(taskId) ?? []).map((object) => ({ ...object, parts: 1 })));
 }
 
 /** Alarm entry. Reschedules itself after a recoverable failure. */
@@ -117,12 +131,16 @@ export async function recoverJob(ctx: GraphJobContext, rerun: RerunJob): Promise
     }
     const graph = await loadGraph(ctx, record.jobId, descriptor, record.graphDigest);
     const prepared = await preparedFromStorage(ctx, record.jobId, descriptor, graph, record.graphDigest);
-    const durable = graph && descriptor.bucket ? await durableIds(ctx, record.jobId, graph, descriptor.bucket) : new Set<number>();
+    const committed =
+      graph && descriptor.bucket
+        ? await durableOutputs(ctx, record.jobId, graph, r2Bucket(ctx.env, descriptor.bucket))
+        : new Map<number, CommittedObject[]>();
+    const durable = descriptor.bucket ? await durableIds(r2Bucket(ctx.env, descriptor.bucket), committed) : new Set<number>();
     const only = graph ? new Set(sinksToReplay(graph, durable)) : undefined;
     if (only && only.size === 0 && descriptor.kind !== "json") {
       if (descriptor.kind === "parquet") {
-        const outputs = await ledgerOutputs(ctx, record.jobId, graph!);
-        await publishParquet(ctx, record, descriptor.prefix ?? "", descriptor.bucket ?? "", outputs, record.executionAttempt);
+        const outputs = ledgerOutputs(graph!, committed);
+        await publishParquet(ctx, record, descriptor.prefix ?? "", descriptor.bucket ?? "", outputs, record.executionAttempt, graph!.output?.layout);
       } else {
         await failJob(ctx, record.jobId, "concat output cannot execute; plan a hash-partitioned json or parquet job");
         return;

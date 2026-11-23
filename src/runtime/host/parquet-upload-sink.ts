@@ -5,8 +5,8 @@ export class ParquetUploadSink {
   private readonly port: R2MultipartWritePort;
   private bytes = 0;
 
-  constructor(session: R2MultipartSession, objectKey: string) {
-    this.port = new R2MultipartWritePort(session, objectKey);
+  constructor(session: R2MultipartSession, objectKey: string, partBytes?: number) {
+    this.port = new R2MultipartWritePort(session, objectKey, undefined, undefined, partBytes);
   }
 
   writePort = async (_port: number, chunk: Uint8Array): Promise<void> => {

@@ -237,15 +237,6 @@ export const graphObjectKey = (jobId: string, digest?: string) =>
 export const descriptorKey = (jobId: string, digest?: string) =>
   digest ? `_jobs/${jobId}/descriptor-${digest}.json` : `_jobs/${jobId}/descriptor.json`;
 
-export function attemptObjectKey(prefix: string, jobId: string, taskId: number, attempt: number): string {
-  const base = prefix.endsWith("/") ? prefix : `${prefix}/`;
-  return `${base}_runs/${jobId}/${taskId}/${attempt}/part.parquet`;
-}
-
-export function concatAttemptKey(jobId: string, taskId: number, attempt: number): string {
-  return `_runs/${jobId}/${taskId}/${attempt}/part.parquet`;
-}
-
 export function authoritativeManifestKey(jobId: string): string {
   return `_jobs/${jobId}/manifest.json`;
 }
@@ -272,6 +263,31 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   // TypeScript types a bare Uint8Array as possibly shared, which `digest` does not accept.
   const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * A task whose output objects are written: what recovery may reuse and republish. The
+ * objects themselves are in R2 at `outputsKey` (one list for the attempt): a task exporting
+ * by `partitionBy` can write thousands, more than a storage value holds.
+ */
+export type DurableTaskRow = {
+  taskId: number;
+  slot?: number;
+  state: "durable";
+  executionAttempt: number;
+  requestCount: number;
+  fetchedBytes: number;
+  outputsKey: string;
+};
+
+/** One object an attempt committed, as `outputsKey` lists it. */
+export type CommittedObject = { taskId: number; objectKey: string; bytes: number; rows?: number; partitionValues: string[] };
+
+export const outputsKey = (jobId: string, attempt: number) => `_jobs/${jobId}/a${attempt}/outputs.json`;
+
+export function readDurableRow(row: unknown): DurableTaskRow | null {
+  const durable = row as Partial<DurableTaskRow> | undefined;
+  return durable?.state === "durable" && typeof durable.outputsKey === "string" ? (durable as DurableTaskRow) : null;
 }
 
 export function taskRows(jobId: string, graph: { tasks: { id: number; slot: number; requestCount: number; fetchedBytes: number }[] } | null, attempt: number) {

@@ -5,6 +5,8 @@
  */
 
 export const R2_PART_SIZE = 8 * 1024 * 1024;
+/** R2's smallest non-final part. */
+export const R2_MIN_PART_SIZE = 5 * 1024 * 1024;
 export const R2_MAX_PARTS = 10_000;
 
 export type R2UploadedPart = {
@@ -29,7 +31,8 @@ export type R2MultipartSnapshot = {
 };
 
 /**
- * One 8 MiB staging buffer and one part upload at a time.
+ * One staging buffer (8 MiB unless the caller picks another part size) and one part upload
+ * at a time.
  * `write` resolves only after those bytes fit in the buffer, so a caller that
  * awaits it stops producing while a part is uploading.
  */
@@ -39,7 +42,7 @@ export type ByteCharge = {
 };
 
 export class R2MultipartWritePort {
-  private readonly buffer = new Uint8Array(R2_PART_SIZE);
+  private readonly buffer: Uint8Array;
   private stagingCharged: boolean;
   private filled = 0;
   private partNumber = 1;
@@ -56,10 +59,13 @@ export class R2MultipartWritePort {
     private readonly key: string,
     private readonly maxAttempts = 3,
     private readonly account?: ByteCharge,
+    private readonly partBytes = R2_PART_SIZE,
   ) {
+    if (partBytes < R2_MIN_PART_SIZE) throw new Error(`multipart parts must be at least ${R2_MIN_PART_SIZE} bytes`);
+    this.buffer = new Uint8Array(partBytes);
     this.stagingCharged = false;
     if (account) {
-      account.charge(R2_PART_SIZE);
+      account.charge(partBytes);
       this.stagingCharged = true;
     }
   }
@@ -78,18 +84,18 @@ export class R2MultipartWritePort {
     this.assertOpen();
     let offset = 0;
     while (offset < chunk.length) {
-      if (this.filled === R2_PART_SIZE) await this.flushFullPart();
-      const n = Math.min(R2_PART_SIZE - this.filled, chunk.length - offset);
+      if (this.filled === this.partBytes) await this.flushFullPart();
+      const n = Math.min(this.partBytes - this.filled, chunk.length - offset);
       this.buffer.set(chunk.subarray(offset, offset + n), this.filled);
       this.filled += n;
       offset += n;
       this.bytesAccepted += n;
       this.noteAccounted();
     }
-    if (this.filled === R2_PART_SIZE) await this.flushFullPart();
+    if (this.filled === this.partBytes) await this.flushFullPart();
   }
 
-  /** Publish the object. The final part may be shorter than 8 MiB. */
+  /** Publish the object. The final part may be shorter than the others. */
   async finish(): Promise<void> {
     this.assertOpen();
     if (this.filled > 0) {
@@ -119,7 +125,7 @@ export class R2MultipartWritePort {
   }
 
   private async flushFullPart(): Promise<void> {
-    const body = this.buffer.slice(0, R2_PART_SIZE);
+    const body = this.buffer.slice(0, this.partBytes);
     this.filled = 0;
     await this.putPart(body);
   }
@@ -164,7 +170,7 @@ export class R2MultipartWritePort {
   private releaseStaging(): void {
     if (!this.stagingCharged) return;
     this.stagingCharged = false;
-    this.account?.release(R2_PART_SIZE);
+    this.account?.release(this.partBytes);
   }
 
   private async safeAbort(): Promise<void> {

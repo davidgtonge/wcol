@@ -180,50 +180,6 @@ pub fn verify_output_manifest(records: &[OutputObjectRecord]) -> Result<(), Stri
     Ok(())
 }
 
-/// Limits for a node that demultiplexes rows into open partition writers.
-///
-/// R2 multipart uploads need non-final parts of at least 5 MiB, and those parts
-/// must be equal-sized. Each open partition therefore holds a part buffer.
-/// A Cloudflare isolate is about 128 MiB and may be shared, so the defaults stay
-/// well under that before Parquet encoding and query state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PartitionWriterConfig {
-    pub max_open_partitions: usize,
-    pub max_buffered_bytes: usize,
-    /// Size of every non-final multipart part. Must be at least 5 MiB for R2.
-    pub multipart_part_bytes: usize,
-}
-
-impl Default for PartitionWriterConfig {
-    fn default() -> Self {
-        const PART: usize = 5 * 1024 * 1024;
-        Self {
-            max_open_partitions: 8,
-            max_buffered_bytes: 8 * PART,
-            multipart_part_bytes: PART,
-        }
-    }
-}
-
-impl PartitionWriterConfig {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.max_open_partitions == 0 {
-            return Err("max_open_partitions must be at least 1".into());
-        }
-        const MIN_PART: usize = 5 * 1024 * 1024;
-        if self.multipart_part_bytes < MIN_PART {
-            return Err("multipart_part_bytes must be at least 5 MiB".into());
-        }
-        let floor = self
-            .max_open_partitions
-            .saturating_mul(self.multipart_part_bytes);
-        if self.max_buffered_bytes < floor {
-            return Err("max_buffered_bytes must cover one part for every open partition".into());
-        }
-        Ok(())
-    }
-}
-
 /// Where an attempt writes. The logical task id is not in the committed prefix.
 ///
 /// Readers use the published manifest. Objects under `_jobs/` are attempts, and
@@ -233,54 +189,6 @@ pub fn attempt_object_key(job_id: &str, task_id: &TaskId, attempt: u32, file_nam
         "_jobs/{job_id}/{}/{attempt}/{file_name}",
         task_id_hex(task_id)
     )
-}
-
-/// One value in a partition path, already bound to a final output column.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PartitionValue<'a> {
-    Null,
-    Bool(bool),
-    Int(i64),
-    /// Calendar date. Month is 1–12 and day is 1–31.
-    Date {
-        year: i32,
-        month: u8,
-        day: u8,
-    },
-    Text(&'a str),
-}
-
-/// Canonical path segment for a partition value.
-///
-/// Null is the Hive default `__HIVE_DEFAULT_PARTITION__`. A date is `YYYY-MM-DD`.
-/// Text keeps unreserved characters and percent-encodes the rest, including `/`.
-pub fn partition_path_value(value: PartitionValue<'_>) -> Result<String, String> {
-    Ok(match value {
-        PartitionValue::Null => "__HIVE_DEFAULT_PARTITION__".to_string(),
-        PartitionValue::Bool(true) => "true".to_string(),
-        PartitionValue::Bool(false) => "false".to_string(),
-        PartitionValue::Int(value) => value.to_string(),
-        PartitionValue::Date { year, month, day } => {
-            if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-                return Err(format!("invalid partition date {year}-{month}-{day}"));
-            }
-            format!("{year:04}-{month:02}-{day:02}")
-        }
-        PartitionValue::Text(text) => encode_partition_text(text),
-    })
-}
-
-fn encode_partition_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        let plain = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.');
-        if plain {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
 }
 
 /// Coordinator tail after reduce (row result batch for sinks that expect finalized rows).
@@ -381,36 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn partition_paths_and_writer_limits() {
-        assert_eq!(
-            partition_path_value(PartitionValue::Null).unwrap(),
-            "__HIVE_DEFAULT_PARTITION__"
-        );
-        assert_eq!(
-            partition_path_value(PartitionValue::Date {
-                year: 2013,
-                month: 7,
-                day: 1
-            })
-            .unwrap(),
-            "2013-07-01"
-        );
-        assert_eq!(
-            partition_path_value(PartitionValue::Text("a/b=c")).unwrap(),
-            "a%2Fb%3Dc"
-        );
-        assert!(partition_path_value(PartitionValue::Date {
-            year: 2013,
-            month: 0,
-            day: 1
-        })
-        .is_err());
-        PartitionWriterConfig::default().validate().unwrap();
-        let tight = PartitionWriterConfig {
-            multipart_part_bytes: 1024,
-            ..Default::default()
-        };
-        assert!(tight.validate().is_err());
+    fn attempt_keys_name_task_and_attempt() {
         assert_eq!(
             attempt_object_key("job-1", &TaskId(0xab), 2, "part.parquet"),
             "_jobs/job-1/00000000000000ab/2/part.parquet"

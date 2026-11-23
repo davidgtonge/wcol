@@ -61,12 +61,19 @@ Returns rows. Without a `LIMIT`, the coordinator stops at `rowCap`.
   "format": "parquet",
   "bucket": "output",
   "prefix": "exports/hits/",
+  "partitionBy": ["EventDate"],
   "targetFileBytes": 536870912,
   "targetRowGroupRows": 65536
 }
 ```
 
-Writes Parquet parts under `prefix`, and then commits them by publishing `<prefix>_manifest.json`. A scan, filter or projection writes one part per scan task. An aggregate, sort or limit writes one file from the finalizer. `targetFileBytes` (default 512 MiB) guides the number of writers and is not a maximum. `partitionBy` is parsed and validated but not executed yet.
+Writes Parquet files, and then commits them by publishing `<prefix>_manifest.json`. The manifest lists every file with its size and task, and is how readers find them: the files themselves stay under the job's attempt keys (`_jobs/<jobId>/...`). A scan, filter or projection writes one file per scan task. An aggregate, sort or limit writes one file from the finalizer. `targetFileBytes` (default 512 MiB) guides the number of writers and is not a maximum.
+
+`partitionBy` (optional) names output columns. Each scan task then writes one file per distinct value, under a Hive path such as `EventDate=15887/part-0.parquet`. The partition columns are in the path, not in the files, as Hive, Spark and DuckDB write them. Each manifest entry carries its `partitionValues` and `rows`. Path values are integers in decimal, text percent-encoded except `A-Z a-z 0-9 - _ .`, and `__HIVE_DEFAULT_PARTITION__` for null. Floating-point columns cannot partition.
+
+- It applies to a scan, filter or projection. With an aggregate, sort or limit, it is a planning error.
+- A task keeps at most 8 files open. A new value past that closes the least recently used one, and a later row with that value starts another file in the same directory. Data clustered by the partition column (dates in ClickBench's `hits`, say) writes one file per value per task; scattered values write more, smaller files. A task fails if it would write more than 4096.
+- Open files share a 16 MiB budget for rows not yet written: past it, the largest writes a row group early. Each file uploads in 5 MiB parts.
 
 ### `concat`
 
@@ -95,7 +102,9 @@ Trains k-means over numeric columns. Each scan loads its partition once and keep
 
 ## Attempts and output keys
 
-Each attempt writes under `_jobs/<jobId>/...`, keyed by task and attempt, so a retry never overwrites the attempt before it. Publishing the result record or the manifest is the commit. Readers should read the manifest, and ignore `_jobs/`. Superseded attempts' objects are not cleaned up yet.
+Each attempt writes under `_jobs/<jobId>/...`, keyed by task and attempt, so a retry never overwrites the attempt before it. Publishing the result record or the manifest is the commit. Readers should read the manifest rather than list `_jobs/`.
+
+When a job completes or fails, the coordinator sweeps its scratch in the background. It deletes every attempt output the published result does not name (earlier attempts' files, and the shards a single-file export concatenated), and any spill runs a failed task left. The job's records stay: plan, timing, result and manifest. A sweep that fails is logged and leaves only objects no reader is pointed at.
 
 ## Errors
 

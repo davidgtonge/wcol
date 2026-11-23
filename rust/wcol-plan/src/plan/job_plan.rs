@@ -231,9 +231,6 @@ pub fn plan_job(
             target_row_group_rows,
             ..
         } => {
-            if !partition_by.is_empty() {
-                return Err("partitionBy is not executed yet".into());
-            }
             let ids = object_ids(&source.table, footers)?;
             let footer = &footers[0];
             // No SQL is the identity transform: every column, every row.
@@ -255,13 +252,17 @@ pub fn plan_job(
                 config.hash_aggregate.reducers = Some(reducers);
             }
             config.parquet_row_group_rows = Some(*target_row_group_rows);
-            let (dispatch, plan, columns) = plan_query_job(
-                &sql,
-                &table_objects(&ids, footers),
-                config.max_nodes,
-                batch_rows,
-                &config,
-            )?;
+            let objects = table_objects(&ids, footers);
+            let mut planned =
+                plan_query_job(&sql, &objects, config.max_nodes, batch_rows, &config)?;
+            if !partition_by.is_empty() {
+                // `partitionBy` names output columns, which only the plan knows: plan once to
+                // learn them, then again with the sink told which ordinals split the files.
+                let names: Vec<String> = planned.2.iter().map(|col| col.name.clone()).collect();
+                config.partition_columns = request.bind_partition_by(&names)?;
+                planned = plan_query_job(&sql, &objects, config.max_nodes, batch_rows, &config)?;
+            }
+            let (dispatch, plan, columns) = planned;
             let finalize = match &dispatch {
                 QueryDispatch::Nodes(_) => Some(nodes_parquet_finalize_steps(
                     &plan,
@@ -282,9 +283,13 @@ pub fn plan_job(
                 return Err("export plan has no sink".into());
             }
             let exec = execution_plan_for(&dispatch, &plan, &config, finalize)?;
-            let layout = parse_layout_from_job(job_body).unwrap_or_else(|| {
-                default_layout_for_parquet_job(&dispatch, &plan, estimated, *target_file_bytes)
-            });
+            let layout = if partition_by.is_empty() {
+                parse_layout_from_job(job_body).unwrap_or_else(|| {
+                    default_layout_for_parquet_job(&dispatch, &plan, estimated, *target_file_bytes)
+                })
+            } else {
+                OutputLayout::Hive
+            };
             let output = OutputPlan::parquet(bucket.clone(), prefix.clone(), layout.clone());
             let finalizer = finalizer_for_single_file_layout(&exec, &layout);
             let exec = attach_output_plan(exec, output, finalizer)?;
@@ -399,7 +404,7 @@ fn finalizer_for_single_file_layout(
     exec: &ExecutionPlan,
     layout: &OutputLayout,
 ) -> OutputFinalizer {
-    if matches!(layout, OutputLayout::Partitioned) {
+    if !matches!(layout, OutputLayout::SingleFile) {
         return OutputFinalizer::None;
     }
     let ExecutionPlan::Graph {

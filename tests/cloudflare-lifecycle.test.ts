@@ -218,10 +218,15 @@ function fakeCtx(
         async get() {
           return { body: new Uint8Array(), text };
         },
+        async list() {
+          return { objects: [] };
+        },
+        async delete() {},
       },
     },
     store,
     transaction: async <T>(run: (txn: typeof store) => Promise<T>) => run(store),
     async deleteAlarm() {},
+    waitUntil() {},
   } as unknown as Parameters<typeof publishParquet>[0];
 }

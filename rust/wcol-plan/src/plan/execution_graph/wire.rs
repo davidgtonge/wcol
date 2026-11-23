@@ -100,6 +100,7 @@ pub(super) fn encode_output_trailer(
         out.push(match plan.layout {
             crate::plan::output_plan::OutputLayout::SingleFile => 0,
             crate::plan::output_plan::OutputLayout::Partitioned => 1,
+            crate::plan::output_plan::OutputLayout::Hive => 2,
         });
         push_wire_str(out, &plan.destination.bucket);
         push_wire_str(out, &plan.destination.prefix);

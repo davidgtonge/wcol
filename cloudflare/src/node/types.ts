@@ -5,6 +5,7 @@ import type { ReducerIngressSession } from "../../../src/runtime/host/scan-edge-
 import type { DictTraffic, MemGrowthSample, SpillBoundary } from "../../../src/runtime/host/host-types.ts";
 import type { StreamRunStats } from "../../../src/runtime/host/wasm-stream.ts";
 import type { R2Env } from "../r2.ts";
+import type { ExportObject } from "../../../src/runtime/host/hive-upload-sink.ts";
 
 /** One object a task reads: an R2 binding name and key, or an http(s) URL. */
 export type GraphJobSource = { url: string } | { bucket: string; key: string };
@@ -66,6 +67,8 @@ export type RunParquetShardParams = RunTaskParams & {
   objectKey: string;
   /** R2 binding name for the output bucket; empty uses `OUTPUT`. */
   outputBucket: string;
+  /** The plan's output layout: `hive` splits the task's rows by `partitionBy` values. */
+  layout: import("../../../src/runtime/coordinator/execution-graph.ts").OutputLayout;
 };
 
 export type RunConcatTaskParams = {
@@ -144,7 +147,7 @@ export type GraphTaskNode = {
   normalizeResidentKMeans(params: ResidentKMeansNormalizeParams): Promise<{ ready: true }>;
   runResidentKMeansRound(params: ResidentKMeansRoundParams): Promise<Uint8Array>;
   releaseResidentKMeans(params: ResidentKMeansReleaseParams): Promise<void>;
-  runParquetShardTask(params: RunParquetShardParams): Promise<{ bytes: number }>;
+  runParquetShardTask(params: RunParquetShardParams): Promise<{ objects: ExportObject[] }>;
   runConcatTask(params: RunConcatTaskParams): Promise<{ bytes: number }>;
   prepareReducer(params: PrepareReducerParams): Promise<PrepareReducerHandle>;
   acceptScanEdge(params: AcceptScanEdgeParams): Promise<{ accepted: true }>;

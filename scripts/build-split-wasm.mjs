@@ -78,11 +78,12 @@ if (which === "node") {
   // Raised from 1,000,000 with run-time scan claims and the compact fragment wire, then
   // from 1,100,000 for sparse partition dictionaries, the compact spill codec and
   // reducer-side distinct ranking, then from 1,120,000 for the scan-side combiner (compact
-  // partial columns, reducers merging partial states).
-  const budget = 1_160_000;
+  // partial columns, reducers merging partial states), then from 1,160,000 for the
+  // partitioned Parquet sink (`partitionBy`).
+  const budget = 1_190_000;
   // Resident K-means load/round exports add a small amount of node runtime code; raised
-  // from 416,000 with the combiner.
-  const gzipBudget = 432_000;
+  // from 416,000 with the combiner and from 432,000 with the partitioned sink.
+  const gzipBudget = 448_000;
   const banned = exports.filter(
     (name) =>
       name === "wcol_plan_query" ||

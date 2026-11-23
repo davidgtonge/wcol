@@ -54,11 +54,11 @@ pub use ops::query::{encoded_partials_equivalent, partial_first_sum_i, Selection
 pub use plan::columns_for_sql;
 pub use plan::{
     attempt_object_key, coordinator_reduce_finalize_rows, coordinator_reduce_partials,
-    estimate_output_bytes, partition_path_value, plan_page_compaction, verify_output_manifest,
+    estimate_output_bytes, plan_page_compaction, verify_output_manifest,
     verify_page_compaction_manifest, verify_scan_task_coverage, workers_for_target_file,
     CompactionInputFile, IngestMemoryProfile, OutputObjectRecord, PageCompactionPartRecord,
-    PageCompactionPlan, PageCompactionPolicy, ParquetOutputPolicy, PartitionValue,
-    PartitionWriterConfig, ScanTaskInput, SourceVersion, TaskId,
+    PageCompactionPlan, PageCompactionPolicy, ParquetOutputPolicy, ScanTaskInput, SourceVersion,
+    TaskId,
 };
 pub use stream::OwnedWcolBatch;
 pub use wcol_engine::spill;

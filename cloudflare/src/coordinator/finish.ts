@@ -4,22 +4,43 @@ import { type ObjectPart } from "../../../src/runtime/coordinator/run-hash-job.t
 import { outputBucket, type Prepared } from "./plan.ts";
 import { publishModel, publishParquet } from "./publish.ts";
 import { runQueryConcatFinalizer } from "./finalizer-concat.ts";
-import { type GraphJobContext, type GraphJobRecord, jobKey, requireJobRecord, taskKey } from "./record.ts";
+import { jobEnded } from "./sweep.ts";
+import {
+  type CommittedObject,
+  type DurableTaskRow,
+  type GraphJobContext,
+  type GraphJobRecord,
+  jobKey,
+  outputsKey,
+  requireJobRecord,
+  taskKey,
+} from "./record.ts";
 import type { GraphRun } from "./run.ts";
 
+/** Record the attempt's outputs: their list in R2, then each writing task as durable. */
 async function rememberOutputs(ctx: GraphJobContext, job: GraphJobRecord, graph: GraphPlan, outputs: ObjectPart[], attempt: number): Promise<void> {
-  for (const part of outputs) {
-    const task = graph.tasks.find((item) => item.id === part.taskId);
-    await ctx.store.put(taskKey(job.jobId, part.taskId ?? -1), {
-      taskId: part.taskId,
+  if (outputs.length === 0) return;
+  const key = outputsKey(job.jobId, attempt);
+  const committed: CommittedObject[] = outputs.map(({ taskId, objectKey, bytes, rows, partitionValues }) => ({
+    taskId: taskId ?? -1,
+    objectKey,
+    bytes,
+    rows,
+    partitionValues,
+  }));
+  await outputBucket(ctx.env).put(key, JSON.stringify(committed));
+  for (const taskId of new Set(committed.map((object) => object.taskId))) {
+    const task = graph.tasks.find((item) => item.id === taskId);
+    const row: DurableTaskRow = {
+      taskId,
       slot: task?.slot,
       state: "durable",
       executionAttempt: attempt,
       requestCount: task?.requestCount ?? 0,
       fetchedBytes: task?.fetchedBytes ?? 0,
-      objectKey: part.objectKey,
-      bytes: part.bytes,
-    });
+      outputsKey: key,
+    };
+    await ctx.store.put(taskKey(job.jobId, taskId), row);
   }
 }
 
@@ -54,7 +75,7 @@ export async function finishPrepared(
       await txn.put(jobKey(job.jobId), record);
       committed = true;
     });
-    if (committed) await ctx.deleteAlarm().catch(() => {});
+    if (committed) await jobEnded(ctx, job.jobId, []);
     return ran.jsonText ?? null;
   }
   if (prepared.plan.kind === "parquet") {

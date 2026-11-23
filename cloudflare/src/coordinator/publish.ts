@@ -1,5 +1,7 @@
+import type { OutputLayout } from "../../../src/runtime/coordinator/execution-graph.ts";
 import type { ObjectPart } from "../../../src/runtime/coordinator/run-hash-job.ts";
 import { r2Bucket } from "../node/node.ts";
+import { jobEnded } from "./sweep.ts";
 import {
   authoritativeManifestKey,
   type GraphJobContext,
@@ -32,7 +34,7 @@ export async function publishParquet(
   bucketName: string,
   outputs: ObjectPart[],
   attempt: number,
-  layout?: "single_file" | "partitioned",
+  layout?: OutputLayout,
   resultKey?: string,
 ): Promise<void> {
   const current = requireJobRecord(await ctx.store.get(jobKey(job.jobId)));
@@ -46,6 +48,8 @@ export async function publishParquet(
     parts: outputs.map((part) => ({
       objectKey: part.objectKey,
       bytes: part.bytes,
+      ...(part.rows === undefined ? {} : { rows: part.rows }),
+      ...(part.partitionValues.length ? { partitionValues: part.partitionValues } : {}),
       taskId: part.taskId,
       attempt,
     })),
@@ -76,7 +80,7 @@ export async function publishParquet(
     await txn.put(jobKey(job.jobId), record);
     committed = true;
   });
-  if (committed) await ctx.deleteAlarm().catch(() => undefined);
+  if (committed) await jobEnded(ctx, job.jobId, outputs.map((part) => part.objectKey));
 }
 
 export async function publishModel(
@@ -122,13 +126,15 @@ export async function publishModel(
     await txn.put(jobKey(job.jobId), record);
     committed = true;
   });
-  if (committed) await ctx.deleteAlarm().catch(() => undefined);
+  if (committed) await jobEnded(ctx, job.jobId, []);
 }
 
 export async function failJob(ctx: GraphJobContext, jobId: string, message: string): Promise<void> {
+  let failed = false;
   await ctx.transaction(async (txn) => {
     const current = (await txn.get(jobKey(jobId))) as GraphJobRecord | undefined;
     if (!current || current.state === "completed") return;
+    failed = current.state !== "failed";
     current.state = "failed";
     current.error = message.slice(0, 500);
     current.updatedAt = Date.now();
@@ -136,5 +142,7 @@ export async function failJob(ctx: GraphJobContext, jobId: string, message: stri
     current.publishing = undefined;
     await txn.put(jobKey(jobId), current);
   });
-  await ctx.deleteAlarm().catch(() => {});
+  // Sweep only on the transition: a completed job's outputs are its result.
+  if (failed) await jobEnded(ctx, jobId, []);
+  else await ctx.deleteAlarm().catch(() => {});
 }

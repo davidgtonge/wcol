@@ -90,8 +90,11 @@ export type HashScanDestination = { partition: number; slot: number; taskId: num
 
 export type ObjectPart = {
   objectKey: string;
+  /** Encoded `partitionBy` values in the object's Hive path; empty when unpartitioned. */
   partitionValues: string[];
   bytes: number;
+  /** Rows in the object, when the writer counted them. */
+  rows?: number;
   parts: number;
   localBytes?: Uint8Array;
   taskId?: number;

@@ -13,6 +13,7 @@ mod numeric_scan;
 pub mod page_compact;
 mod page_cursor;
 mod page_scratch;
+mod partitioned;
 mod replay_metrics;
 
 pub use batch_decode::{ChunkSpec, ParquetDecode, RowGroupSpec, HOST_READ_LIMIT};
@@ -26,6 +27,10 @@ pub use ingest_memory::{
 pub use numeric_scan::{DictIdBatch, NumericBatch, NumericScan, ScanValueMode};
 pub use page_cursor::{inflate_page_body, Flow, PageCursor, PageStep};
 pub use page_scratch::PageScratch;
+pub use partitioned::{
+    partition_path_value, PartitionValue, PartitionedParquetEncode, FRAME_CLOSE, FRAME_DATA,
+    FRAME_OPEN, MAX_FILES, MAX_OPEN_FILES,
+};
 pub use replay_metrics::{
     ingest_replay_merge, ingest_replay_reset, ingest_replay_totals, ScanReplayMetrics,
 };

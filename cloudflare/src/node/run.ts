@@ -3,7 +3,7 @@ import { concatBytes } from "../../../src/runtime/host/bytes.ts";
 import { attachBytesInputs } from "../../../src/runtime/host/pool-streams.ts";
 import { type ResidentGraph } from "../../../src/runtime/host/resident-graph.ts";
 import { r2BindingSession } from "../r2.ts";
-import { ParquetUploadSink } from "../../../src/runtime/host/parquet-upload-sink.ts";
+import { exportSink, type ExportObject } from "../../../src/runtime/host/hive-upload-sink.ts";
 import { runConcatProgram } from "../../../src/runtime/host/run-parquet-concat.ts";
 import { coloOnce } from "../colo.ts";
 import { type NodeWasm } from "./session.ts";
@@ -60,30 +60,37 @@ export async function runGatherTaskOnNode(options: RunGatherTaskOnNodeOptions): 
   return { bytes: concatBytes(parts), colo: await colo, sourceReads: timing.sourceReads, sourceReadBytes: timing.sourceReadBytes };
 }
 
-/** Upload one parquet shard from a gather-style program. */
+/** Write one export task's Parquet: one object, or Hive files for a `partitionBy` plan. */
 export async function runParquetShardTaskOnNode(options: {
   env: GraphTaskEnv;
   wasm: NodeWasm;
   params: RunParquetShardParams;
   onActivity?: () => void;
-}): Promise<{ bytes: number }> {
+}): Promise<{ objects: ExportObject[] }> {
   const { env, params, onActivity } = options;
   const bucket = outputBucketFor(env, params.outputBucket);
-  const session = r2BindingSession(bucket, params.objectKey);
-  const sink = new ParquetUploadSink(session, params.objectKey);
+  const sink = exportSink(params.layout, (key) => r2BindingSession(bucket, key), params.objectKey);
   const inputs = params.inputs ?? [];
-  await runProgram({
-    wasm: options.wasm,
-    env,
-    params,
-    write: sink.writePort,
-    chunks: () => 0,
-    onActivity,
-    poolLayout: { inputs: inputs.length, outputs: 1 },
-    onPoolReady: attachBytesInputs(inputs),
-  });
-  const bytes = await sink.finish();
-  return { bytes };
+  let written = 0;
+  try {
+    await runProgram({
+      wasm: options.wasm,
+      env,
+      params,
+      write: (port, chunk) => {
+        written += 1;
+        return sink.writePort(port, chunk);
+      },
+      chunks: () => written,
+      onActivity,
+      poolLayout: { inputs: inputs.length, outputs: 1 },
+      onPoolReady: attachBytesInputs(inputs),
+    });
+    return { objects: await sink.finish() };
+  } catch (error) {
+    await sink.abort(error);
+    throw error;
+  }
 }
 
 export async function runConcatTaskOnNode(options: {

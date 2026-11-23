@@ -1544,6 +1544,54 @@ fn split_bytes(offsets: &[u32], bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     Ok(out)
 }
 
+/// Driving one file directly, for a sink that writes several (see `partitioned.rs`). Bytes
+/// collect in the encoder until [`ParquetEncode::take_output`] moves them out.
+impl ParquetEncode {
+    /// Append the batch's selected rows, writing a row group when one fills.
+    pub(crate) fn push_rows(&mut self, batch: &OwnedWcolBatch) -> Result<(), String> {
+        if matches!(self.phase, Phase::NeedMagic) {
+            self.write_magic_once()?;
+        }
+        self.validate_batch(batch)?;
+        self.schema_checked = true;
+        self.append_batch(batch)
+    }
+
+    /// Write the rows held as a row group now, to release their memory.
+    pub(crate) fn write_held_rows(&mut self) -> Result<(), String> {
+        self.flush_row_group()
+    }
+
+    /// Write the last row group and the footer.
+    pub(crate) fn finish_file(&mut self) -> Result<(), String> {
+        if matches!(self.phase, Phase::NeedMagic) {
+            self.write_magic_once()?;
+        }
+        if !matches!(self.phase, Phase::Done) {
+            self.write_footer_once()?;
+        }
+        Ok(())
+    }
+
+    /// Move the encoded bytes not yet taken onto the end of `out`.
+    pub(crate) fn take_output(&mut self, out: &mut Vec<u8>) {
+        let from = match self.copy {
+            CopyState::Active { cursor } => cursor,
+            CopyState::None => 0,
+        };
+        out.extend_from_slice(&self.pending[from.min(self.pending.len())..]);
+        self.pending.clear();
+        self.copy = CopyState::None;
+    }
+
+    /// Bytes the held rows occupy: byte-array values as counted, every other cell as 8.
+    pub(crate) fn held_bytes(&self) -> usize {
+        self.group
+            .value_bytes
+            .saturating_add(self.group.rows.saturating_mul(self.schema.len() * 9))
+    }
+}
+
 impl Operator for ParquetEncode {
     fn as_any(&self) -> &dyn std::any::Any {
         self

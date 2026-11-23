@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 thiserror = "2"
-compact-parquet-thrift = { path = "../../../compact-parquet-thrift" }
+compact-parquet-thrift = "0.3.0"
 rustc-hash = "2.0"
 # Slot-only index for two-key groups (keys stored once). Already in the lockfile.
 hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }

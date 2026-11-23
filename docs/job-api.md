@@ -10,7 +10,7 @@ Everything goes through one route. `POST /jobs` takes a job, and `GET /jobs/{job
 | `GET /jobs/{jobId}` | State (`running`, `complete`, `failed`), attempts, node count, timings and bytes read; plus the result, manifest key or output key once complete |
 | `GET /jobs/{jobId}/live` | A snapshot of the running graph: tasks, edges, bytes and data centres. The console polls this |
 | `GET /version` | The deploy id. The deploy script waits for it to change |
-| `GET /` | The [console](console.md) |
+| `GET /` | The console |
 
 The sync budget is `WCOL_JOB_SYNC_MS` (10 s by default). With `0`, every job is asynchronous.
 
@@ -42,7 +42,7 @@ These are optional. Without them, the planner and the coordinator decide.
 | `targetGroupBytes` | A reducer's group table size before it spills (16 MiB on nodes; on containers, the instance's memory less 128 MiB) |
 | `groupSpill` | `false` makes a reducer fail at its hard limit instead of spilling |
 
-With `"reducers": "auto"`, the coordinator compares the planner's estimate of group state with what node reducers can hold in memory (128 of them × 16 MiB). It sends larger aggregates to 64 `basic` containers. See [containers](containers.md).
+With `"reducers": "auto"`, the coordinator compares the planner's estimate of group state with what node reducers can hold in memory (128 of them × 16 MiB). It sends larger aggregates to 64 `basic` containers.
 
 ## Outputs
 

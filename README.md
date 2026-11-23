@@ -30,29 +30,16 @@ POST /jobs ─► coordinator DO ─► plans the SQL into a graph of tasks
 | `cloudflare/console` | A browser console: submit queries, watch the graph run, see bytes and cost |
 | `tests` | TypeScript tests, run against the release Wasm |
 | `scripts` | Build, deploy and benchmark scripts |
-| `docs` | [Architecture](docs/architecture.md), [job API](docs/job-api.md), [container reducers](docs/containers.md), [console](docs/console.md), [ClickBench results](docs/clickbench-results.md), [comparison with Athena](docs/clickbench-vs-athena.md), and [illustrated explainers](docs/explainers/index.html) |
+| `docs` | [Architecture](docs/architecture.md), [job API](docs/job-api.md), and [illustrated explainers](https://davidgtonge.github.io/wcol/) |
 
-Parquet's Thrift metadata and page decoding come from [`compact-parquet-thrift`](https://github.com/davidgtonge/compact-parquet-thrift). The Rust crates take it as a path dependency (`../../../compact-parquet-thrift` from each crate), so clone it next to this repository:
-
-```bash
-git clone https://github.com/davidgtonge/compact-parquet-thrift.git
-git clone https://github.com/davidgtonge/wcol.git
-```
-
-```text
-parent/
-├── compact-parquet-thrift/
-└── wcol/
-```
-
-It is not on crates.io yet.
+Parquet's Thrift metadata and page decoding come from [`compact-parquet-thrift`](https://crates.io/crates/compact-parquet-thrift) ([source](https://github.com/davidgtonge/compact-parquet-thrift), [explainer](https://davidgtonge.github.io/compact-parquet-thrift/)).
 
 ## Build and test
 
 You need Node 22, the Rust toolchain pinned in `rust/rust-toolchain.toml` (rustup installs it), the `wasm32-unknown-unknown` target, and `wasm-opt` from Binaryen.
 
 ```bash
-cd wcol
+git clone https://github.com/davidgtonge/wcol.git && cd wcol
 rustup target add wasm32-unknown-unknown
 npm install
 (cd rust && cargo fetch)   # the Wasm build runs cargo --offline
@@ -91,7 +78,7 @@ curl -X POST "$WCOL_BASE_URL/jobs" \
 
 ## Status
 
-WCOL is a research project, not a product. It plans one source table per query: joins, window functions and a few ClickBench queries (Q18, Q35, Q42) are not supported. The results so far are in [docs/clickbench-results.md](docs/clickbench-results.md).
+WCOL is a research project, not a product. It plans one source table per query: joins, window functions and a few ClickBench queries (Q18, Q35, Q42) are not supported.
 
 Contributors, human or AI, should read [AGENTS.md](AGENTS.md), which sets out how the code is meant to be structured.
 

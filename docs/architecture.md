@@ -9,7 +9,7 @@ WCOL runs a SQL query over Parquet in R2 as a graph of tasks spread over Durable
 | Front Worker | `cloudflare/src/worker.ts` | Serves the console, checks the API token, and routes `/jobs` to the job's coordinator |
 | Coordinator | `WcolCoordinator` DO, one per job, coordinator Wasm | Reads the source footers, plans the job, runs the graph, finalizes the result and publishes it |
 | Nodes | `WcolNode` DOs, node Wasm | Run scan and reducer tasks. A slot number names each one, so a job reuses the same objects |
-| Container reducers | `WcolReducer` DO and container, `rust/wcol-reducer` | A hash reducer with the instance's memory and local-disk spill, for large group state ([containers](containers.md)) |
+| Container reducers | `WcolReducer` DO and container, `rust/wcol-reducer` | A hash reducer with the instance's memory and local-disk spill, for large group state |
 | R2 | one bucket, bound as `OUTPUT` | Source Parquet, spill runs, async results, Parquet output and manifests |
 
 The node Wasm has no planner and the coordinator Wasm has no scan code, so each stays small (the node module is about 1.1 MB, 430 KB gzipped). The build script fails if the node Wasm grows past its budget or exports a planner symbol.

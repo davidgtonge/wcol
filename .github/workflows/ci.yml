@@ -9,14 +9,9 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      # compact-parquet-thrift is a path dependency next to this repository.
       - uses: actions/checkout@v4
         with:
           path: wcol
-      - uses: actions/checkout@v4
-        with:
-          repository: davidgtonge/compact-parquet-thrift
-          path: compact-parquet-thrift
 
       - name: Rust toolchain
         working-directory: wcol/rust

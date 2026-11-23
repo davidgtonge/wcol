@@ -19,7 +19,7 @@ serde_json = "1"
 base64 = "0.22"
 
 [dev-dependencies]
-compact-parquet-thrift = { path = "../../../compact-parquet-thrift" }
+compact-parquet-thrift = "0.3.0"
 
 [features]
 default = []

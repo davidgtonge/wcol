@@ -4,6 +4,8 @@
 # Small regression fixture written by DuckDB (see rust/wcol/tests/runtime/duckdb_fixture.rs).
 !tests/fixtures/duckdb_rle_padding.parquet
 !tests/fixtures/duckdb_nulls.parquet
+# Tiny encoder fixture; several tests read it, so it must not depend on test order.
+!tests/fixtures/flat.parquet
 !tests/fixtures/legacy_encodings.parquet
 /data/
 

@@ -16,8 +16,8 @@ npm run test               # JS runtime unit tests
 ```bash
 npm run build:wasm:size    # Rust `opt-level=z` + wasm-opt `-Oz`
 # simd: ~77 KB gzipped, ~196 KB raw (Jun 2026)
-ls -lh rust/wcol-wasm/pkg/wasm/
-gzip -c rust/wcol-wasm/pkg/wasm/wcol_wasm.simd.wasm | wc -c
+ls -lh archive/rust/wcol-wasm/pkg/wasm/
+gzip -c archive/rust/wcol-wasm/pkg/wasm/wcol_wasm.simd.wasm | wc -c
 ```
 
 Default `npm run build` uses the speed-oriented profile (~117 KB gzipped).
@@ -25,7 +25,7 @@ Default `npm run build` uses the speed-oriented profile (~117 KB gzipped).
 ## Comparisons (Parquet / DuckDB / wasm sizes)
 
 ```bash
-cargo build -p wcol-cli --release --manifest-path rust/Cargo.toml
+cargo build -p wcol-cli --release --manifest-path archive/rust/Cargo.toml
 npm run compare
 ```
 
@@ -34,8 +34,8 @@ See [COMPARISONS.md](COMPARISONS.md) for methodology and tables.
 ## CLI smoke
 
 ```bash
-cargo run -p wcol-cli -- --help
-cargo run -p wcol-cli -- query --file data/hits_subset.wcol \
+cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- --help
+cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- query --file data/hits_subset.wcol \
   --sql "SELECT COUNT(*) FROM hits;" --workers 2 --format summary
 ```
 

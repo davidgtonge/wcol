@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WCOL — jobs, streams, sinks, retry</title>
+  <style>
+    :root {
+      --bg: #0c0d10;
+      --paper: #14161c;
+      --ink: #f4f1ea;
+      --mute: #9a958c;
+      --line: #2a2d36;
+      --caller: #e8d5a3;
+      --coord: #7eb8ff;
+      --node: #8fd9a4;
+      --r2: #c9a0ff;
+      --warn: #f0b429;
+      --bad: #ff8a7a;
+      --ok: #8fd9a4;
+      --sans: "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
+      --ui: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink); }
+    body { font-family: var(--ui); line-height: 1.45; }
+    header {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 2.25rem 1.5rem 0.5rem;
+    }
+    header .kicker {
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--mute);
+      margin: 0 0 0.4rem;
+    }
+    header h1 {
+      font-family: var(--sans);
+      font-weight: 400;
+      font-size: clamp(1.6rem, 3vw, 2.15rem);
+      margin: 0 0 0.5rem;
+      letter-spacing: -0.02em;
+    }
+    header p.lede {
+      margin: 0;
+      max-width: 40rem;
+      color: var(--mute);
+      font-size: 0.98rem;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 1.25rem 1.5rem 3rem;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 1.25rem;
+      align-items: start;
+    }
+    @media (max-width: 860px) {
+      .shell { grid-template-columns: 1fr; }
+    }
+    nav.scenes {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      position: sticky;
+      top: 1rem;
+    }
+    nav.scenes button {
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--mute);
+      padding: 0.65rem 0.8rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.88rem;
+    }
+    nav.scenes button .n {
+      display: block;
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 0.1rem;
+      color: #6d6a64;
+    }
+    nav.scenes button.active {
+      background: var(--paper);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+    .stage {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .stage-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .sinks {
+      display: flex;
+      gap: 0.3rem;
+    }
+    .sinks button, .play {
+      border: 1px solid var(--line);
+      background: #1a1c24;
+      color: var(--ink);
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.78rem;
+    }
+    .sinks button.active { border-color: var(--coord); color: var(--coord); }
+    .play {
+      background: var(--ink);
+      color: #111;
+      font-weight: 600;
+      border: none;
+    }
+    .play:disabled { opacity: 0.45; }
+    svg#board {
+      width: 100%;
+      display: block;
+      min-height: 480px;
+    }
+    .box { stroke-width: 1.25; }
+    .box-caller { fill: #1c1a14; stroke: var(--caller); }
+    .box-coord { fill: #121820; stroke: var(--coord); }
+    .box-node { fill: #121916; stroke: var(--node); }
+    .box-r2 { fill: #18141f; stroke: var(--r2); }
+    .box-store { fill: #141414; stroke: #555; stroke-dasharray: 3 3; }
+    .t { font-family: var(--ui); fill: var(--ink); }
+    .t-sm { font-size: 11px; fill: var(--mute); font-family: var(--ui); }
+    .t-xs { font-size: 9.5px; fill: #7a766e; font-family: var(--mono); }
+    .t-title { font-size: 13px; font-weight: 600; }
+    path.wire { fill: none; stroke-width: 1.6; }
+    .w-rpc { stroke: var(--coord); stroke-dasharray: 5 4; }
+    .w-stream { stroke: var(--node); }
+    .w-r2 { stroke: var(--r2); }
+    .w-http { stroke: var(--caller); }
+    .w-bad { stroke: var(--bad); stroke-dasharray: 4 3; }
+    .ghost { opacity: 0.18; }
+    .hide { opacity: 0; pointer-events: none; }
+    .show { opacity: 1; }
+    .fade { transition: opacity 0.35s ease; }
+    .chip {
+      font-family: var(--mono);
+      font-size: 9px;
+      fill: #111;
+    }
+    .story {
+      padding: 1rem 1.15rem 1.2rem;
+      border-top: 1px solid var(--line);
+      min-height: 7.5rem;
+    }
+    .story h2 {
+      font-family: var(--sans);
+      font-size: 1.15rem;
+      font-weight: 400;
+      margin: 0 0 0.35rem;
+    }
+    .story p { margin: 0 0 0.55rem; color: #c9c4ba; font-size: 0.92rem; }
+    .story p:last-child { margin-bottom: 0; }
+    .story code {
+      font-family: var(--mono);
+      font-size: 0.8em;
+      background: #0c0d10;
+      padding: 0.08em 0.32em;
+      border-radius: 4px;
+      color: #d7e7ff;
+    }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.6rem;
+      margin-top: 0.85rem;
+    }
+    @media (max-width: 720px) { .steps { grid-template-columns: 1fr; } }
+    .steps div {
+      background: #0c0d10;
+      border-radius: 10px;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.8rem;
+      color: var(--mute);
+    }
+    .steps div b { display: block; color: var(--ink); font-weight: 600; margin-bottom: 0.2rem; font-size: 0.78rem; }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.85rem 1.2rem;
+      padding: 0.15rem 0 0;
+      font-size: 0.75rem;
+      color: var(--mute);
+    }
+    .legend i {
+      display: inline-block;
+      width: 16px;
+      height: 2px;
+      margin-right: 0.35rem;
+      vertical-align: middle;
+    }
+    .pulse { animation: pulse 1.1s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="kicker">wcol / cloudflare</p>
+    <h1>Where a job goes, who starts the stream, and what happens when it fails</h1>
+    <p class="lede">
+      One coordinator Durable Object per job. Fan-in is a tree of merge nodes (not a star into the coordinator).
+      The coordinator RPCs only the root; each merge opens and pulls its children.
+    </p>
+  </header>
+
+  <main>
+    <div class="shell">
+      <nav class="scenes" aria-label="Scenes">
+        <button type="button" class="active" data-scene="arrive"><span class="n">01</span>Job arrives</button>
+        <button type="button" data-scene="run"><span class="n">02</span>Who starts the stream</button>
+        <button type="button" data-scene="pull"><span class="n">03</span>Pull vs push</button>
+        <button type="button" data-scene="sinks"><span class="n">04</span>JSON · Parquet · Concat</button>
+        <button type="button" data-scene="fail"><span class="n">05</span>Failure and retry</button>
+      </nav>
+
+      <div class="stage">
+        <div class="stage-bar">
+          <div class="sinks" id="sink-bar" hidden>
+            <button type="button" class="active" data-sink="json">JSON to caller</button>
+            <button type="button" data-sink="parquet">Parquet to R2</button>
+            <button type="button" data-sink="concat">Concat to one key</button>
+          </div>
+          <div class="legend" id="bar-legend">
+            <span><i style="background:var(--caller)"></i>HTTP</span>
+            <span><i style="background:var(--coord);border-bottom:1px dashed var(--coord);height:0"></i>RPC start</span>
+            <span><i style="background:var(--node)"></i>WCS stream</span>
+            <span><i style="background:var(--r2)"></i>R2</span>
+          </div>
+          <button type="button" class="play" id="play">Play this scene</button>
+        </div>
+
+        <svg id="board" viewBox="0 0 980 560" aria-label="Job architecture">
+          <defs>
+            <marker id="m-gold" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#e8d5a3"/></marker>
+            <marker id="m-blue" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#7eb8ff"/></marker>
+            <marker id="m-green" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#8fd9a4"/></marker>
+            <marker id="m-purple" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#c9a0ff"/></marker>
+            <marker id="m-bad" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="#ff8a7a"/></marker>
+          </defs>
+
+          <!-- Caller + worker -->
+          <g id="g-entry">
+            <rect class="box box-caller" x="20" y="28" width="120" height="58" rx="10"/>
+            <text class="t t-title" x="80" y="52" text-anchor="middle">Caller</text>
+            <text class="t-sm" x="80" y="70" text-anchor="middle">POST /jobs</text>
+
+            <rect class="box box-caller" x="20" y="112" width="120" height="58" rx="10"/>
+            <text class="t t-title" x="80" y="136" text-anchor="middle">Worker</text>
+            <text class="t-xs" x="80" y="154" text-anchor="middle">idFromName(jobId)</text>
+
+            <path id="p-caller-worker" class="wire w-http" marker-end="url(#m-gold)" d="M80 86 L80 112"/>
+            <path id="p-worker-coord" class="wire w-http" marker-end="url(#m-gold)" d="M140 141 L210 141"/>
+          </g>
+
+          <!-- Coordinator -->
+          <g id="g-coord">
+            <rect class="box box-coord" x="210" y="100" width="168" height="92" rx="12"/>
+            <text class="t t-title" x="294" y="128" text-anchor="middle">WcolCoordinator</text>
+            <text class="t-sm" x="294" y="146" text-anchor="middle">one DO per jobId</text>
+            <text class="t-xs" x="294" y="164" text-anchor="middle">submitGraphJob · runPrepared</text>
+            <text class="t-xs" x="294" y="178" text-anchor="middle">SQLite: status ≤ 64 KiB</text>
+          </g>
+
+          <!-- Coordinator storage + pin -->
+          <g id="g-pin" class="fade">
+            <rect class="box box-store" x="210" y="214" width="168" height="52" rx="8"/>
+            <text class="t-sm" x="294" y="236" text-anchor="middle">DO SQLite ledger</text>
+            <text class="t-xs" x="294" y="252" text-anchor="middle">job state · lease · tasks</text>
+            <path id="p-coord-sql" class="wire w-rpc" d="M294 192 L294 214"/>
+          </g>
+
+          <!-- R2 -->
+          <g id="g-r2">
+            <rect class="box box-r2" x="20" y="300" width="140" height="70" rx="10"/>
+            <text class="t t-title" x="90" y="326" text-anchor="middle">R2 sources</text>
+            <text class="t-xs" x="90" y="344" text-anchor="middle">pinned etag + footer</text>
+            <text class="t-xs" x="90" y="358" text-anchor="middle">ReadAt ranges</text>
+
+            <rect class="box box-r2" x="20" y="390" width="140" height="78" rx="10"/>
+            <text class="t t-title" x="90" y="416" text-anchor="middle">R2 OUTPUT</text>
+            <text class="t-xs" x="90" y="434" text-anchor="middle">graph.bin · descriptor</text>
+            <text class="t-xs" x="90" y="448" text-anchor="middle">attempt objects · result</text>
+          </g>
+
+          <path id="p-coord-pin" class="wire w-r2" marker-end="url(#m-purple)" d="M210 168 C160 168 140 250 90 300"/>
+          <path id="p-coord-out" class="wire w-r2" marker-end="url(#m-purple)" d="M210 180 C150 210 80 360 90 390"/>
+
+          <!-- Scan nodes + two intermediate merges + root merge (no stream fan-out) -->
+          <g id="g-nodes">
+            <rect class="box box-node" id="n-s0" x="400" y="16" width="108" height="48" rx="8"/>
+            <text class="t t-title" x="454" y="36" text-anchor="middle">Scan s0</text>
+            <text class="t-xs" x="454" y="52" text-anchor="middle">a1:s0</text>
+
+            <rect class="box box-node" id="n-s1" x="400" y="78" width="108" height="48" rx="8"/>
+            <text class="t t-title" x="454" y="98" text-anchor="middle">Scan s1</text>
+            <text class="t-xs" x="454" y="114" text-anchor="middle">a1:s1</text>
+
+            <rect class="box box-node" id="n-s2" x="400" y="168" width="108" height="48" rx="8"/>
+            <text class="t t-title" x="454" y="188" text-anchor="middle">Scan s2</text>
+            <text class="t-xs" x="454" y="204" text-anchor="middle">a1:s2</text>
+
+            <rect class="box box-node" id="n-s3" x="400" y="230" width="108" height="48" rx="8"/>
+            <text class="t t-title" x="454" y="250" text-anchor="middle">Scan s3</text>
+            <text class="t-xs" x="454" y="266" text-anchor="middle">a1:s3</text>
+
+            <rect class="box box-node" id="n-ma" x="538" y="38" width="118" height="58" rx="9"/>
+            <text class="t t-title" x="597" y="60" text-anchor="middle">Merge mA</text>
+            <text class="t-xs" x="597" y="76" text-anchor="middle">slot s4 · reduce</text>
+
+            <rect class="box box-node" id="n-mb" x="538" y="190" width="118" height="58" rx="9"/>
+            <text class="t t-title" x="597" y="212" text-anchor="middle">Merge mB</text>
+            <text class="t-xs" x="597" y="228" text-anchor="middle">slot s5 · reduce</text>
+
+            <rect class="box box-node" id="n-merge" x="686" y="108" width="128" height="70" rx="10"/>
+            <text class="t t-title" x="750" y="132" text-anchor="middle">Root mR</text>
+            <text class="t-xs" x="750" y="148" text-anchor="middle">slot s6 · sink</text>
+            <text class="t-xs" x="750" y="162" text-anchor="middle">the only coordinator RPC</text>
+          </g>
+
+          <path id="p-r2-s0" class="wire w-r2" marker-end="url(#m-purple)" d="M160 330 C280 300 340 40 400 40"/>
+          <path id="p-r2-s1" class="wire w-r2" marker-end="url(#m-purple)" d="M160 332 C290 280 340 102 400 102"/>
+          <path id="p-r2-s2" class="wire w-r2" marker-end="url(#m-purple)" d="M160 334 C290 280 340 192 400 192"/>
+          <path id="p-r2-s3" class="wire w-r2" marker-end="url(#m-purple)" d="M160 336 C280 310 340 254 400 254"/>
+
+          <path id="p-s0-ma" class="wire w-stream" marker-end="url(#m-green)" d="M508 40 C522 40 528 58 538 60"/>
+          <path id="p-s1-ma" class="wire w-stream" marker-end="url(#m-green)" d="M508 102 C522 102 528 78 538 74"/>
+          <path id="p-s2-mb" class="wire w-stream" marker-end="url(#m-green)" d="M508 192 C522 192 528 210 538 212"/>
+          <path id="p-s3-mb" class="wire w-stream" marker-end="url(#m-green)" d="M508 254 C522 254 528 230 538 228"/>
+
+          <path id="p-ma-mr" class="wire w-stream" marker-end="url(#m-green)" d="M656 67 C672 67 678 120 686 132"/>
+          <path id="p-mb-mr" class="wire w-stream" marker-end="url(#m-green)" d="M656 219 C672 219 678 170 686 154"/>
+
+          <!-- Nested RPCs: parent merge opens children; coordinator only opens the root -->
+          <path id="p-coord-rpc" class="wire w-rpc" marker-end="url(#m-blue)" d="M378 146 C520 146 620 143 686 143"/>
+          <path id="p-rpc-ma" class="wire w-rpc" marker-end="url(#m-blue)" d="M686 128 C670 100 670 70 656 67"/>
+          <path id="p-rpc-mb" class="wire w-rpc" marker-end="url(#m-blue)" d="M686 158 C670 180 670 210 656 219"/>
+          <text id="lbl-start" class="t-xs fade" x="500" y="8" fill="#7eb8ff">① coordinator runTask on root only — mA/mB open their own children</text>
+
+          <path id="p-merge-coord" class="wire w-stream" marker-end="url(#m-green)" d="M750 108 C750 48 360 48 294 100"/>
+          <text id="lbl-return" class="t-xs fade" x="470" y="300" fill="#8fd9a4">② coordinator pulls only the root body</text>
+
+          <g id="g-pull" class="fade hide">
+            <rect x="168" y="318" width="46" height="16" rx="3" fill="#8fd9a4"/>
+            <text class="chip" x="191" y="330" text-anchor="middle">PULL</text>
+            <text class="t-xs" x="168" y="348">Rust ReadAt</text>
+
+            <rect x="512" y="50" width="46" height="16" rx="3" fill="#8fd9a4"/>
+            <text class="chip" x="535" y="62" text-anchor="middle">PULL</text>
+            <text class="t-xs" x="500" y="44">mA read() s0 then s1</text>
+
+            <rect x="512" y="202" width="46" height="16" rx="3" fill="#8fd9a4"/>
+            <text class="chip" x="535" y="214" text-anchor="middle">PULL</text>
+            <text class="t-xs" x="500" y="196">mB read() s2 then s3</text>
+
+            <rect x="658" y="132" width="46" height="16" rx="3" fill="#8fd9a4"/>
+            <text class="chip" x="681" y="144" text-anchor="middle">PULL</text>
+            <text class="t-xs" x="648" y="122">mR read() mA then mB</text>
+
+            <rect x="408" y="130" width="46" height="16" rx="3" fill="#f0b429"/>
+            <text class="chip" x="431" y="142" text-anchor="middle">PUSH</text>
+            <text class="t-xs" x="400" y="126">writePort</text>
+
+            <rect x="700" y="86" width="110" height="16" rx="3" fill="#7eb8ff"/>
+            <text class="chip" x="755" y="98" text-anchor="middle">RPC OPENS STREAM</text>
+          </g>
+
+          <!-- Output destinations -->
+          <g id="g-out">
+            <rect class="box box-caller" id="out-http" x="830" y="20" width="134" height="64" rx="10"/>
+            <text class="t t-title" x="897" y="44" text-anchor="middle">HTTP</text>
+            <text class="t-xs" x="897" y="62" text-anchor="middle">200 JSON or 202</text>
+
+            <rect class="box box-r2" id="out-parts" x="830" y="108" width="134" height="70" rx="10"/>
+            <text class="t t-title" x="897" y="132" text-anchor="middle">Attempt obj</text>
+            <text class="t-xs" x="897" y="148" text-anchor="middle">_runs/job/task/aN</text>
+            <text class="t-xs" x="897" y="162" text-anchor="middle">multipart on sink</text>
+
+            <rect class="box box-r2" id="out-pub" x="830" y="200" width="134" height="70" rx="10"/>
+            <text class="t t-title" x="897" y="224" text-anchor="middle" id="out-pub-title">Published</text>
+            <text class="t-xs" x="897" y="240" text-anchor="middle" id="out-pub-a">manifest.json</text>
+            <text class="t-xs" x="897" y="254" text-anchor="middle" id="out-pub-b">or destination key</text>
+          </g>
+
+          <path id="p-coord-http" class="wire w-http" marker-end="url(#m-gold)" d="M378 120 C500 16 760 40 830 46"/>
+          <path id="p-merge-parts" class="wire w-r2" marker-end="url(#m-purple)" d="M814 143 L830 143"/>
+          <path id="p-coord-pub" class="wire w-r2" marker-end="url(#m-purple)" d="M378 178 C560 280 760 240 830 230"/>
+
+          <!-- Failure overlay -->
+          <g id="g-fail" class="fade hide">
+            <path class="wire w-bad" marker-end="url(#m-bad)" d="M508 102 L538 74"/>
+            <text class="t" x="518" y="78" text-anchor="middle" fill="#ff8a7a" font-size="18">✕</text>
+            <text class="t-sm" x="518" y="138" text-anchor="middle" fill="#ff8a7a">s1 dies mid-stream</text>
+            <rect class="box" x="400" y="310" width="360" height="168" rx="12" fill="#1a1212" stroke="#ff8a7a"/>
+            <text class="t t-title" x="416" y="336" fill="#ff8a7a">Retry is a new attempt, not a resume</text>
+            <text class="t-sm" x="416" y="358">New DO names: graph:job:a2:sN — every slot, including mA/mB/mR</text>
+            <text class="t-sm" x="416" y="376">Same runner: runPrepared + runExecutionGraph</text>
+            <text class="t-sm" x="416" y="394">A live WCS edge is not stored. Replaying mR reruns mA and mB.</text>
+            <text class="t-sm" x="416" y="412">Skip only sinks already durable in R2 (object jobs)</text>
+            <text class="t-sm" x="416" y="430">Alarm if lease (120s) dies · max 3 attempts</text>
+            <text class="t-xs" x="416" y="454">If source etag changed since pin → permanent fail</text>
+          </g>
+
+          <g id="particles"></g>
+        </svg>
+
+        <div class="story" id="story"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const STORIES = {
+      arrive: {
+        title: "A job is named, then parked on one coordinator",
+        body: "The worker does not run the query. <code>POST /jobs</code> hashes <code>idempotencyKey</code> (or uses <code>jobId</code>) and forwards the body to <code>WCOL_COORDINATOR.idFromName(jobId)</code>. That Durable Object is the job: it pins source etags, writes <code>graph.bin</code> and <code>descriptor.json</code> to R2, and stores only a small ledger row in SQLite.",
+        steps: [
+          { t: "Name the job", d: "Same idempotency key always hits the same coordinator DO." },
+          { t: "Pin + plan", d: "Read parquet footers, plan the graph, reject stream fan-out." },
+          { t: "Persist then run", d: "Ledger + alarm first. Then runPrepared. Bytes never go in SQLite." },
+        ],
+      },
+      run: {
+        title: "Coordinator RPCs the root. Each merge opens its own children.",
+        body: "This graph is a tree, not a star: scans s0–s1 fan in to merge <code>mA</code>, s2–s3 to <code>mB</code>, then both into root <code>mR</code>. <code>runExecutionGraph</code> only calls <code>runTask</code> on the sink (mR). Nested <code>runTask</code> from mR opens mA then mB; each of those opens its scans. Each producer still has <em>one</em> outgoing stream — fan-out is illegal, fan-in is a tree of pulls.",
+        steps: [
+          { t: "① Root RPC", d: "Coordinator → mR. That is the only coordinator-to-node start for this sink." },
+          { t: "② Nested RPCs", d: "mR.runTask opens mA and mB. Each merge multiplexBounded-drains its children in edge order." },
+          { t: "③ One body back", d: "Coordinator pulls only mR’s stream. Intermediate WCS never enters SQLite." },
+        ],
+      },
+      pull: {
+        title: "Every merge is a puller. Children only push into a bounded pipe.",
+        body: "After an RPC has opened the pipe, that parent <code>read()</code>s. mA drains s0 completely, then s1 (no interleaved WCS). mB does the same for s2/s3. mR drains mA, then mB. WASM <code>writePort</code> on a child blocks when that parent’s 256 KiB pipe is full — backpressure walks up the tree.",
+        steps: [
+          { t: "R2 → scan = PULL", d: "READ_AT tickets. Host fetches a range. No subscription." },
+          { t: "Child egress = PUSH", d: "HAVE_OUTPUT → writePort. Stalls if the parent has not pulled." },
+          { t: "Each merge = PULL", d: "readPort / reader.read, one producer to completion, then the next." },
+        ],
+      },
+      sinks: {
+        json: {
+          title: "JSON: wait on this request, or park the body in R2",
+          body: "SQL is required. The coordinator races the graph against <code>WCOL_JOB_SYNC_MS</code> (default 10 s). Finish in time → HTTP 200 with metadata + rows. Timeout → 202 and <code>_jobs/{id}/result.json</code> on OUTPUT. Parquet/concat never wait on the caller connection.",
+          steps: [
+            { t: "Inline", d: "deliverInline true. finishPrepared returns jsonText on this request." },
+            { t: "Too slow", d: "202 { jobId, state: running }. GET /jobs/:id reads resultKey from R2." },
+            { t: "Unpinned source", d: "Only allowed if fully colocated and sync. Cannot recover later." },
+          ],
+        },
+        parquet: {
+          title: "Parquet: 202 immediately, then publish a manifest",
+          body: "The HTTP call returns accepted. A grouped query still uses this merge tree and one sink on the root. A scan/identity plan is different: each scan can <em>be</em> a sink, and the coordinator RPCs several trees in parallel. Either way, sinks write attempt objects with <code>R2MultipartWritePort</code>; the coordinator then publishes <code>manifest.json</code>. Workers never write the shared prefix themselves.",
+          steps: [
+            { t: "202 Accepted", d: "waitUntil continues the run. Caller polls GET /jobs/:id." },
+            { t: "One sink or many", d: "GROUP BY → one root sink. Plain scan → many sink tasks, still no stream fan-out." },
+            { t: "Publish", d: "Coordinator put of the manifest. Pointer uses onlyIf etagDoesNotMatch *." },
+          ],
+        },
+        concat: {
+          title: "Concat: page-copy compaction, one destination key",
+          body: "No SQL and no WCOL query plan — copy parquet pages from a list of inputs into one key. Nodes write an attempt object; the coordinator then <code>publishing</code>-records a conditional copy to <code>output.key</code>. If that put crashes, the alarm reconciles: adopt the destination if metadata matches, otherwise fail.",
+          steps: [
+            { t: "No query planner", d: "inputs[] + output.key. Identity page copy, not filter/project." },
+            { t: "Attempt object first", d: "concatAttemptKey. Shared destination is not written on the node." },
+            { t: "Conditional publish", d: "onlyIf etagDoesNotMatch *. Recoverable via reconcilePublishing." },
+          ],
+        },
+      },
+      fail: {
+        title: "Failure does not resume a stream. It claims a new attempt.",
+        body: "A mid-stream error on s1 kills the WCS into mA, which fails mR. Nothing is resumed in place. The coordinator bumps <code>executionAttempt</code> (max 3) and runs the same tree on new DOs <code>graph:job:a2:sN</code>. Because edges are ephemeral, replaying the root reruns mA, mB, and every scan. Only a sink whose R2 object is already durable is skipped.",
+        steps: [
+          { t: "Ephemeral dies", d: "WCS edges are not stored. Producers of a replayed sink run again." },
+          { t: "Durable is reused", d: "sinksToReplay: skip task if ledger says durable and R2 object still matches." },
+          { t: "Publish is its own state", d: "concat publishing row + alarm. Do not mix with stream retry." },
+        ],
+      },
+    };
+
+    let scene = "arrive";
+    let sink = "json";
+    let playing = false;
+    const storyEl = document.getElementById("story");
+    const sinkBar = document.getElementById("sink-bar");
+    const playBtn = document.getElementById("play");
+    const particles = document.getElementById("particles");
+
+    function set(el, on) {
+      if (!el) return;
+      el.classList.toggle("hide", !on);
+      el.classList.toggle("ghost", false);
+    }
+    function ghost(el, on) {
+      if (!el) return;
+      el.classList.toggle("ghost", on);
+    }
+
+    function renderStory() {
+      const block = scene === "sinks" ? STORIES.sinks[sink] : STORIES[scene];
+      storyEl.innerHTML =
+        "<h2>" + block.title + "</h2><p>" + block.body + "</p>" +
+        "<div class='steps'>" +
+        block.steps.map((s) => "<div><b>" + s.t + "</b>" + s.d + "</div>").join("") +
+        "</div>";
+    }
+
+    function applyScene() {
+      sinkBar.hidden = scene !== "sinks";
+      const fail = document.getElementById("g-fail");
+      const pull = document.getElementById("g-pull");
+      set(fail, scene === "fail");
+      set(pull, scene === "pull");
+      set(document.getElementById("lbl-start"), scene === "run" || scene === "pull");
+      set(document.getElementById("lbl-return"), scene === "run" || scene === "pull" || scene === "sinks");
+
+      ghost(document.getElementById("g-nodes"), scene === "arrive");
+      ghost(document.getElementById("g-out"), scene === "arrive" || scene === "fail");
+      ghost(document.getElementById("g-entry"), scene === "fail");
+
+      const titles = {
+        json: ["JSON to caller", "200 body, or result.json", "GET /jobs/:id if 202"],
+        parquet: ["Parquet manifest", "_jobs/{id}/manifest.json", "prefix/_manifest.json pointer"],
+        concat: ["Concat destination", "conditional copy to output.key", "publishing row until complete"],
+      };
+      const t = titles[sink];
+      document.getElementById("out-pub-title").textContent = t[0];
+      document.getElementById("out-pub-a").textContent = t[1];
+      document.getElementById("out-pub-b").textContent = t[2];
+
+      ghost(document.getElementById("out-http"), scene === "sinks" && sink !== "json");
+      ghost(document.getElementById("out-parts"), scene === "sinks" && sink === "json");
+      ghost(document.getElementById("out-pub"), scene === "sinks" && sink === "json");
+      ghost(document.getElementById("p-coord-http"), scene === "sinks" && sink !== "json");
+      ghost(document.getElementById("p-merge-parts"), scene === "sinks" && sink === "json");
+      ghost(document.getElementById("p-coord-pub"), scene === "sinks" && sink === "json");
+
+      renderStory();
+    }
+
+    document.querySelectorAll("nav.scenes button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        scene = btn.dataset.scene;
+        document.querySelectorAll("nav.scenes button").forEach((b) => b.classList.toggle("active", b === btn));
+        applyScene();
+      });
+    });
+    document.querySelectorAll(".sinks button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        sink = btn.dataset.sink;
+        document.querySelectorAll(".sinks button").forEach((b) => b.classList.toggle("active", b === btn));
+        applyScene();
+      });
+    });
+
+    function along(pathId, cls, ms, reverse = false) {
+      return new Promise((resolve) => {
+        const path = document.getElementById(pathId);
+        if (!path) return resolve();
+        const len = path.getTotalLength();
+        const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        dot.setAttribute("r", cls === "pull" ? "6" : "4.5");
+        if (cls === "pull") {
+          dot.setAttribute("fill", "none");
+          dot.setAttribute("stroke", "#7eb8ff");
+          dot.setAttribute("stroke-width", "2");
+        } else {
+          dot.setAttribute("fill", cls || "#8fd9a4");
+        }
+        particles.appendChild(dot);
+        const t0 = performance.now();
+        function tick(now) {
+          const t = Math.min(1, (now - t0) / ms);
+          const pt = path.getPointAtLength((reverse ? 1 - t : t) * len);
+          dot.setAttribute("cx", pt.x);
+          dot.setAttribute("cy", pt.y);
+          if (t < 1) requestAnimationFrame(tick);
+          else { dot.remove(); resolve(); }
+        }
+        requestAnimationFrame(tick);
+      });
+    }
+
+    async function play() {
+      if (playing) return;
+      playing = true;
+      playBtn.disabled = true;
+      particles.innerHTML = "";
+      try {
+        if (scene === "arrive") {
+          await along("p-caller-worker", "#e8d5a3", 500);
+          await along("p-worker-coord", "#e8d5a3", 600);
+          await along("p-coord-pin", "#c9a0ff", 800);
+          await along("p-coord-out", "#c9a0ff", 800);
+        } else if (scene === "run") {
+          await along("p-coord-rpc", "#7eb8ff", 650);
+          await along("p-rpc-ma", "#7eb8ff", 450);
+          await along("p-s0-ma", "#8fd9a4", 400);
+          await along("p-s1-ma", "#8fd9a4", 400);
+          await along("p-ma-mr", "#8fd9a4", 450);
+          await along("p-rpc-mb", "#7eb8ff", 450);
+          await along("p-s2-mb", "#8fd9a4", 400);
+          await along("p-s3-mb", "#8fd9a4", 400);
+          await along("p-mb-mr", "#8fd9a4", 450);
+          await along("p-merge-coord", "#8fd9a4", 700);
+        } else if (scene === "pull") {
+          await along("p-coord-rpc", "#7eb8ff", 450);
+          await along("p-rpc-ma", "#7eb8ff", 350);
+          for (const [edge, src] of [["p-s0-ma", "p-r2-s0"], ["p-s1-ma", "p-r2-s1"]]) {
+            await along(edge, "pull", 320, true);
+            await along(src, "#c9a0ff", 360);
+            await along(edge, "#f0b429", 400);
+          }
+          await along("p-ma-mr", "pull", 300, true);
+          await along("p-ma-mr", "#f0b429", 400);
+          await along("p-rpc-mb", "#7eb8ff", 350);
+          for (const [edge, src] of [["p-s2-mb", "p-r2-s2"], ["p-s3-mb", "p-r2-s3"]]) {
+            await along(edge, "pull", 320, true);
+            await along(src, "#c9a0ff", 360);
+            await along(edge, "#f0b429", 400);
+          }
+          await along("p-mb-mr", "pull", 300, true);
+          await along("p-mb-mr", "#f0b429", 400);
+          await along("p-merge-coord", "pull", 350, true);
+          await along("p-merge-coord", "#8fd9a4", 500);
+        } else if (scene === "sinks") {
+          await along("p-coord-rpc", "#7eb8ff", 500);
+          await along("p-rpc-ma", "#7eb8ff", 350);
+          await along("p-s0-ma", "#8fd9a4", 350);
+          await along("p-ma-mr", "#8fd9a4", 400);
+          if (sink === "json") {
+            await along("p-merge-coord", "#8fd9a4", 600);
+            await along("p-coord-http", "#e8d5a3", 600);
+          } else {
+            await along("p-merge-parts", "#c9a0ff", 500);
+            await along("p-coord-pub", "#c9a0ff", 700);
+          }
+        } else if (scene === "fail") {
+          await along("p-coord-rpc", "#7eb8ff", 450);
+          await along("p-rpc-ma", "#7eb8ff", 350);
+          await along("p-s1-ma", "#ff8a7a", 400);
+          await new Promise((r) => setTimeout(r, 400));
+          await along("p-coord-out", "#c9a0ff", 600);
+          await along("p-coord-rpc", "#7eb8ff", 550);
+          await along("p-rpc-ma", "#7eb8ff", 350);
+          await along("p-s0-ma", "#8fd9a4", 350);
+          await along("p-s1-ma", "#8fd9a4", 350);
+          await along("p-rpc-mb", "#7eb8ff", 350);
+          await along("p-s2-mb", "#8fd9a4", 350);
+          await along("p-s3-mb", "#8fd9a4", 350);
+        }
+      } finally {
+        playing = false;
+        playBtn.disabled = false;
+      }
+    }
+
+    playBtn.addEventListener("click", play);
+    applyScene();
+  </script>
+</body>
+</html>

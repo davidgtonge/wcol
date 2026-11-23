@@ -1,5 +1,7 @@
 # wcol
 
+**Rust-first stream work:** see [WORKING_ON.md](./WORKING_ON.md). Legacy TS graph execution and old docs live under [archive/](./archive/README.md).
+
 **Columnar storage for the browser and native** — explore whether you can match Parquet-class compression with a Wasm decoder small enough to ship in a web page, and run DuckDB-style analytical queries across multiple workers.
 
 ## The idea
@@ -17,12 +19,10 @@ I wanted to see if I could build a columnar format that:
 
 | Path | Required | What it is |
 |------|----------|------------|
-| `rust/wcol-format` | yes | Format constants and layout |
-| `rust/wcol-encoder` | yes | Parquet → `.wcol` |
-| `rust/wcol-decoder` | yes | Decode + query kernels (native + Wasm) |
-| `rust/wcol-wasm` | yes | Wasm FFI surface |
-| `rust/wcol-cli` | yes | `convert`, `query`, `bench`, DuckDB parity |
-| `rust/wcol-sql-parser` | yes | SQL → plan (CLI path) |
+| `rust/wcol` | yes | Engine: Parquet → WCS stream → GraphHost operators, distributed plans (Cloudflare Wasm) |
+| `archive/rust/wcol-file` | archived | `.wcol` v7 file engine (decode, encode, file query kernels) |
+| `archive/rust/wcol-wasm` | archived | Browser Wasm cdylib (re-exports `wcol_file::decode`) |
+| `archive/rust/wcol-cli` | archived | `convert`, `query`, `bench`, DuckDB parity, `parquet` inspect |
 | `src/` | yes | JS runtime — `WcolFile`, worker pool, `QueryPlan` |
 | `apps/explorer/` | **optional** | Crates.io explorer demo (Preact + `wcol-engine`) |
 | `engine-shell/` | explorer only | Git submodule for the demo worker scaffold |
@@ -55,9 +55,10 @@ const result = await file.query(
 ## CLI (native, multi-worker)
 
 ```bash
-cargo run -p wcol-cli -- convert data/hits.parquet -o data/hits.wcol
-cargo run -p wcol-cli -- query --file data/hits.wcol \
+cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- convert data/hits.parquet -o data/hits.wcol
+cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- query --file data/hits.wcol \
   --sql "SELECT COUNT(*) FROM hits;" --workers 4 --format summary
+cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- parquet data/hits.parquet --column downloads
 ```
 
 ## Optional explorer demo
@@ -90,6 +91,8 @@ Wasm (wcol-decoder)  — page decode, filters, group-by, aggregates
 - **Parallel when safe** — multiple workers scan disjoint chunks; reducer merges partial aggregates.
 - **Worker failure → local fallback** when workers were auto-detected.
 
+The same kernels also run as a streaming graph: partial aggregates are reduced as chunks finish, and a second mode emits projected columnar batches. Browser edges use `MessageChannel` credits. A Cloudflare Durable Object can host each node and pull framed byte streams from its upstreams. See [docs/STREAM.md](docs/STREAM.md) and [docs/OPERATORS.md](docs/OPERATORS.md).
+
 Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FORMAT.md](docs/FORMAT.md).
 
 ## Comparisons
@@ -100,7 +103,7 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FORMAT.md](docs/FOR
 | **Native query speed** (500k ClickBench rows) | DuckDB in-process on Parquet | **~2–3× faster** on filter/group-by; DuckDB faster on exact `COUNT(DISTINCT)` ([details](docs/COMPARISONS.md#query-speed-duckdb-native-vs-wcol-native)) |
 | **In-browser engine** | duckdb-wasm ~**6.9 MB** gz | Wasm **77–114 KB** gz + ~14 KB JS ([details](docs/COMPARISONS.md#decoder--query-engine-size-duckdb-wasm-vs-wcol-wasm)) |
 
-Reproduce locally: `npm run compare` (needs `data/` fixtures and `cargo build -p wcol-cli --release`).
+Reproduce locally: `npm run compare` (needs `data/` fixtures and `cargo build -p wcol-cli --release --manifest-path archive/rust/Cargo.toml`).
 
 ## Tests
 

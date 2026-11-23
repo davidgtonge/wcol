@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WCOL Console</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #14171c; --muted: #5d6673; --line: #e2e5ea;
+    --accent: #2563eb; --accent-soft: #dbe6fd; --ok: #15803d; --ok-soft: #dcf2e3;
+    --warn: #c2700a; --warn-soft: #fbeccf; --bad: #c42b2b; --bad-soft: #fbe0e0; --purple: #7c3aed;
+    --idle: #c9ced6; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --panel: #161b22; --ink: #e6e9ee; --muted: #8b95a3; --line: #262d37;
+      --accent: #5b8def; --accent-soft: #1c2a44; --ok: #3fb96d; --ok-soft: #15301f;
+      --warn: #e0a24a; --warn-soft: #3a2a12; --bad: #f06a6a; --bad-soft: #3c1a1a; --purple: #a78bfa;
+      --idle: #39414d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .spacer { flex: 1; }
+  header input { width: 200px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 16px; padding: 16px 20px; max-width: 1600px; margin: 0 auto; }
+  @media (max-width: 1100px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  section + section, .pair + section, section + .pair { margin-top: 16px; }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  .pair > section { margin-top: 0; }
+  @media (max-width: 900px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 10px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  h2 .spacer { flex: 1; }
+  h2 .mono { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  textarea, input, select, button { font: inherit; color: var(--ink); }
+  textarea { width: 100%; min-height: 84px; resize: vertical; font-family: var(--mono); font-size: 13px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  input, select { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; margin-top: 10px; }
+  .controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .controls label.wide { flex: 1 1 100%; }
+  .controls select { max-width: 100%; }
+  button { cursor: pointer; }
+  button.run { padding: 8px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; }
+  button.run:disabled { opacity: .55; cursor: progress; }
+  button.ghost { padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 12px; }
+  button.ghost.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .segmented button { border: 0; border-radius: 0; background: var(--bg); padding: 3px 9px; font-size: 11px; text-transform: none; letter-spacing: 0; }
+  .segmented button.active { background: var(--accent-soft); color: var(--accent); }
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--accent); }
+  .pill.completed { background: var(--ok-soft); color: var(--ok); }
+  .pill.failed { background: var(--bad-soft); color: var(--bad); }
+  .muted { color: var(--muted); }
+  .mono { font-family: var(--mono); }
+  .small { font-size: 12px; }
+  .reason { font-size: 13px; color: var(--muted); }
+  ul.findings { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; font-size: 13px; }
+  ul.findings li span { display: inline-block; width: 14px; font-size: 10px; }
+  ul.findings li.info span { color: var(--accent); }
+  ul.findings li.warn span { color: var(--warn); }
+  canvas { display: block; width: 100%; }
+  .replay { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .replay input[type=range] { flex: 1; padding: 0; accent-color: var(--accent); }
+  .hover { min-height: 18px; font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .legend i, .key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.total td { font-weight: 700; }
+  tr.compare td { color: var(--muted); border-bottom: 0; }
+  .detail th { width: 96px; }
+  table.runs tr[data-job] { cursor: pointer; }
+  table.runs tr[data-job]:hover td { background: var(--bg); }
+  .result { overflow: auto; max-height: 320px; }
+  .error { color: var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; margin-top: 8px; }
+  .hidden { display: none !important; }
+  .funnel-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 120px; gap: 10px; align-items: center; margin: 8px 0; }
+  .funnel-label small, .funnel-value small { display: block; color: var(--muted); font-size: 11px; }
+  .funnel-bar { height: 16px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+  .funnel-bar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+  .funnel-value { text-align: right; font-variant-numeric: tabular-nums; }
+  @media (max-width: 700px) { .funnel-row { grid-template-columns: minmax(0, 1fr) 100px; } .funnel-bar { display: none; } }
+  svg.map { width: 100%; height: auto; display: block; }
+  svg.map .grid { stroke: var(--line); stroke-width: 1; }
+  svg.map .flow { fill: none; stroke: var(--accent); stroke-opacity: .55; stroke-linecap: round; }
+  svg.map .site { stroke: var(--panel); stroke-width: 1.5; }
+  svg.map .site.scan { fill: var(--accent); }
+  svg.map .site.reduce { fill: var(--ok); }
+  svg.map .site.both { fill: var(--purple); }
+  svg.map .site.coord { fill: var(--muted); }
+  svg.map .coordinator { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 3 2; }
+  svg.map .site-label { font: 600 11px var(--mono); fill: var(--ink); }
+  .caption { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  svg.scatter { width: 100%; height: auto; display: block; }
+  svg.scatter .axis { stroke: var(--line); }
+  svg.scatter .axis-label { font: 10px var(--mono); fill: var(--muted); }
+  svg.scatter .dot { stroke: var(--panel); stroke-width: 1; }
+  svg.scatter .dot.c, .key.c { fill: var(--ok); background: var(--ok); }
+  svg.scatter .dot.d, .key.d { fill: var(--accent); background: var(--accent); }
+  svg.scatter .dot.g, .key.g { fill: var(--purple); background: var(--purple); }
+  svg.scatter .dot.other { opacity: .25; }
+</style>
+</head>
+<body>
+<header>
+  <h1>WCOL Console</h1>
+  <span class="muted">ClickBench <span class="mono">hits</span> on Cloudflare</span>
+  <span class="spacer"></span>
+  <label class="muted">API token <input id="token" type="password" autocomplete="off" placeholder="if required"></label>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>Query</h2>
+      <textarea id="sql" spellcheck="false"></textarea>
+      <div class="controls">
+        <label class="wide">ClickBench query <select id="preset"></select></label>
+        <label>Reducers on <select id="reducers">
+          <option value="auto">auto</option><option value="node">Durable Objects</option><option value="container">containers</option>
+        </select></label>
+        <label>Container size <select id="instance">
+          <option>basic</option><option>lite</option><option>standard-1</option><option>standard-2</option><option>standard-3</option><option>standard-4</option>
+        </select></label>
+        <label title="The planner may use fewer when the data does not split further">Scans (up to) <select id="scans">
+          <option value="">planner</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option>
+        </select></label>
+        <label>Reducer count <select id="count">
+          <option value="">planner</option><option>8</option><option>16</option><option>32</option><option>64</option><option>128</option>
+        </select></label>
+        <label>Source key <input id="key" value="hits.parquet" size="16"></label>
+        <button class="run" id="run">Run</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="status">
+        <span class="pill" id="state">idle</span>
+        <span id="elapsed" class="mono">—</span>
+        <span id="job" class="muted mono small"></span>
+      </div>
+      <div class="reason" id="reason"></div>
+      <ul class="findings hidden" id="findings"></ul>
+      <div id="error" class="error hidden"></div>
+    </section>
+
+    <section>
+      <h2>Timeline <span class="spacer"></span><span id="clock" class="mono muted"></span></h2>
+      <canvas id="timeline" height="120" aria-label="Timeline of every task"></canvas>
+      <div class="replay">
+        <button class="ghost" id="play">Replay</button>
+        <input type="range" id="slider" min="0" max="1" value="0" step="10" aria-label="Moment shown">
+        <button class="ghost active" id="follow">Live</button>
+      </div>
+      <div class="hover" id="hover"></div>
+      <div class="legend">
+        <span><i style="background:var(--warn)"></i>starting (container or prepare)</span>
+        <span><i style="background:var(--accent)"></i>running</span>
+        <span><i style="background:var(--ok)"></i>done</span>
+        <span><i style="background:var(--bad)"></i>failed</span>
+        <span><i style="background:var(--purple)"></i>finalize</span>
+      </div>
+    </section>
+
+    <div class="pair">
+      <section>
+        <h2>Shuffle matrix <span class="spacer"></span>
+          <span class="segmented" id="matrix-mode"><button data-mode="bytes" class="active">bytes</button><button data-mode="finish">finish time</button></span>
+        </h2>
+        <canvas id="matrix" height="80" aria-label="Bytes from each scan to each reducer"></canvas>
+        <div class="hover" id="matrix-hover"></div>
+        <p class="caption">One cell per edge: grey waiting, blue flowing, then by bytes or by when it finished (red: last). Bars total each scan and reducer. Click a cell for the scan, shift-click for the reducer.</p>
+      </section>
+      <section>
+        <h2>Where it ran</h2>
+        <div id="map"><p class="muted">—</p></div>
+      </section>
+    </div>
+
+    <section>
+      <h2>Data flow</h2>
+      <div id="funnel"><p class="muted">—</p></div>
+    </section>
+
+    <section id="result-section" class="hidden">
+      <h2>Result</h2>
+      <div class="result" id="result"></div>
+    </section>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Totals</h2>
+      <div class="stats" id="stats"></div>
+    </section>
+    <section>
+      <h2>Task</h2>
+      <div class="detail" id="detail"><p class="muted">Click a lane in the timeline or a cell in the matrix.</p></div>
+    </section>
+    <section>
+      <h2>Estimated cost</h2>
+      <div id="cost" class="muted">—</div>
+      <p class="caption">List prices; container CPU charged in full, an upper bound.</p>
+    </section>
+    <section>
+      <h2>Runs</h2>
+      <div id="history"></div>
+    </section>
+  </aside>
+</main>
+<!-- APP -->
+</body>
+</html>

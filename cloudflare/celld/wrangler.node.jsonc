@@ -1,0 +1,22 @@
+{
+  "name": "wcol-node",
+  "main": "node-worker.js",
+  "no_bundle": true,
+  "compatibility_date": "2026-01-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "WCOL_NODE", "class_name": "WcolNode" },
+      { "name": "WCOL_COORDINATOR", "class_name": "WcolCoordinator", "script_name": "wcol-coordinator" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WcolNode"] }],
+  "r2_buckets": [
+    { "binding": "OUTPUT", "bucket_name": "wcol-hits-exports" }
+  ],
+  "vars": {
+    "WCOL_NODE_WASM_BUILD": "dev",
+    "WCOL_YIELD_AFTER": "8",
+    "WCOL_REDUCER_TRACE": "0",
+    "WCOL_PHASE_SLOT": "32"
+  }
+}

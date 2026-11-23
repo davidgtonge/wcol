@@ -1,0 +1,12 @@
+[package]
+name = "wcol-reducer"
+version = "0.1.0"
+edition = "2021"
+description = "Native hash reducer served over HTTP, for container reducers"
+publish = false
+
+[dependencies]
+wcol-engine = { path = "../wcol-engine", default-features = false }
+httparse = "1"
+# The static (musl) build's own malloc is slow; this is the allocator the Wasm engine uses.
+dlmalloc = { version = "0.2", features = ["global"] }

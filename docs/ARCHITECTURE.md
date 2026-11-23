@@ -1,64 +1,101 @@
 # Architecture
 
-wcol splits **I/O and orchestration** (TypeScript) from **decode and compute** (Rust / Wasm). The optional `apps/explorer` demo adds a second Rust crate (`wcol-engine`) for UI state — it is not part of the core runtime.
+WCOL is **one Rust streaming engine**, a **thin Wasm adapter**, a **native CLI**, and a **minimal TypeScript host**. All column processing, planning, scheduling, and query logic live in Rust.
 
-## Core stack
+**Consolidation tracker:** [CONSOLIDATION.md](./CONSOLIDATION.md) (migration phases and deletion criteria).
 
-| Layer | Location | Role |
-|-------|----------|------|
-| Public API | `src/index.ts`, `src/browser.ts` | `WcolFile`, `buildPlan`, browser entry |
-| Orchestration | `src/runtime/exec/` | Chunk queue, page reads, worker pool, merge |
-| Query model | `src/runtime/query/` | `QueryPlan` JSON → Wasm plan handle |
-| Wasm compute | `rust/wcol-wasm`, `rust/wcol-decoder` | Decode pages, run filters / group-by / aggregates |
-| Ingest | `rust/wcol-encoder`, `rust/wcol-cli` | Parquet → `.wcol`, native benchmarks |
+## End-to-end pipeline
 
-**Rule:** JavaScript owns bytes and scheduling; Rust/Wasm owns columnar decode and query kernels.
-
-## Query flow
-
-```mermaid
-flowchart LR
-  subgraph js [JS orchestration]
-    WcolFile["WcolFile.query(plan)"]
-    Chunks["executePlan"]
-    Workers["worker pool"]
-    Results["readPlanResult"]
-  end
-  subgraph wasm [Wasm]
-    Plan["plan handle"]
-    Decode["decode + query"]
-  end
-  WcolFile --> Chunks
-  Chunks --> Workers
-  Workers --> Plan
-  Plan --> Decode
-  Chunks --> Results
+```text
+InputSource (file, HTTP, S3, …)
+        │
+        ▼
+  ParquetDecode / WcolDecode     ← formats/ (bytes → WCOL batches only)
+        │
+        ▼
+   WCOL stream                   ← stream/ (batches, partials, WCS1)
+        │
+        ▼
+  Filter → Aggregate → Reduce → Finalize   ← ops/query + exec/runtime operators
+        │
+        ▼
+   WCOL stream
+        │
+        ├── JsonEncode
+        ├── ParquetEncode
+        └── WcolEncode
+        │
+        ▼
+  OutputSource
 ```
 
-1. `buildPlan({ ... })` — filters, `groupBy`, `aggregates`, `select`, `limit`.
-2. Per chunk: read compressed pages → `plan_exec_chunk` in Wasm.
-3. Main thread or worker pool runs chunks in parallel when the plan allows it.
-4. Reducer merges partial row ids / aggregate state; projection materializes `SELECT` columns late.
+- **Query never lives under `formats/parquet`.** Parquet is footer plan + page scan → `WcolBatch`.
+- **SQL planning** is `plan/sql_parser`; **execution state** is `ops/query` + `exec/runtime/wcol_stream/*`.
+- **On-disk `.wcol` files** (archived) use `archive/rust/wcol-file` (`wcol_file::decode`) for page decode; the same operator chain consumes WCOL batches afterward.
 
-## Multi-process execution
+## Repository layout
 
-| Runtime | Mechanism |
-|---------|-----------|
-| Browser | `Worker` pool (`src/runtime/workers/`) — one Wasm instance per worker, shared plan via messages |
-| Native CLI | Thread pool in `wcol-decoder` native runtime (`--workers N`) |
+```text
+wcol/
+├── rust/wcol/          # Engine: stream, formats, ops, exec, plan, host
+├── archive/rust/       # Archived .wcol file engine, browser Wasm, native CLI
+├── src/                # Public JS/TS API + host driver (I/O, no SQL) — legacy paths retiring in Phase 4
+├── cloudflare/         # Worker / DO
+├── tests/              # Parity and E2E
+└── docs/               # This file + streaming, memory, format specs
+```
 
-Invariants:
+External dependency: [`compact-parquet-thrift`](../../compact-parquet-thrift) (Parquet thrift/pages only).
 
-- One in-flight query per `WcolFile` (`queryChain` lock).
-- Read all results before destroying the plan handle.
-- Explicit `workers: N` disables silent fallback on worker error.
+## Engine modules (`rust/wcol`)
 
-## Optional explorer app
+| Module | Responsibility |
+|--------|----------------|
+| `stream/` | Batches, partial aggregate schema, WCS1 wire |
+| `formats/` | Parquet / `.wcol` / JSON — **decode & encode only** |
+| `ops/` | Query kernel (`ops/query`) + operator facades (filter, aggregate, …) |
+| `exec/` | Operator trait, graph, scheduler, `ParquetDecode`, `JsonEncode`, … |
+| `plan/` | SQL → logical plan, physical ingest placement |
+| `host.rs` | External I/O effects (`ReadAt`, ports, yield) |
 
-`apps/explorer/` layers a Preact UI and `wcol-engine` (app state, CBOR patches, undo/redo) on top of the same `WcolFile` API. See [apps/explorer/README.md](../apps/explorer/README.md).
+## Import convention
+
+```rust
+use wcol::formats::parquet::{open_plan, NumericScan, WcolBatch};
+use wcol::ops::query::{CatalogColumn, Running, columns_for_sql};
+use wcol::stream::partials::PartialStateWcol;
+use wcol::exec::{execute, ParquetDecode, FilterOp, AggregateOp};
+```
+
+## Migration state
+
+Rust engine consolidation (Phases 2c–2d) is done: one `wcol` crate. **Phase 4** removes TS `src/runtime/*` execution (including legacy `parquet_exec_sql` Wasm) in favor of the host driver + Rust pipeline above.
+
+### Hosted ClickBench (HTTP Range → ExecutionGroup)
+
+Build stream Wasm once:
+
+```bash
+cargo build -p wcol --target wasm32-unknown-unknown --release
+```
+
+Run colocated ingest+query against the public hits file (no local download):
+
+```bash
+npm run test:hits-http-exec
+npx tsx tests/hits-http-exec-group.ts --query q3 --max-row-groups 5
+```
+
+Compares `wcol.wasm` pipeline output to the chunk oracle on the same row groups.
+
+### Host vs engine boundary
+
+TypeScript implements **generic I/O only** (`run-wcol-engine.ts`): `readAt`, optional `readPort`, `writePort`, and real event-loop `yield`. Rust owns the poll loop, input rings, read sizes (capped to ring capacity), EOF, and errors. Parquet chunk offsets and lengths come from the compiled plan; the host never sees SQL, dictionaries, or WCOL layout.
 
 ## Further reading
 
-- [FORMAT.md](./FORMAT.md) — v7 on-disk layout
-- [QUERY_AST_SUPPORTED.md](./QUERY_AST_SUPPORTED.md) — supported `QueryPlan` fields
-- [BASELINE_COMMANDS.md](./BASELINE_COMMANDS.md) — benchmark and parity commands
+- [CONSOLIDATION.md](./CONSOLIDATION.md)
+- [UNIVERSAL_WCOL_PIPELINE.md](./UNIVERSAL_WCOL_PIPELINE.md)
+- [STREAMING_PIPELINE.md](./STREAMING_PIPELINE.md)
+- [BOUNDED_MEMORY.md](./BOUNDED_MEMORY.md)
+- [FORMAT.md](./FORMAT.md)

@@ -1,0 +1,205 @@
+[package]
+name = "wcol"
+version = "0.1.0"
+edition = "2021"
+description = "Facade over wcol-engine and wcol-plan"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+wcol-engine = { path = "../wcol-engine", features = ["reduce-ffi", "coordinator-iterative-ffi"] }
+wcol-plan = { path = "../wcol-plan" }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# DataFusion's uuid needs some randomness source on wasm32. Only linked with `--features datafusion`.
+# `getrandom_backend="custom"` (see `.cargo/config.toml`) keeps this off the JS imports the
+# stream host does not provide.
+uuid = { version = "1", features = ["rng-getrandom"], optional = true }
+getrandom = { version = "0.3", optional = true }
+
+[dev-dependencies]
+compact-parquet-thrift = { path = "../../../compact-parquet-thrift" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(getrandom_backend, values("custom"))'] }
+
+[features]
+default = []
+alloc-track-native = ["wcol-engine/alloc-track-native"]
+memory-plateau = ["alloc-track-native", "wcol-engine/memory-plateau"]
+native = []
+# Opt-in DataFusion SQL frontend (`plan::sql` in `wcol-plan`). Our parser is always compiled.
+# Ordinary `cargo build` / `cargo test` / `cargo check` do not pass this flag.
+datafusion = ["wcol-plan/datafusion", "dep:uuid", "dep:getrandom"]
+
+[[test]]
+name = "pipeline_json"
+path = "tests/runtime/pipeline_json.rs"
+[[test]]
+name = "wcol_operator_chain"
+path = "tests/runtime/wcol_operator_chain.rs"
+[[test]]
+name = "clickbench_exec_group"
+path = "tests/runtime/clickbench_exec_group.rs"
+[[test]]
+name = "colocated_ops"
+path = "tests/runtime/colocated_ops.rs"
+[[test]]
+name = "typed_colocated_graph"
+path = "tests/runtime/typed_colocated_graph.rs"
+[[test]]
+name = "serialization_boundaries"
+path = "tests/runtime/serialization_boundaries.rs"
+[[test]]
+name = "formats_no_query"
+path = "tests/runtime/formats_no_query.rs"
+[[test]]
+name = "dependency_boundaries"
+path = "tests/runtime/dependency_boundaries.rs"
+[[test]]
+name = "incremental_streaming"
+path = "tests/runtime/incremental_streaming.rs"
+[[test]]
+name = "spill_groups"
+path = "tests/runtime/spill_groups.rs"
+[[test]]
+name = "spill_groups_stress"
+path = "tests/runtime/spill_groups_stress.rs"
+[[test]]
+name = "bounded_memory"
+path = "tests/runtime/bounded_memory.rs"
+[[test]]
+name = "streaming_compressed_window"
+path = "tests/runtime/streaming_compressed_window.rs"
+[[test]]
+name = "ticketed_read_at"
+path = "tests/runtime/ticketed_read_at.rs"
+[[test]]
+name = "page_cursor_replay"
+path = "tests/runtime/page_cursor_replay.rs"
+[[test]]
+name = "duckdb_fixture"
+path = "tests/runtime/duckdb_fixture.rs"
+[[test]]
+name = "batch_decode_mixed_dict"
+path = "tests/runtime/batch_decode_mixed_dict.rs"
+[[test]]
+name = "legacy_paths_removed"
+path = "tests/runtime/legacy_paths_removed.rs"
+[[test]]
+name = "i15_single_impl"
+path = "tests/runtime/i15_single_impl.rs"
+[[test]]
+name = "dod_acceptance"
+path = "tests/runtime/dod_acceptance.rs"
+[[test]]
+name = "distributed_row_group_jobs"
+path = "tests/runtime/distributed_row_group_jobs.rs"
+[[test]]
+name = "distributed_string_group"
+path = "tests/runtime/distributed_string_group.rs"
+[[test]]
+name = "memory_plateau"
+path = "tests/runtime/memory_plateau.rs"
+required-features = ["memory-plateau"]
+[[test]]
+name = "hash_partition_wcs_exchange"
+path = "tests/runtime/hash_partition_wcs_exchange.rs"
+[[test]]
+name = "hash_partition"
+path = "tests/runtime/hash_partition.rs"
+[[test]]
+name = "page_compact"
+path = "tests/runtime/page_compact.rs"
+
+[[test]]
+name = "parquet_encode_sink"
+path = "tests/runtime/parquet_encode_sink.rs"
+[[test]]
+name = "parquet_typed_sink"
+path = "tests/runtime/parquet_typed_sink.rs"
+[[test]]
+name = "row_fragment"
+path = "tests/runtime/row_fragment.rs"
+[[test]]
+name = "row_export"
+path = "tests/runtime/row_export.rs"
+[[test]]
+name = "parquet_roundtrip"
+path = "tests/parquet/roundtrip.rs"
+[[test]]
+name = "numeric_scan_batches"
+path = "tests/parquet/numeric_scan_batches.rs"
+[[test]]
+name = "page_cursor_plain_batch"
+path = "tests/parquet/page_cursor_plain_batch.rs"
+[[test]]
+name = "page_cursor_optional_batch"
+path = "tests/parquet/page_cursor_optional_batch.rs"
+[[test]]
+name = "numeric_scan_dictionary"
+path = "tests/parquet/numeric_scan_dictionary.rs"
+[[test]]
+name = "string_scan_batches"
+path = "tests/parquet/string_scan_batches.rs"
+[[test]]
+name = "legacy_encodings"
+path = "tests/parquet/legacy_encodings.rs"
+[[test]]
+name = "hits_adv_engine_id_parity"
+path = "tests/parquet/hits_adv_engine_id_parity.rs"
+[[test]]
+name = "hits_adv_engine_id_diff"
+path = "tests/parquet/hits_adv_engine_id_diff.rs"
+
+[[test]]
+name = "fetch_stage_plan_reads"
+path = "tests/runtime/fetch_stage_plan_reads.rs"
+required-features = ["native"]
+
+[[test]]
+name = "plan_execution_equivalence"
+path = "tests/runtime/plan_execution_equivalence.rs"
+required-features = ["native"]
+
+[[test]]
+name = "wcs_partial_reduce"
+path = "tests/runtime/wcs_partial_reduce.rs"
+required-features = ["native"]
+
+[[test]]
+name = "clickbench_rows"
+path = "tests/runtime/clickbench_rows.rs"
+required-features = ["native"]
+
+[[test]]
+name = "hand_parser_clickbench"
+path = "tests/plan/hand_parser_clickbench.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "query_bench"
+path = "src/bin/query_bench.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "page_compact_plan"
+path = "src/bin/page_compact_plan.rs"
+required-features = ["native"]
+[[test]]
+name = "finalize_job"
+path = "tests/runtime/finalize_job.rs"
+[[test]]
+name = "parquet_export_graph"
+path = "tests/runtime/parquet_export_graph.rs"
+[[test]]
+name = "job_plan"
+path = "tests/runtime/job_plan.rs"

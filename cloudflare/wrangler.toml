@@ -1,0 +1,70 @@
+name = "wcol-coordinator"
+main = "dist/coordinator-worker.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["durable_object_io_tasks_prevent_eviction"]
+
+[limits]
+cpu_ms = 120000
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["wcol_coordinator.wasm"]
+fallthrough = true
+
+[[durable_objects.bindings]]
+name = "WCOL_COORDINATOR"
+class_name = "WcolCoordinator"
+
+[[durable_objects.bindings]]
+name = "WCOL_NODE"
+class_name = "WcolNode"
+script_name = "wcol-node"
+
+[[durable_objects.bindings]]
+name = "WCOL_REDUCER_CONTAINER"
+class_name = "WcolReducer"
+script_name = "wcol-node"
+
+[[r2_buckets]]
+binding = "OUTPUT"
+bucket_name = "wcol-hits-exports"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WcolCoordinator"]
+
+# Experiment: let all scan tasks run together. WCOL_MAX_ACTIVE_INGRESS is also the scan start window.
+# Every job attempt runs on fresh `graph:{job}:a{attempt}:s{slot}` objects. A fixed pool of
+# reused names was tried and removed: Cloudflare kept reused objects in the isolates they
+# already lived in, so each run packed the same work into fewer isolates (249, 235, 215
+# over three ladder runs) and more of it failed as "overloaded" or out of memory.
+# Opt in: WCOL_EDGE_BYTES = "r2" to put payload bytes in R2 (RPC still carries signals).
+# Opt in: WCOL_EDGE_SIGNALS = "coordinator" to route those signals here (requires r2).
+# Default is point-to-point RPC streams.
+[vars]
+# New coordinators and nodes are created in the data bucket's region (wcol-hits-exports: EEUR).
+WCOL_DO_LOCATION_HINT = "eeur"
+# Scans per job. A job opens scans x reducers RPC streams, each with runtime buffers the
+# isolate counts but we cannot see: 64 scans x 128 reducers (8192 streams) ran reducers
+# out of memory and queued their accepts too long; 32 x 128 is the measured ceiling.
+WCOL_MAX_NODES = "32"
+WCOL_MAX_ACTIVE_SCANS = "32"
+WCOL_MAX_ACTIVE_INGRESS = "32"
+# Every scan and reducer opens at once: accepts are held open until consumed, so
+# reducers stay live under full fan-in (tested with 32 scans x 16 reducers).
+WCOL_DISPATCH_CONCURRENCY = "64"

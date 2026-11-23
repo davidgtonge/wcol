@@ -1,0 +1,16 @@
+name = "wcol-stream-probe"
+main = "worker.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["durable_object_io_tasks_prevent_eviction"]
+
+[[durable_objects.bindings]]
+name = "PROBE_SCAN"
+class_name = "ProbeScan"
+
+[[durable_objects.bindings]]
+name = "PROBE_REDUCE"
+class_name = "ProbeReduce"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ProbeScan", "ProbeReduce"]

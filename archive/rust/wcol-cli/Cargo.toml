@@ -1,0 +1,12 @@
+[package]
+name = "wcol-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+wcol = { path = "../../../rust/wcol" }
+wcol-file = { path = "../wcol-file", features = ["sql_api", "native", "timing"] }
+regex = "1"
+serde_json = "1"

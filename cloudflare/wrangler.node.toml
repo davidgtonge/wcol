@@ -1,0 +1,92 @@
+name = "wcol-node"
+main = "dist/node-worker.js"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["durable_object_io_tasks_prevent_eviction"]
+
+[limits]
+cpu_ms = 120000
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+invocation_logs = true
+persist = true
+
+[observability.traces]
+enabled = true
+head_sampling_rate = 1
+persist = true
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["wcol_node.wasm"]
+fallthrough = true
+
+[[durable_objects.bindings]]
+name = "WCOL_NODE"
+class_name = "WcolNode"
+
+[[durable_objects.bindings]]
+name = "WCOL_COORDINATOR"
+class_name = "WcolCoordinator"
+script_name = "wcol-coordinator"
+
+# Hash reducers in containers, for jobs that ask (`"reducers": "container"`). The
+# `durable_object` policy provisions nothing until a reducer starts its container; the class
+# picks the instance size and destroys the container once its output is read.
+[[durable_objects.bindings]]
+name = "WCOL_REDUCER_CONTAINER"
+class_name = "WcolReducer"
+
+[[containers]]
+name = "wcol-reducer"
+class_name = "WcolReducer"
+scheduling_policy = "durable_object"
+
+[containers.images.reducer]
+dockerfile = "./reducer/Dockerfile"
+
+[[r2_buckets]]
+binding = "OUTPUT"
+bucket_name = "wcol-hits-exports"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WcolNode"]
+
+# v2/v3: an experiment split node slots over three more classes; they had no effect.
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["WcolNode1", "WcolNode2", "WcolNode3"]
+
+[[migrations]]
+tag = "v3"
+deleted_classes = ["WcolNode1", "WcolNode2", "WcolNode3"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["WcolReducerContainer"]
+
+# v5: reducer containers moved to the `durable_object` scheduling policy, whose app needs a
+# class the old (pre-provisioning) app was never attached to.
+[[migrations]]
+tag = "v5"
+renamed_classes = [{ from = "WcolReducerContainer", to = "WcolReducer" }]
+
+# Set automatically on deploy (`scripts/deploy-worker.ts`); nodes reload Wasm when this changes.
+# Experiment: yield every 8 issued host ops so reducer RPCs can enter. Not a tuned default.
+# Reducer trace stays off. A per-frame import would perturb the pump-budget comparison.
+[vars]
+# New coordinators and nodes are created in the data bucket's region (wcol-hits-exports: EEUR).
+WCOL_DO_LOCATION_HINT = "eeur"
+WCOL_NODE_WASM_BUILD = "dev"
+WCOL_YIELD_AFTER = "8"
+WCOL_REDUCER_TRACE = "0"
+# One reducer records phase transitions after six scan inputs attach.
+WCOL_PHASE_SLOT = "32"
+# Set to a spill-run count (for example 15) to stop a reducer and keep the slope. Unset runs the query.
+# WCOL_SPILL_RUN_CAP = "15"

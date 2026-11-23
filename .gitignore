@@ -1,6 +1,10 @@
 # Data (regenerate locally — see README)
 *.sav
 *.parquet
+# Small regression fixture written by DuckDB (see rust/wcol/tests/runtime/duckdb_fixture.rs).
+!tests/fixtures/duckdb_rle_padding.parquet
+!tests/fixtures/duckdb_nulls.parquet
+!tests/fixtures/legacy_encodings.parquet
 *.wcol
 /data/
 apps/explorer/demo/data/*.wcol
@@ -17,8 +21,12 @@ node_modules/
 target/
 dist/
 pkg/
-rust/wcol-wasm/pkg/
+pkg-web/
+.wrangler/
+.celld/
+archive/rust/wcol-wasm/pkg/
 *.wasm
+*.zip
 *.tsbuildinfo
 
 # Engine-shell submodule build
@@ -39,6 +47,7 @@ Thumbs.db
 # Env & logs
 .env
 .env.*
+.dev.vars
 *.log
 
 # Internal planning docs (not for public repo)
@@ -77,3 +86,9 @@ next-steps.md
 # Publish tooling (local only)
 scripts/create-publish-history.sh
 
+*.zip
+
+# Container reducer build outputs
+/cloudflare/reducer/bin/
+/rust/target-linux/
+/cloudflare/.api-token

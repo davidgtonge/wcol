@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#071219">
+  <meta name="description" content="An interactive engineering deep dive into Thrift Compact, Parquet page encodings and how three column streams reconstruct a row.">
+  <title>WCOL / 03 — From Thrift to decoded rows</title>
+  <link rel="stylesheet" href="_site.css" />
+  <style>
+:root{color-scheme:dark;--bg:#071218;--panel:#0b1921;--panel-alt:#0f2029;--raised:#10242d;--line:#203640;--line-strong:#2c4853;--fg:#e9f3f1;--muted:#93a9ae;--faint:#627f89;--mint:#60e3d2;--mint-dim:#204b48;--blue:#6bafff;--amber:#f3ba7d;--purple:#b7a2ff;--rose:#f18c8c;--shadow:0 24px 90px rgba(0,0,0,.18);font-synthesis:none}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:90px}body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:14px;line-height:1.55;min-width:320px}button,input,textarea{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--mint);outline-offset:3px}a{color:inherit;text-decoration:none}code,pre,.mono{font-family:"SFMono-Regular",Consolas,"Liberation Mono",ui-monospace,monospace}code{color:#b3eee5}button{color:inherit}p,h1,h2,h3,h4{margin-top:0}p{color:var(--muted)}.shell{width:min(1390px,calc(100% - 88px));margin:auto;position:relative}.glow-backdrop{position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse 900px 540px at 95% -10%,rgba(36,122,117,.12),transparent 70%),radial-gradient(ellipse 700px 440px at -8% 24%,rgba(24,87,99,.08),transparent 75%)}.topbar{height:68px;border-bottom:1px solid #1b313a;background:rgba(7,18,24,.87);backdrop-filter:blur(18px);position:sticky;top:0;z-index:30}.topbar-inner{height:100%;display:flex;align-items:center;gap:28px;justify-content:space-between}.brand{display:flex;align-items:center;gap:13px;white-space:nowrap}.brand strong{font-size:23px;line-height:1;letter-spacing:-1.7px;font-weight:770}.brand strong span,.accent{color:var(--mint)}.brand-sub{font-size:9px;font-weight:740;letter-spacing:1.65px;color:#9fb4b7}.brand-rule{width:1px;height:23px;background:#304a52;margin:0 4px}.brand-symbol{display:grid;grid-template-columns:repeat(2,8px);gap:3px;transform:rotate(-10deg)}.brand-symbol i{height:8px;background:var(--mint);border-radius:1px}.brand-symbol i:nth-child(2){opacity:.5}.brand-symbol i:nth-child(3){opacity:.75}.brand-symbol i:nth-child(4){opacity:.25}.topnav{display:flex;gap:25px;margin-left:auto}.topnav a,.header-links,.chapter-number{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;font-weight:650;letter-spacing:1px;color:#93adb2}.topnav a:hover,.header-links a:hover{color:var(--mint)}.header-links{display:flex;align-items:center;gap:15px}.header-links a{margin-left:6px;color:var(--fg)}.signal-dot{display:inline-block;background:var(--mint);width:7px;height:7px;border-radius:50%;box-shadow:0 0 0 3px #60e3d217;flex:none}.hero{padding:83px 0 66px;display:grid;grid-template-columns:minmax(0,1.35fr) minmax(320px,.85fr);gap:48px;align-items:center}.eyebrow,.chapter-index,.panel-number,.panel-pill,.control-label,.aside-label,.mini-label,.fetch-num,.concept-kicker,.boundary-num,.source-path,.stage-kicker,.hero-art,.file-ruler,.file-slider-header,.slider-ends,.control-note,.code-tabs,.page-panel,.outro>span{font-family:ui-monospace,"SFMono-Regular",Consolas,monospace;letter-spacing:1px}.eyebrow{font-size:11px;font-weight:750;color:var(--mint);display:flex;align-items:center;gap:10px;margin-bottom:18px}.eyebrow-star{font-size:16px}.eyebrow-muted{color:#6c8991}.hero h1{font-size:clamp(52px,5.8vw,83px);line-height:1.05;letter-spacing:-4.4px;font-weight:740;margin-bottom:24px}.hero h1 span{color:var(--mint)}.hero p{font-size:16px;line-height:1.78;max-width:660px;margin-bottom:26px}.hero-actions{display:flex;align-items:center;flex-wrap:wrap;gap:22px}.button-primary{display:inline-flex;align-items:center;justify-content:space-between;gap:22px;border:1px solid #71fae2;background:#63e1ce;color:#052024;min-height:43px;border-radius:6px;padding:0 15px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;letter-spacing:.3px;font-weight:800;transition:transform .16s,background .16s}.button-primary:hover{background:#8df4e1;transform:translateY(-1px)}.button-link{display:inline-flex;align-items:center;gap:14px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;letter-spacing:.4px;color:#bdd4d4;font-weight:700}.button-link:hover{color:var(--mint)}.hero-art{border:1px solid #2b4650;border-radius:10px;background:linear-gradient(160deg,#13242e,#09161d 70%);min-height:236px;padding:22px;box-shadow:0 0 90px rgba(42,190,169,.09),0 30px 80px rgba(0,0,0,.25);transform:perspective(1100px) rotateY(-5deg);position:relative;overflow:hidden}.hero-art:before{content:"";position:absolute;inset:0;background-image:radial-gradient(#3e6670 .8px, transparent .9px);background-size:20px 20px;opacity:.18}.art-top,.art-bottom{display:flex;justify-content:space-between;align-items:center;position:relative;gap:10px}.art-top{font-size:10px;font-weight:700;color:#bdcfce}.art-live{color:var(--mint);display:inline-flex;align-items:center;gap:6px}.art-live i{width:6px;height:6px;border-radius:50%;background:var(--mint);box-shadow:0 0 12px var(--mint)}.art-grid{position:relative;display:grid;grid-template-columns:repeat(8,1fr);gap:5px;align-items:start;margin:54px 0 40px}.art-byte{display:grid;place-items:center;height:43px;border-radius:5px;color:#9fb8bb;border:1px solid #304953;background:#0c1e26;font-size:15px;letter-spacing:-.5px}.art-byte.is-lit{border-color:#53cfbd;background:#173d3d;color:#8ff7e8;box-shadow:0 0 25px #4be0cc15}.art-cursor{position:absolute;bottom:-31px;left:54%;display:flex;flex-direction:column;align-items:center;color:var(--mint);font-size:18px;line-height:1}.art-cursor small{font-size:9px;color:#9dcac5;margin-top:3px}.art-bottom{color:#8ba5ad;font-size:9px;flex-wrap:wrap}.art-bottom b{color:var(--mint)}.stat-strip{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#0a181f}.stat-strip>div{min-height:101px;padding:23px 28px;display:flex;flex-direction:column;gap:5px;border-right:1px solid var(--line)}.stat-strip>div:last-child{border-right:0}.stat-strip strong{font-weight:690;font-size:28px;line-height:1.05;letter-spacing:-1.4px;color:#edf7f3}.stat-strip strong small{font-size:11px;letter-spacing:.2px;color:var(--mint);font-family:ui-monospace,monospace}.stat-strip span{font-size:12px;color:var(--muted)}.chapter{padding-top:94px;scroll-margin-top:70px}.chapter-intro{display:grid;grid-template-columns:230px 1fr;gap:32px;align-items:start;margin-bottom:26px}.chapter-index{font-size:11px;font-weight:750;color:var(--mint);padding-top:12px}.chapter h2{font-size:clamp(30px,3.05vw,46px);line-height:1.17;letter-spacing:-1.8px;font-weight:690;margin-bottom:12px;max-width:880px}.chapter-intro p{max-width:790px;font-size:15px;line-height:1.75;margin:0}.panel{border:1px solid var(--line);background:var(--panel);border-radius:9px;min-width:0;box-shadow:var(--shadow)}.panel-heading{height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 21px;gap:12px;border-bottom:1px solid var(--line)}.panel-heading>div:first-child{display:flex;align-items:center;gap:12px;min-width:0}.panel-number{font-size:10px;color:var(--mint);font-weight:800}.panel-heading h3{font-size:13px;font-weight:680;margin:0;letter-spacing:-.15px;white-space:nowrap}.panel-pill{border:1px solid #29444a;padding:5px 8px;color:#8fb1b6;font-size:9px;white-space:nowrap}.file-main{display:grid;grid-template-columns:1.45fr 1fr;gap:0}.file-left{padding:32px;border-right:1px solid var(--line)}.file-ruler{font-size:9px;color:#738f98;display:flex;justify-content:space-between;gap:10px;margin-bottom:10px}.file-blocks{height:114px;display:flex;gap:3px;align-items:stretch;border:1px solid #35505a;background:#08161d;padding:6px;border-radius:6px;overflow:hidden}.file-region{padding:6px 5px;border:1px solid transparent;border-radius:3px;min-width:0;transition:border-color .12s,filter .12s;text-align:center;font-size:11px;font-family:ui-monospace,monospace;font-weight:720;letter-spacing:.4px}.file-region.is-selected{outline:1px solid white;outline-offset:-2px}.file-region:hover{filter:brightness(1.2)}.file-region.magic{background:#244c50;color:#9aeedc;flex:0 0 51px}.file-region.pages{background:repeating-linear-gradient(90deg,#173440 0px,#173440 23px,#1c3d4b 24px,#1c3d4b 25px);color:#a8c9ce;flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px}.file-region.pages small,.file-region.footer small{font-size:10px;font-weight:450;color:#8facb0}.file-region.footer{background:#52432f;color:#ffe1b3;flex:0 0 103px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px}.file-region.length{background:#42385c;color:#e4d7ff;flex:0 0 51px}.file-region-detail{margin-top:22px;min-height:106px}.mini-label{font-size:9px;color:#7c9aa0;display:flex;gap:12px;justify-content:space-between;margin-bottom:7px}.mini-label span{color:var(--mint)}.file-region-detail strong{font-size:15px;font-weight:650}.file-region-detail p{margin:5px 0 0;color:#90a8ad;font-size:13px;line-height:1.65}.file-slider-header{font-size:11px;color:#c1d5d3;display:flex;justify-content:space-between;gap:12px;margin-top:20px}.file-slider-header output{color:var(--mint)}input[type=range]{appearance:none;-webkit-appearance:none;display:block;width:100%;height:5px;margin:19px 0 9px;border-radius:30px;background:linear-gradient(90deg,#2a857f,#213b44);cursor:pointer}input[type=range]::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:15px;height:15px;border:3px solid #0b1c24;background:var(--mint);border-radius:50%;box-shadow:0 0 0 1px #63e1ce}input[type=range]::-moz-range-thumb{width:11px;height:11px;border:3px solid #0b1c24;background:var(--mint);border-radius:50%;box-shadow:0 0 0 1px #63e1ce}.slider-ends{display:flex;justify-content:space-between;font-size:9px;color:#6f8e97}.file-steps{padding:29px 27px;background:linear-gradient(145deg,#0d1e26,#0a171e)}.aside-label{font-size:10px;color:var(--mint);font-weight:750;margin-bottom:24px}.fetch-step{display:grid;grid-template-columns:32px 1fr;gap:15px;align-items:start}.fetch-num{width:28px;height:28px;border:1px solid #35545b;display:grid;place-items:center;color:var(--mint);font-size:10px;border-radius:5px}.fetch-step strong{font-size:13px;display:block}.fetch-step code{font-size:12px;display:block;margin:7px 0 5px;overflow-wrap:anywhere}.fetch-step small{font-size:11px;color:#79969e;line-height:1.5}.fetch-line{height:25px;width:1px;background:#36565b;margin:7px 0 7px 13px}.fetch-foot{color:#839da2;font-family:monospace;display:flex;align-items:center;gap:9px;font-size:10px;margin-top:23px;border-top:1px solid var(--line);padding-top:19px}.wire-layout{display:grid;grid-template-columns:325px minmax(0,1fr);gap:14px}.wire-controls{align-self:stretch}.controls-body{padding:20px}.control-label{display:flex;justify-content:space-between;color:#95b0b5;font-size:10px;font-weight:760;margin-bottom:11px}.control-label span{color:var(--mint)}.control-label.space-top{margin-top:24px}.sample-buttons{display:grid;gap:8px}.sample-buttons button{background:#10222c;border:1px solid #29404a;border-radius:6px;color:#d4e5e6;display:flex;flex-direction:column;align-items:start;padding:12px 13px;gap:3px;text-align:left}.sample-buttons button b{font-size:12px}.sample-buttons button small{font-size:10px;color:#829da6}.sample-buttons button:hover{border-color:#527a7b}.sample-buttons button.is-active{border-color:var(--mint);background:#153b3d;box-shadow:inset 3px 0 var(--mint)}.sample-about{font-size:11px;line-height:1.7;color:#9fb7bb;margin-top:14px;min-height:38px}.toggle-row{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid #2a444d;border-radius:5px;overflow:hidden}.toggle-row button,.comparison-switch button,.code-tabs button{background:transparent;color:#8ca5a8;border:0;border-right:1px solid #2a444d;padding:10px 6px;font-size:11px;font-family:ui-monospace,monospace}.toggle-row button:last-child,.comparison-switch button:last-child{border-right:0}.toggle-row button.is-active,.comparison-switch button.is-active,.code-tabs button.is-active{color:var(--mint);background:#1a3537}.toggle-hex{width:100%;display:flex;justify-content:space-between;align-items:center;background:none;border:0;border-bottom:1px dashed #35525c;color:#9ab6b9;font-size:10px;font-family:ui-monospace,monospace;letter-spacing:.9px;padding:14px 0 10px;text-align:left}.toggle-hex span{font-size:19px;line-height:1}.custom-hex label{font-size:11px;color:#94afb4;display:block;margin:11px 0 6px}.custom-hex textarea{width:100%;resize:vertical;min-height:90px;background:#06161d;color:#c2e5df;border:1px solid #34505b;border-radius:5px;padding:9px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.6}.hex-actions{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin-top:9px}.button-small{background:#265f58;color:#e3f9f1;border:1px solid #3a8479;border-radius:4px;font-size:10px;font-weight:680;padding:8px 11px}.button-minimal{border:0;background:none;color:#90aeb5;font-size:10px;font-family:monospace}.control-separator{height:1px;background:var(--line);margin:24px 0}.timeline-track{height:5px;background:#233842;border-radius:4px;overflow:hidden;margin-bottom:16px}.timeline-track>div{height:100%;width:0;background:var(--mint);transition:width .18s}.clock-controls{display:grid;grid-template-columns:37px 37px 1fr 37px;gap:7px}.clock-controls>button:not(.button-primary){height:39px;border-radius:5px;border:1px solid #31505a;background:#112630;color:#cbe3e1;font-size:17px}.clock-controls .button-primary{height:39px;min-height:39px;font-size:10px;gap:6px;padding:0 11px}.clock-controls>button:disabled{opacity:.35;cursor:not-allowed}.control-note{font-size:9px;color:#789aa0;margin-top:19px;display:flex;align-items:center;gap:9px}.wire-right{display:grid;gap:14px;min-width:0}.panel-controls{display:flex;align-items:center;gap:11px;font-family:ui-monospace,monospace;font-size:10px;color:#89aeb2}.decode-status{color:var(--mint);border:1px solid #31594f;padding:4px 7px}.decode-status.is-error{color:var(--rose);border-color:#895452}.hex-legend{padding:20px 23px 8px;display:flex;align-items:center;gap:15px;flex-wrap:wrap;font-size:9px;font-family:ui-monospace,monospace;color:#9bb4b7;letter-spacing:.4px}.hex-legend span{display:flex;align-items:center;gap:6px}.hex-legend i{width:9px;height:9px;display:inline-block;border-radius:2px}.legend-header{background:#58dcca}.legend-length{background:#b69cf8}.legend-value{background:#e5b373}.legend-stop{background:#8aa0ac}.hex-table{margin:7px 23px 18px;padding:12px;min-height:230px;max-height:325px;overflow:auto;border:1px solid #2a4650;background-color:#07171e;background-image:radial-gradient(#2c5360 .65px,transparent .7px);background-size:23px 23px;border-radius:6px;scrollbar-color:#42636d #07171e}.hex-line{display:flex;align-items:center;gap:13px;min-height:29px}.hex-address{min-width:43px;color:#668891;font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.2px}.hex-bytes{display:grid;grid-template-columns:repeat(16,minmax(23px,1fr));gap:3px;width:100%}.byte-cell{position:relative;display:grid;place-items:center;height:27px;min-width:0;border-radius:3px;background:#11242c;border:1px solid #223843;color:#c8dcdb;font-family:ui-monospace,monospace;font-size:11px;letter-spacing:-.3px;padding:0;transition:filter .12s,transform .12s}.byte-cell[data-kind=header]{color:var(--mint)}.byte-cell[data-kind=length],.byte-cell[data-kind=list]{color:var(--purple)}.byte-cell[data-kind=value]{color:var(--amber)}.byte-cell[data-kind=stop]{color:#a2b5bc}.byte-cell:hover{filter:brightness(1.45);z-index:2}.byte-cell.is-selected{background:#326e66;border-color:#a1fff1;color:#fff;box-shadow:0 0 0 1px #68f1e2;z-index:2}.byte-cell.is-past:not(.is-selected){background:#172c34}.byte-cell.is-future{opacity:.45}.byte-placeholder{height:27px}.byte-status{border-top:1px solid var(--line);padding:10px 23px;display:flex;justify-content:space-between;gap:10px;color:#7b99a1;font:9px ui-monospace,monospace;letter-spacing:.55px}.byte-status span:last-child{color:var(--mint)}.wire-bottom{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(260px,.85fr);gap:14px}.decode-panel,.event-panel{min-height:330px}.decode-content{padding:20px 22px 12px;min-height:180px}.decode-content h4{font-size:18px;letter-spacing:-.4px;font-weight:660;margin:0 0 8px}.decode-content p{line-height:1.7;font-size:12px;margin:0 0 12px}.decode-content .decode-note{font-family:ui-monospace,monospace;background:#10242e;border:1px solid #2d4750;border-radius:4px;color:#abd6d2;font-size:11px;padding:9px;margin:12px 0 0;overflow-wrap:anywhere}.decode-stats{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}.decode-stats span{font-family:ui-monospace,monospace;font-size:10px;color:#b5c9c8;background:#0e2630;padding:5px 7px;border:1px solid #29444d;border-radius:3px}.decode-content .error-text{color:#ffb7a8}.bit-explainer{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line);padding:14px 20px;background:#0a171d;gap:14px}.nibble{border:1px solid #2c454d;border-radius:5px;padding:12px;display:grid;gap:4px}.nibble small{font:9px ui-monospace,monospace;color:#759ba3}.nibble strong{font:23px ui-monospace,monospace;color:var(--mint);letter-spacing:3px}.nibble:nth-child(2) strong{color:var(--amber)}.nibble span{font-size:11px;color:#9bb3b7}.trace-list{padding:10px;overflow-y:auto;max-height:355px;min-height:270px;scrollbar-color:#46666d #0a1a22}.trace-row{width:100%;background:transparent;border:1px solid transparent;border-radius:4px;padding:8px 10px;display:grid;grid-template-columns:33px 1fr;align-items:start;gap:8px;text-align:left}.trace-row:hover{background:#122a32}.trace-row.is-active{background:#153c3c;border-color:#386d68}.trace-row.is-future{opacity:.65}.trace-idx{font:10px ui-monospace,monospace;color:#6d8c95;margin-top:2px}.trace-row strong{display:block;font-size:11px;font-weight:620;color:#d5eae6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.trace-row small{font:10px ui-monospace,monospace;color:#8ba6a8;display:block;margin-top:4px}.wire-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-top:15px}.wire-cards article{border:1px solid var(--line);padding:23px;border-radius:7px;background:linear-gradient(140deg,#101f28,#0a171d)}.concept-kicker{font-size:10px;color:var(--mint);font-weight:700;margin-bottom:17px}.wire-cards h3{font-size:16px;letter-spacing:-.5px;margin-bottom:8px}.wire-cards p{font-size:12px;line-height:1.7;margin:0}.memory-main{display:grid;grid-template-columns:minmax(305px,.83fr) minmax(0,1.17fr)}.memory-controls{border-right:1px solid var(--line);padding:22px}.comparison-switch{display:grid;grid-template-columns:1fr 1fr;border:1px solid #34515a;border-radius:5px;overflow:hidden}.comparison-switch button{font-size:10px;font-weight:700;letter-spacing:.2px}.memory-controls-inner{padding:18px 1px 0}.slider-heading{display:flex;justify-content:space-between;gap:10px;align-items:center;font:12px ui-monospace,monospace;color:#b5c9ca}.slider-heading output{color:var(--mint)}.second-slider{margin-top:23px}.memory-metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:26px}.memory-metrics>div{background:#122a32;border:1px solid #2c4650;border-radius:6px;padding:16px 14px;display:flex;flex-direction:column;gap:8px}.memory-metrics span{color:#8fa9ac;font:9px ui-monospace,monospace;line-height:1.5}.memory-metrics strong{color:#e6f2ef;font-size:30px;letter-spacing:-1px}.memory-controls-inner p{font-size:12px;line-height:1.8;margin-top:18px}.memory-viz{padding:24px;min-height:396px;background:radial-gradient(ellipse at 65% 50%,#15303a90,transparent 62%),#0b1b23;position:relative;overflow:hidden}.memory-viz:before{position:absolute;content:"";inset:0;background-image:radial-gradient(#3b5865 .65px,transparent .75px);background-size:22px 22px;opacity:.25}.memory-viz-head,.ownership-bottom{display:flex;justify-content:space-between;align-items:center;gap:11px;font:10px ui-monospace,monospace;color:#79979f;position:relative}.memory-viz-head span:last-child{color:var(--mint)}.ownership-flow{min-height:300px;position:relative;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:13px;padding:15px 0}.ownership-box{border:1px solid #31515c;background:#102c36;border-radius:6px;text-align:center;min-width:180px;max-width:100%;padding:13px 22px;position:relative}.ownership-box b{display:block;font-size:12px;color:#e1eeeb}.ownership-box small{display:block;margin-top:3px;font:10px ui-monospace,monospace;color:#94b8bb}.ownership-box.borrowed{border-color:#4f938b;background:#123936}.ownership-box.temp{border-color:#8f79bc;background:#2a253b}.ownership-arrow{font-size:18px;color:#5cdccc;line-height:1}.ownership-pool{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:5px;max-width:370px}.ownership-unit{width:13px;height:13px;border-radius:2px;background:#9a7cec;border:1px solid #bfa8f6;box-shadow:0 0 9px #bfa8f618}.ownership-flow .pool-caption{font:10px ui-monospace,monospace;color:#afa4c7;text-align:center}.ownership-bottom{justify-content:flex-start;font-size:9px}.code-explainer{margin-top:14px}.code-tabs{display:flex;gap:3px}.code-tabs button{border:1px solid #2a4650;min-width:69px;padding:6px 10px;border-radius:3px;font-size:10px}.code-body{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(260px,.65fr);min-height:285px}.source-code{margin:0;padding:29px 26px;background:#08171f;font:12px/1.85 ui-monospace,Consolas,monospace;color:#c4dcd7;overflow:auto;tab-size:2;white-space:pre;max-width:100%;min-height:280px}.code-body aside{padding:28px 26px;border-left:1px solid var(--line)}.source-path{font-size:11px;color:var(--mint);margin-bottom:20px}.code-body h4{font-size:18px;line-height:1.3;letter-spacing:-.4px;margin-bottom:12px}.code-body p{font-size:12px;line-height:1.85}.source-facts{display:grid;gap:7px;margin-top:24px}.source-facts span{display:block;padding:6px 9px;background:#132832;border-left:2px solid #66c6bb;color:#b1c6c8;font-size:10px;font-family:ui-monospace,monospace}.pipeline{display:flex;align-items:stretch;gap:9px;padding:25px 24px}.pipeline button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;background:#10232d;border:1px solid #29414a;border-radius:5px;padding:17px 13px}.pipeline button.is-active{border-color:#64d9c9;background:#17413f;box-shadow:inset 0 3px var(--mint)}.pipeline button:hover{border-color:#75a19f}.pipeline-id{color:var(--mint);font:10px ui-monospace,monospace;margin-bottom:8px}.pipeline strong{color:#dceae6;font:11px ui-monospace,monospace;letter-spacing:.35px}.pipeline small{color:#8fa8b0;font-size:11px}.pipeline-arrow{align-self:center;color:#71959c}.stage-inspector{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,.85fr);border-top:1px solid var(--line);min-height:260px}.stage-details{padding:30px}.stage-kicker{font-size:10px;color:var(--mint);margin-bottom:15px}.stage-details h3{font-size:24px;letter-spacing:-.8px;margin-bottom:12px}.stage-details p{max-width:530px;font-size:13px;line-height:1.8}.stage-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:22px}.stage-tags span{font:10px ui-monospace,monospace;color:#a6c7c3;border:1px solid #365058;padding:7px 9px;border-radius:4px}.stage-visual{display:flex;align-items:center;justify-content:center;border-left:1px solid var(--line);background:radial-gradient(ellipse at center,#14333d,#0c1d25 70%);min-height:240px;padding:27px;position:relative;overflow:hidden}.stage-visual:before{content:"";position:absolute;inset:0;background-image:radial-gradient(#3d6572 .65px,transparent .7px);background-size:19px 19px;opacity:.16}.stage-art{position:relative;display:grid;grid-template-columns:repeat(7,minmax(13px,1fr));gap:5px;width:min(350px,100%)}.stage-art i{display:block;background:#123842;border:1px solid #48727b;height:31px;border-radius:3px}.stage-art i.on{background:#347d78;border-color:#69f3e1}.stage-art i.alt{background:#65507b;border-color:#a18cc9}.stage-visual-label{position:absolute;bottom:13px;color:#98b3b8;font:9px ui-monospace,monospace;letter-spacing:1px}.boundary-notes{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin-top:15px}.boundary-notes>div{padding:26px;border:1px solid #233b44;border-radius:6px;background:#0b1921}.boundary-num{color:var(--mint);font-size:10px}.boundary-notes h3{font-size:16px;line-height:1.4;letter-spacing:-.3px;margin:18px 0 8px}.boundary-notes p{font-size:12px;line-height:1.8;margin:0}.outro{margin:104px 0 96px;border:1px solid #346b65;background:radial-gradient(ellipse at 90% 10%,#174e4c7d,transparent 65%),linear-gradient(160deg,#0f2a2d,#0a191f);border-radius:8px;padding:57px 56px}.outro>span{font-size:10px;color:var(--mint)}.outro h2{font-size:clamp(32px,4.6vw,59px);letter-spacing:-2.2px;line-height:1.1;margin:16px 0}.outro p{font-size:15px;line-height:1.8;max-width:620px}.outro>div{display:flex;gap:25px;align-items:center;margin-top:24px;flex-wrap:wrap}.footer-inner{border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:15px;padding:27px 0;font:10px ui-monospace,monospace;color:#78959d}.footer-inner>span:first-child{font-size:16px;font-weight:700;color:#d4e7e0}.footer-inner em{font-size:10px;font-weight:400;font-style:normal;color:#809da4;margin-left:10px}.footer-inner>span:last-child{text-align:right}
+@media(max-width:1200px){.shell{width:min(1160px,calc(100% - 52px))}.topnav{display:none}.hero{gap:28px}.hero h1{letter-spacing:-3px}.wire-layout{grid-template-columns:282px minmax(0,1fr)}.hex-bytes{grid-template-columns:repeat(16,minmax(19px,1fr));gap:2px}.byte-cell{font-size:10px}.wire-bottom{grid-template-columns:1fr 1fr}.clock-controls{grid-template-columns:33px 33px 1fr 33px}}
+@media(max-width:930px){.hero{grid-template-columns:1fr;padding-top:65px}.hero-art{max-width:530px;transform:none}.chapter-intro{grid-template-columns:1fr;gap:5px}.chapter-index{padding:0;margin-bottom:6px}.wire-layout{grid-template-columns:1fr}.controls-body{display:grid;grid-template-columns:1.1fr 1fr;column-gap:24px;align-items:start}.sample-buttons{grid-row:2 / span 2}.sample-about{grid-row:4}.controls-body .space-top{grid-column:2;grid-row:1}.toggle-row{grid-column:2;grid-row:2}.toggle-hex{grid-column:2;grid-row:3}.custom-hex{grid-column:1 / -1}.control-separator{grid-column:1/-1}.controls-body>.control-label:not(.space-top):last-of-type{grid-column:1}.timeline-track,.clock-controls,.control-note{grid-column:1/-1}.memory-main{grid-template-columns:1fr}.memory-controls{border-right:0;border-bottom:1px solid var(--line)}.memory-viz{min-height:350px}.file-main{grid-template-columns:1fr}.file-left{border-right:0;border-bottom:1px solid var(--line)}.file-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.aside-label,.fetch-foot{grid-column:1 / -1;margin:0}.fetch-line{display:none}.fetch-step{grid-template-columns:26px 1fr;gap:7px}.code-body{grid-template-columns:1fr}.code-body aside{border-left:0;border-top:1px solid var(--line)}.source-code{min-height:230px}.pipeline{flex-wrap:wrap}.pipeline button{min-width:140px}.pipeline-arrow{display:none}}
+@media(max-width:660px){.shell{width:calc(100% - 30px)}.topbar{height:61px}.topbar-inner{gap:8px}.brand{gap:7px}.brand-sub,.brand-rule,.chapter-number{display:none}.header-links{gap:10px}.header-links a{font-size:9px}.hero{padding:48px 0 42px}.hero h1{font-size:clamp(42px,10vw,60px);letter-spacing:-2.8px}.hero p{font-size:14px}.hero-art{min-height:210px;padding:16px}.art-grid{margin-top:41px}.art-byte{height:36px;font-size:12px}.art-bottom{font-size:8px}.stat-strip{grid-template-columns:repeat(2,1fr)}.stat-strip>div{padding:19px;min-height:88px}.stat-strip>div:nth-child(2){border-right:0}.stat-strip>div:nth-child(-n+2){border-bottom:1px solid var(--line)}.stat-strip strong{font-size:25px}.chapter{padding-top:65px}.chapter h2{font-size:32px;letter-spacing:-1px}.panel-heading{padding:0 13px;height:51px}.panel-heading h3{font-size:12px}.panel-pill{font-size:8px}.file-left,.file-steps{padding:17px}.file-blocks{height:95px}.file-region.magic,.file-region.length{flex-basis:40px;font-size:9px}.file-region.footer{flex-basis:75px;font-size:10px}.file-region.pages{font-size:10px}.file-region.pages small,.file-region.footer small{font-size:8px}.file-ruler{font-size:8px}.file-steps{grid-template-columns:1fr;gap:20px}.fetch-step{grid-template-columns:29px 1fr}.fetch-foot{line-height:1.5}.controls-body{display:block;padding:16px}.controls-body .space-top{margin-top:22px}.control-separator{margin:24px 0}.sample-about{min-height:0}.panel-controls{font-size:8px;gap:6px}.hex-legend{gap:10px;padding:15px 12px 6px;font-size:8px}.hex-table{margin:7px 10px 12px;padding:8px 6px;max-height:290px;min-height:175px}.hex-line{gap:4px}.hex-address{min-width:26px;font-size:8px}.hex-bytes{grid-template-columns:repeat(16,minmax(0,1fr));gap:1px}.byte-cell{height:23px;font-size:8px;border-radius:2px;letter-spacing:-.5px}.byte-placeholder{height:23px}.byte-status{padding:10px;font-size:8px}.wire-bottom{grid-template-columns:1fr}.decode-panel,.event-panel{min-height:0}.trace-list{max-height:235px;min-height:175px}.wire-cards,.boundary-notes{grid-template-columns:1fr}.wire-cards article,.boundary-notes>div{padding:19px}.memory-controls{padding:15px}.comparison-switch button{font-size:9px}.memory-viz{padding:18px}.memory-viz-head{font-size:8px}.code-tabs button{min-width:47px;padding:5px;font-size:9px}.source-code{padding:18px;font-size:10px}.code-body aside{padding:19px}.pipeline{padding:13px;display:grid;grid-template-columns:1fr 1fr;gap:8px}.pipeline button{min-width:0;padding:13px 11px}.pipeline strong{font-size:10px}.stage-inspector{grid-template-columns:1fr}.stage-details{padding:21px}.stage-details h3{font-size:21px}.stage-visual{border-left:0;border-top:1px solid var(--line);min-height:180px}.outro{margin:65px 0;padding:32px 22px}.outro h2{letter-spacing:-1.2px}.footer-inner{align-items:start;flex-direction:column}.footer-inner>span:last-child{text-align:left;font-size:9px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation:none!important;transition:none!important}}
+
+.wire-footnote,.memory-caveat{margin-top:15px;padding:14px 17px;border:1px solid #29434b;background:#0b1d25;border-radius:5px;color:#86a4aa;font:10px/1.75 ui-monospace,Consolas,monospace;letter-spacing:.15px}.wire-footnote{display:flex;align-items:start;gap:10px}.wire-footnote .signal-dot{margin-top:5px}.memory-caveat b{color:var(--mint)}
+
+.thrift-definition{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}.thrift-definition article{padding:24px 27px;border:1px solid var(--line);background:linear-gradient(145deg,#0e242b,#0b1a22);border-radius:7px}.definition-kicker{font:10px ui-monospace,monospace;letter-spacing:1px;color:var(--mint);margin-bottom:13px}.thrift-definition h2{font-size:19px;letter-spacing:-.5px;margin-bottom:9px}.thrift-definition p{font-size:12px;line-height:1.75;max-width:620px;margin:0}.thrift-definition strong{color:#d7efeb}.definition-code{display:inline-block;margin-top:16px;padding:7px 9px;background:#081920;border:1px solid #2b434c;border-radius:3px;color:#afc7c7;font:11px ui-monospace,Consolas,monospace}.definition-code span{color:var(--mint)}@media(max-width:660px){.thrift-definition{grid-template-columns:1fr}.thrift-definition article{padding:19px}.definition-code{max-width:100%;overflow-wrap:anywhere}}
+
+/* CHAPTER 05 — STREAMING PARQUET PAGE DECODERS */
+.decoding-chapter .chapter-intro p,.row-chapter .chapter-intro p{max-width:900px}
+.decoder-support-key{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin:-3px 0 18px}
+.support-chip{font:700 9px/1.5 ui-monospace,Consolas,monospace;letter-spacing:1.1px;color:var(--mint);display:flex;align-items:center;gap:8px}
+.support-chip i{width:7px;height:7px;background:var(--mint);border-radius:50%;box-shadow:0 0 12px #49d5c56b}
+.support-label{font:9px ui-monospace,Consolas,monospace;color:var(--faint);letter-spacing:.75px}
+.anatomy-head{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:23px 25px 15px}
+.anatomy-switch{display:inline-flex;flex-wrap:wrap;gap:5px;background:#08151b;border:1px solid var(--line);border-radius:5px;padding:4px;flex:none}
+.anatomy-switch button{border:0;background:transparent;color:var(--muted);font:700 10px ui-monospace,Consolas,monospace;letter-spacing:.45px;padding:10px 13px;border-radius:3px;white-space:nowrap}
+.anatomy-switch button.is-active{background:#1a3c3e;color:#8af6e5;box-shadow:inset 0 0 0 1px #2d696b}
+.anatomy-head p{max-width:510px;font-size:12px;line-height:1.7;margin:0}
+.anatomy-ruler{display:flex;justify-content:space-between;color:#68838c;font:9px ui-monospace,Consolas,monospace;letter-spacing:1.1px;padding:5px 26px 9px}
+.anatomy-strip{display:flex;gap:5px;padding:0 25px;min-height:117px}
+.anatomy-block{position:relative;flex:var(--grow) 1 0%;min-width:0;padding:19px 12px;display:flex;flex-direction:column;align-items:start;justify-content:center;gap:7px;text-align:left;border:1px solid #30505a;border-radius:4px;background:linear-gradient(145deg,#13313c,#0d242c);transition:border .15s,background .15s,transform .15s;overflow:hidden}
+.anatomy-block[data-tone="meta"]{background:linear-gradient(140deg,#13383c,#0e292d);border-color:#38605f}
+.anatomy-block[data-tone="levels"]{background:linear-gradient(140deg,#172d43,#0f2330);border-color:#315172}
+.anatomy-block[data-tone="values"]{background:linear-gradient(140deg,#302b41,#222037);border-color:#4b4264}
+.anatomy-block[data-tone="dictionary"]{background:linear-gradient(140deg,#3d3027,#29241e);border-color:#67513d}
+.anatomy-block.is-active{border-color:var(--mint);box-shadow:0 0 0 1px #60e3d250,inset 0 0 30px #60e3d209;transform:translateY(-2px)}
+.anatomy-block strong{color:#e6f0ef;font:700 12px ui-monospace,Consolas,monospace;letter-spacing:.2px}
+.anatomy-block small{color:#9fb5b7;font:10px ui-monospace,Consolas,monospace;line-height:1.4}
+.anatomy-block .anatomy-block-count{position:absolute;right:9px;top:8px;font:9px ui-monospace,Consolas,monospace;color:#799aa0}
+.anatomy-inspector{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:35px;margin:21px 25px 0;padding:22px 24px;border:1px solid #2c4851;border-radius:5px;background:#0a1921}
+.tiny-label{font:700 9px ui-monospace,Consolas,monospace;letter-spacing:1.15px;color:var(--faint)}
+.anatomy-inspector h4{margin:8px 0;color:var(--fg);font-size:18px;letter-spacing:-.35px}
+.anatomy-inspector p{font-size:12px;line-height:1.75;max-width:700px;margin:0}
+.anatomy-inspector-side{display:flex;flex-direction:column;gap:8px;border-left:1px solid var(--line);padding-left:20px;overflow-wrap:anywhere}
+.anatomy-inspector-side code{color:var(--mint);font-size:11px}
+.anatomy-inspector-side span:last-child{color:#bdd3d4;font-size:11px;line-height:1.5}
+.anatomy-footer{display:flex;align-items:center;gap:9px;color:#75929a;padding:19px 25px 24px;font:9px/1.6 ui-monospace,Consolas,monospace;letter-spacing:.55px}
+.encoding-panel{margin-top:18px}
+.encoding-grid{display:grid;grid-template-columns:272px minmax(0,1fr)}
+.encoding-options{display:flex;flex-direction:column;gap:5px;padding:18px;background:#091820;border-right:1px solid var(--line)}
+.encoding-options button{display:flex;flex-direction:column;align-items:start;gap:4px;border:1px solid transparent;background:transparent;text-align:left;padding:13px 14px;border-radius:4px;transition:background .16s,border .16s}
+.encoding-options button:hover{background:#12262e}
+.encoding-options button.is-active{background:#133139;border-color:#31615e}
+.enc-option-code{color:var(--mint);font:700 8px ui-monospace,Consolas,monospace;letter-spacing:1.05px}
+.encoding-options strong{font-weight:670;color:#d4e8e6;font-size:12px}
+.encoding-options small{color:#77929a;font-size:10px}
+.encoding-workspace{padding:29px 33px 27px;min-width:0;display:flex;flex-direction:column}
+.encoding-head{display:flex;gap:15px;align-items:start;justify-content:space-between}
+.encoding-head h4{font-size:25px;letter-spacing:-.8px;margin:7px 0 13px;line-height:1.2}
+.encoding-status{white-space:nowrap;color:var(--amber);font:700 9px ui-monospace,Consolas,monospace;letter-spacing:.6px;border:1px solid #574739;padding:7px 10px;border-radius:3px;background:#30271d}
+.encoding-desc{font-size:12px;line-height:1.8;max-width:720px;margin:0 0 23px}
+.encoding-visual{border:1px solid #28414b;border-radius:5px;background:radial-gradient(ellipse at 100% 0,rgba(36,85,86,.16),transparent 65%),#08171e;padding:24px;min-height:220px;display:flex;flex-direction:column;justify-content:center;gap:12px}
+.byte-tape{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.byte-tape .tape-byte{display:inline-grid;place-items:center;min-width:32px;height:35px;border:1px solid #2c4952;color:#b8d3d2;background:#102832;font:12px ui-monospace,Consolas,monospace;border-radius:3px;padding:0 7px;position:relative}
+.byte-tape .tape-byte.mark{background:#194b48;color:#99fbed;border-color:#369d96;box-shadow:0 0 13px #36cfbc1b}
+.byte-tape .tape-byte.dim{opacity:.38}
+.byte-tape .tape-byte.group-b{border-color:#5b516e;color:#d5c7ff}
+.byte-tape .tape-byte.group-c{border-color:#685439;color:#f3d1a9}
+.tape-caption{color:#78939b;font:10px/1.55 ui-monospace,Consolas,monospace;letter-spacing:.5px}
+.tape-arrow{font:12px ui-monospace,Consolas,monospace;color:var(--mint)}
+.value-lane{display:flex;gap:4px;flex-wrap:wrap}
+.value-chip{padding:7px 11px;border:1px solid #2b4c53;background:#12232c;border-radius:3px;font:11px ui-monospace,Consolas,monospace;color:#bad0d2}
+.value-chip.active{color:#0a2521;background:var(--mint);border-color:var(--mint);font-weight:750}
+.enc-bits{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:5px;max-width:510px}
+.enc-bits span{padding:13px 0;text-align:center;background:#112c35;border:1px solid #2f505b;color:#d0e4e5;font:700 14px ui-monospace,Consolas,monospace;border-radius:3px}
+.enc-bits small{display:block;font:8px ui-monospace,Consolas,monospace;color:#7d969b}
+.schematic-flow{display:flex;align-items:stretch;flex-wrap:wrap;gap:9px}
+.schematic-flow .segment{padding:14px 15px;border:1px solid #365259;background:#112830;border-radius:4px;min-width:130px;flex:1}
+.schematic-flow .segment b{font-size:11px;color:var(--mint);display:block;margin-bottom:5px}
+.schematic-flow .segment small{color:#abc2c5;font:10px/1.5 ui-monospace,Consolas,monospace}
+.schematic-flow .schematic-arrow{align-self:center;color:#658b93;font-size:21px}
+.encoding-outcome{display:grid;grid-template-columns:auto 1fr auto;gap:17px;align-items:center;padding:18px 0 17px;border-bottom:1px solid var(--line)}
+.encoding-outcome strong{font:700 15px ui-monospace,Consolas,monospace;color:var(--mint);overflow-wrap:anywhere}
+.encoding-outcome code{color:#8ba5ac;font-size:10px;text-align:right}
+.encoding-foot{padding-top:16px}
+.encoding-foot p{font-size:11px;margin:7px 0 0;line-height:1.7}
+.coverage-panel{margin-top:16px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--line);background:#0a1921;border-radius:5px;overflow:hidden}
+.coverage-panel>div{padding:24px 23px;border-right:1px solid var(--line)}
+.coverage-panel>div:last-child{border:0}
+.coverage-kicker{font:700 9px ui-monospace,Consolas,monospace;color:var(--mint);letter-spacing:1px;display:block;margin-bottom:12px}
+.coverage-panel strong{font:700 12px/1.6 ui-monospace,Consolas,monospace;color:#d5e7e7;letter-spacing:.3px}
+.coverage-panel p{font-size:11px;line-height:1.8;margin:9px 0 0}
+
+/* CHAPTER 06 — RECONSTRUCTING ONE ROW FROM THREE COLUMN STREAMS */
+.row-demo-panel{margin-bottom:17px}
+.row-picker-wrap{overflow:auto;max-width:100%;scrollbar-color:#395761 transparent}
+.row-picker{width:100%;border-collapse:collapse;font:12px ui-monospace,Consolas,monospace;text-align:left;min-width:650px}
+.row-picker th{font:700 9px ui-monospace,Consolas,monospace;letter-spacing:.65px;color:#a7c1c4;padding:17px 22px 14px;background:#091a22;border-bottom:1px solid var(--line)}
+.row-picker th span{color:#668890;font-weight:500;display:block;font-size:9px;margin-top:4px;letter-spacing:0}
+.row-picker tbody tr{cursor:pointer;transition:background .12s;border-bottom:1px solid #1b323a;outline:none}
+.row-picker tbody tr:last-child{border-bottom:none}
+.row-picker tbody tr:hover{background:#132830}
+.row-picker tbody tr.is-selected{background:#123732;box-shadow:inset 3px 0 0 var(--mint)}
+.row-picker tbody tr:focus-visible{outline:2px solid var(--mint);outline-offset:-2px}
+.row-picker td{padding:12px 22px;color:#c1d7d8}
+.row-picker tr.is-selected td{color:#e8f6ed}
+.row-picker td:first-child{color:#718c94;font-weight:800}
+.row-picker td:nth-child(2){color:#9cf0dd}
+.row-picker td:nth-child(3){color:#b4d6ff}
+.row-picker td:nth-child(4){color:#edd2ab}
+.row-demo-note{display:flex;gap:10px;align-items:center;border-top:1px solid var(--line);font:9px/1.6 ui-monospace,Consolas,monospace;letter-spacing:.42px;color:#79979f;padding:16px 22px}
+.row-play-controls{display:flex;gap:6px}
+.row-play-controls button{font:700 10px ui-monospace,Consolas,monospace;border:1px solid #335158;border-radius:3px;padding:8px 11px;background:#11252d;color:#bddad7;transition:border .15s,background .15s}
+.row-play-controls button:hover{border-color:var(--mint);background:#173937}
+.row-play-controls button:disabled{opacity:.3;cursor:not-allowed}
+.row-play-controls button#row-play{color:#8cf6df}
+.row-stages{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;padding:25px 25px 0}
+.row-stages button{border:1px solid #2e434c;border-radius:4px;background:#0c1d25;min-width:0;padding:12px 9px;text-align:left;display:flex;flex-direction:column;gap:6px;min-height:71px;color:#819ca3;position:relative}
+.row-stages button:hover{border-color:#44716e}
+.row-stages button.is-complete{border-color:#2b5f58;color:#83b1a9}
+.row-stages button.is-active{border-color:var(--mint);background:#153b38;color:#a4fbe9}
+.row-stages button span{font:8px ui-monospace,Consolas,monospace;letter-spacing:.8px}
+.row-stages button strong{font:700 10px ui-monospace,Consolas,monospace;letter-spacing:.15px}
+.row-stage-caption{padding:22px 25px 15px;border-bottom:1px solid var(--line)}
+.row-stage-caption h4{margin:6px 0 8px;font-size:22px;letter-spacing:-.6px}
+.row-stage-caption p{font-size:12px;line-height:1.7;max-width:900px;margin:0 0 4px}
+.row-streams{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;min-height:360px}
+.stream-card{padding:23px 22px 25px;min-width:0;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:0}
+.stream-card:last-child{border-right:0}
+.stream-card-head{display:flex;align-items:center;justify-content:space-between;gap:9px;padding-bottom:14px;border-bottom:1px solid #2d444c}
+.stream-card-head>div{display:flex;align-items:center;gap:10px;min-width:0}
+.stream-glyph{width:30px;height:30px;border-radius:5px;display:grid;place-items:center;font:bold 15px ui-monospace,Consolas,monospace;background:#16433f;color:#8ef6e5;flex:none}
+.stream-card.tone-float .stream-glyph{color:#9cc9ff;background:#152c46}
+.stream-card.tone-bool .stream-glyph{color:#f5ce9f;background:#3b3023}
+.stream-card-head strong{font:700 12px ui-monospace,Consolas,monospace;color:#edf6f3;display:block}
+.stream-card-head small{display:block;font:9px ui-monospace,Consolas,monospace;color:#77929a;margin-top:4px}
+.stream-number{font:700 9px ui-monospace,Consolas,monospace;color:#668890;white-space:nowrap}
+.stream-stage-label{font:700 9px ui-monospace,Consolas,monospace;letter-spacing:.9px;color:var(--mint);margin-top:23px;margin-bottom:11px}
+.stream-card.tone-float .stream-stage-label{color:#86bafd}
+.stream-card.tone-bool .stream-stage-label{color:#eac08b}
+.stream-visual{min-height:123px;display:flex;flex-direction:column;justify-content:center;gap:10px;overflow-wrap:anywhere}
+.stream-desc{font-size:11px;line-height:1.7;color:#8daab0;margin:15px 0 0;max-width:360px}
+.stream-outcome{margin-top:auto;border-top:1px solid var(--line);padding-top:18px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.stream-outcome .tiny-label{font-size:8px}
+.stream-outcome strong{font:700 12px ui-monospace,Consolas,monospace;color:#c8ebdf;overflow-wrap:anywhere}
+.stream-card.tone-float .stream-outcome strong{color:#b7d4ff}
+.stream-card.tone-bool .stream-outcome strong{color:#f2d0a6}
+.stream-mini{display:flex;gap:4px;flex-wrap:wrap}
+.stream-mini span{border:1px solid #33515a;background:#10242e;padding:7px 9px;border-radius:3px;font:10px ui-monospace,Consolas,monospace;color:#a9c0c4}
+.stream-mini span.mark{background:#16433d;border-color:#388b7d;color:#a1f5e4}
+.stream-mini span.float-mark{background:#17334c;border-color:#416fa0;color:#b1d0ff}
+.stream-mini span.bool-mark{background:#3d3126;border-color:#8e6845;color:#f3cfa2}
+.stream-mini span.faded{opacity:.45}
+.stream-card .byte-tape .tape-byte{min-width:27px;height:30px;font-size:10px;padding:0 5px}
+.stream-card .tape-caption{font-size:9px}
+.stream-bit-row{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:3px}
+.stream-bit-row span{background:#172630;border:1px solid #2e4852;color:#a9c6c8;font:10px ui-monospace,Consolas,monospace;padding:9px 0;text-align:center;border-radius:3px}
+.stream-bit-row span.mark{background:#4a3d28;border-color:#a37c44;color:#ffdda9;font-weight:800}
+.stream-bit-row small{display:block;color:#6b8a91;font-size:8px;margin-top:5px}
+.stream-value-large{font:700 clamp(19px,2.2vw,27px) ui-monospace,Consolas,monospace;letter-spacing:-.65px;color:#c7eddf;overflow-wrap:anywhere}
+.stream-value-large.blue{color:#a3cdff}
+.stream-value-large.amber{color:#f7d19f}
+.stream-path{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#b4c9cb;font:10px ui-monospace,Consolas,monospace}
+.stream-path em{font-style:normal;color:var(--mint)}
+.row-merge-connector{padding:0 26px;display:flex;align-items:center;gap:12px;color:#75969a;font:10px ui-monospace,Consolas,monospace;letter-spacing:.7px}
+.row-merge-connector>span{height:1px;background:#33515b;flex:1}
+.row-merge-connector b{color:var(--mint)}
+.merge-icon{color:var(--mint);font-size:16px;margin-left:10px}
+.row-result{margin:21px 25px 26px;background:linear-gradient(135deg,#10302e,#0c2027);border:1px solid #32645d;border-radius:5px;padding:24px 25px 20px}
+.row-result-top{display:flex;align-items:start;justify-content:space-between;gap:14px}
+.row-result h4{font-size:19px;letter-spacing:-.5px;margin:7px 0 0}
+.row-result-top button{background:#142e30;color:#94f1de;font:700 10px ui-monospace,Consolas,monospace;letter-spacing:.5px;padding:9px 12px;border-radius:3px;border:1px solid #35655f}
+.row-result-top button:hover{border-color:var(--mint)}
+.row-result pre{white-space:pre-wrap;word-break:break-word;color:#d1f3e8;font-size:13px;line-height:1.7;padding:17px 0;margin:9px 0 5px}
+.row-result pre .json-key{color:#8ea8ff}
+.row-result pre .json-string{color:#9cf5d5}
+.row-result pre .json-number{color:#f7c99d}
+.row-result-note{border-top:1px solid #2b5b57;color:#89b0ac;padding-top:13px;font:10px/1.7 ui-monospace,Consolas,monospace}
+.row-takeaways{margin-top:16px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+.row-takeaways>div{border:1px solid var(--line);border-radius:5px;background:#0b1c24;padding:23px}
+.row-takeaways span{font:700 9px ui-monospace,Consolas,monospace;letter-spacing:1px;color:var(--mint)}
+.row-takeaways strong{display:block;color:#dcece9;font-size:15px;line-height:1.45;margin:11px 0 9px}
+.row-takeaways p{font-size:11px;line-height:1.8;margin:0}
+@media(max-width:1180px){.anatomy-head{flex-direction:column;align-items:stretch;gap:12px}.anatomy-head p{max-width:100%}.encoding-grid{grid-template-columns:235px minmax(0,1fr)}.encoding-workspace{padding:24px}.encoding-head h4{font-size:21px}.stream-card{padding:18px 15px 22px}.stream-card .byte-tape .tape-byte{min-width:24px}}
+@media(max-width:920px){.anatomy-inspector{grid-template-columns:1fr 190px}.encoding-grid{grid-template-columns:1fr}.encoding-options{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-right:0;border-bottom:1px solid var(--line);gap:4px}.encoding-options button{padding:11px 10px}.encoding-options strong{font-size:11px}.encoding-options small{font-size:9px}.encoding-workspace{min-height:430px}.coverage-panel,.row-takeaways{grid-template-columns:1fr}.coverage-panel>div{border-right:0;border-bottom:1px solid var(--line);padding:18px 21px}.coverage-panel>div:last-child{border-bottom:0}.row-streams{grid-template-columns:1fr}.stream-card{border-right:0;border-bottom:1px solid var(--line);padding:22px 25px}.stream-card:last-child{border-bottom:0}.stream-visual{min-height:90px}.stream-outcome{margin-top:19px}.stream-card .byte-tape .tape-byte{min-width:32px;height:34px;font-size:12px}.stream-bit-row{max-width:440px}}
+@media(max-width:670px){.decoder-support-key{gap:7px}.support-label{line-height:1.7}.anatomy-head{padding:15px 14px}.anatomy-switch{width:100%;justify-content:stretch;gap:1px}.anatomy-switch button{flex:1;min-width:0;padding:8px 4px;font-size:8px}.anatomy-ruler{padding:3px 14px 9px;font-size:8px}.anatomy-strip{padding:0 13px;gap:3px;min-height:92px}.anatomy-block{padding:13px 5px;gap:4px}.anatomy-block strong{font-size:8px;overflow-wrap:anywhere}.anatomy-block small{font-size:8px;overflow-wrap:anywhere}.anatomy-block .anatomy-block-count{font-size:7px;right:4px;top:5px}.anatomy-inspector{margin:14px 13px 0;padding:16px;grid-template-columns:1fr;gap:16px}.anatomy-inspector-side{border:0;border-top:1px solid var(--line);padding:12px 0 0}.anatomy-footer{padding:15px;font-size:8px}.encoding-options{grid-template-columns:repeat(2,minmax(0,1fr));padding:10px}.encoding-workspace{padding:21px 16px;min-height:0}.encoding-head{display:block}.encoding-head h4{font-size:21px}.encoding-status{display:inline-block;margin-bottom:14px}.encoding-visual{padding:14px;min-height:195px}.byte-tape{gap:4px}.byte-tape .tape-byte{min-width:29px;height:33px;padding:0 5px}.encoding-outcome{grid-template-columns:1fr;gap:8px}.encoding-outcome strong{font-size:13px}.encoding-outcome code{text-align:left}.schematic-flow{flex-direction:column}.schematic-flow .schematic-arrow{transform:rotate(90deg)}.row-picker th,.row-picker td{padding:12px}.row-demo-note{padding:13px;font-size:8px}.row-play-controls button{font-size:9px;padding:7px}.row-stages{padding:16px 13px 0;grid-template-columns:repeat(3,minmax(0,1fr))}.row-stages button{min-height:53px;padding:10px}.row-stages button strong{font-size:9px}.row-stage-caption{padding:18px 15px 14px}.row-stage-caption h4{font-size:19px}.stream-card{padding:19px 16px}.row-merge-connector{padding:0 13px;gap:7px;font-size:8px}.row-result{margin:15px 12px;padding:18px 14px}.row-result pre{font-size:11px}.row-takeaways>div{padding:19px}}
+/* Complete source-backed coverage, available on demand. */
+.support-matrix{margin-top:16px;border:1px solid var(--line);background:#0a1921;border-radius:5px;overflow:hidden}
+.support-matrix summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:18px 23px;font:10px ui-monospace,Consolas,monospace;letter-spacing:.3px;color:#b6d1d1}
+.support-matrix summary::-webkit-details-marker{display:none}
+.support-matrix summary b{color:var(--mint);letter-spacing:1px}
+.support-matrix summary:hover{background:#102631}
+.matrix-open-label{flex:none;color:#86a3aa;font:9px ui-monospace,Consolas,monospace;white-space:nowrap}
+.matrix-open-label i{font-style:normal;font-size:17px;margin-left:8px;color:var(--mint)}
+.support-matrix[open] .matrix-open-label i{display:inline-block;transform:rotate(45deg)}
+.support-matrix-wrap{overflow-x:auto;border-top:1px solid var(--line)}
+.support-matrix table{width:100%;border-collapse:collapse;min-width:720px}
+.support-matrix th{font:700 9px ui-monospace,Consolas,monospace;text-align:left;color:#839da3;letter-spacing:.8px;padding:13px 19px;background:#0b2029}
+.support-matrix td{padding:13px 19px;border-top:1px solid #20353f;font:10px/1.7 ui-monospace,Consolas,monospace;color:#9db6bc;vertical-align:top}
+.support-matrix td:first-child{color:#9df1dd;font-weight:700;white-space:nowrap}
+.support-matrix td:nth-child(2){color:#c7d8db}
+.support-matrix-note{padding:13px 20px;color:#7e9da5;font:10px/1.65 ui-monospace,Consolas,monospace;border-top:1px solid var(--line)}
+@media(max-width:660px){.support-matrix summary{padding:14px;flex-direction:column;align-items:flex-start;gap:9px}.support-matrix-wrap{font-size:9px}}
+@media(max-width:660px){
+  .row-picker{min-width:0;width:100%;table-layout:fixed;font-size:10px}
+  .row-picker th,.row-picker td{padding:10px 6px}
+  .row-picker th{font-size:8px;line-height:1.5;letter-spacing:0}
+  .row-picker th span{font-size:7px;white-space:normal;overflow-wrap:anywhere;line-height:1.5}
+  .row-picker th:nth-child(1){width:12%}
+  .row-picker th:nth-child(2){width:35%}
+  .row-picker th:nth-child(3){width:29%}
+  .row-picker th:nth-child(4){width:24%}
+}
+
+</style>
+  <script>
+'use strict';
+
+// WCOL systems explainer 03. The sample bytes are generated by the same
+// Compact Protocol rules used in the uploaded src/writer.rs. This JavaScript
+// implementation is an educational visualization, not WCOL's Rust parser.
+const T = Object.freeze({ TRUE: 1, FALSE: 2, BYTE: 3, I16: 4, I32: 5, I64: 6, DOUBLE: 7, BINARY: 8, LIST: 9, SET: 10, MAP: 11, STRUCT: 12, UUID: 13 });
+const TYPE_NAMES = { 1:'BOOL_TRUE',2:'BOOL_FALSE',3:'BYTE',4:'I16',5:'I32',6:'I64',7:'DOUBLE',8:'BINARY',9:'LIST',10:'SET',11:'MAP',12:'STRUCT',13:'UUID' };
+const $ = id => document.getElementById(id);
+const $$ = selector => Array.from(document.querySelectorAll(selector));
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const fmt = n => Number(n).toLocaleString('en-US');
+const hex = n => n.toString(16).padStart(2,'0').toUpperCase();
+const binary4 = n => n.toString(2).padStart(4,'0');
+
+class CompactWriter {
+  constructor(){this.bytes=[];this.last=0;}
+  byte(n){this.bytes.push(n & 255);}
+  varuint(n){let v=BigInt(n); if(v<0n)throw Error('negative unsigned varint');while(v>=128n){this.byte(Number((v&127n)|128n));v >>= 7n;}this.byte(Number(v));}
+  zigzag(n){const x=BigInt(n);return x>=0n?x<<1n:((-x)<<1n)-1n;}
+  int(n){this.varuint(this.zigzag(n));}
+  bin(value){const b=typeof value==='string'?new TextEncoder().encode(value):value;this.varuint(b.length);for(const v of b)this.byte(v);}
+  structure(fn){const saved=this.last;this.last=0;fn();this.byte(0);this.last=saved;}
+  field(id,type){const delta=id-this.last;if(delta>=1&&delta<=15)this.byte((delta<<4)|type);else{this.byte(type);this.int(id);}this.last=id;}
+  i32(id,value){this.field(id,T.I32);this.int(value);}
+  i64(id,value){this.field(id,T.I64);this.int(value);}
+  bool(id,value){this.field(id,value?T.TRUE:T.FALSE);}
+  binary(id,value){this.field(id,T.BINARY);this.bin(value);}
+  listHeader(type,len){if(len<15)this.byte((len<<4)|type);else{this.byte((15<<4)|type);this.varuint(len);}}
+  list(id,type,len,fn){this.field(id,T.LIST);this.listHeader(type,len);fn();}
+  struct(id,fn){this.field(id,T.STRUCT);this.structure(fn);}
+  result(){return Uint8Array.from(this.bytes);}
+}
+
+function buildSamples(){
+  const simple=new CompactWriter();
+  simple.structure(()=>{simple.i32(1,1);simple.binary(2,'WCOL');simple.i64(3,1024);simple.bool(4,true);simple.i32(32,-3);});
+
+  // Synthetic but faithfully encoded subset of parquet.thrift FileMetaData,
+  // SchemaElement, RowGroup, ColumnChunk and ColumnMetaData.
+  const footer=new CompactWriter();
+  footer.structure(()=>{
+    footer.i32(1,1); // FileMetaData.version
+    footer.list(2,T.STRUCT,2,()=>{
+      footer.structure(()=>{footer.binary(4,'schema');footer.i32(5,1);});
+      footer.structure(()=>{footer.i32(1,1);footer.i32(3,0);footer.binary(4,'duration_ms');});
+    });
+    footer.i64(3,1024);
+    footer.list(4,T.STRUCT,1,()=>footer.structure(()=>{
+      footer.list(1,T.STRUCT,1,()=>footer.structure(()=>{
+        footer.i64(2,4); // ColumnChunk.file_offset
+        footer.struct(3,()=>{
+          footer.i32(1,1); // INT32
+          footer.list(2,T.I32,1,()=>footer.int(0)); // PLAIN encoding
+          footer.list(3,T.BINARY,1,()=>footer.bin('duration_ms'));
+          footer.i32(4,0); // UNCOMPRESSED
+          footer.i64(5,1024);
+          footer.i64(6,4096);
+          footer.i64(7,1536);
+          footer.i64(9,4);
+        });
+      }));
+      footer.i64(2,4096);
+      footer.i64(3,1024);
+    }));
+    footer.binary(6,'wcol demo');
+  });
+  const page=new CompactWriter();
+  page.structure(()=>{
+    page.i32(1,3); // DATA_PAGE_V2
+    page.i32(2,120);
+    page.i32(3,84);
+    page.struct(8,()=>{
+      page.i32(1,32);page.i32(2,2);page.i32(3,32);
+      page.i32(4,0);page.i32(5,8);page.i32(6,0);page.bool(7,true);
+    });
+  });
+  return {simple:simple.result(),footer:footer.result(),page:page.result()};
+}
+const SAMPLES=buildSamples();
+const SAMPLE_INFO={
+  simple:{title:'Simple struct',description:'An invented five-field struct, encoded using real Compact Protocol rules. Field #32 demonstrates the explicit field-ID fallback; −3 demonstrates negative zigzag integers.'},
+  footer:{title:'Parquet FileMetaData',description:'A synthetic, structurally plausible Parquet footer: schema → row group → column chunk → column metadata. All nested structs use real parquet.thrift field IDs.'},
+  page:{title:'DataPageV2 header',description:'A synthetic DataPageV2 Thrift header. Its fields describe compressed page bytes; the actual page values are a different binary format.'},
+  custom:{title:'Custom hex input',description:'Your own Compact Protocol bytes. The viewer parses a single root struct, with defensive limits for the browser demo.'}
+};
+const FIELD_NAMES={
+  simple:{root:{1:['version'],2:['label'],3:['row_count'],4:['enabled']}},
+  footer:{
+    root:{1:['version'],2:['schema','schema'],3:['num_rows'],4:['row_groups','rowGroup'],6:['created_by']},
+    schema:{1:['type'],3:['repetition_type'],4:['name'],5:['num_children']},
+    rowGroup:{1:['columns','columnChunk'],2:['total_byte_size'],3:['num_rows']},
+    columnChunk:{1:['file_path'],2:['file_offset'],3:['meta_data','columnMeta']},
+    columnMeta:{1:['type'],2:['encodings'],3:['path_in_schema'],4:['codec'],5:['num_values'],6:['total_uncompressed_size'],7:['total_compressed_size'],9:['data_page_offset']}
+  },
+  page:{root:{1:['type'],2:['uncompressed_page_size'],3:['compressed_page_size'],4:['crc'],8:['data_page_header_v2','pageV2']},pageV2:{1:['num_values'],2:['num_nulls'],3:['num_rows'],4:['encoding'],5:['definition_levels_byte_length'],6:['repetition_levels_byte_length'],7:['is_compressed']}}
+};
+
+class ParseError extends Error {constructor(message,offset){super(message);this.offset=offset;}}
+class CompactTrace {
+  constructor(bytes,sample){this.bytes=bytes;this.at=0;this.events=[];this.sample=sample;this.nodes=0;}
+  fail(msg,at=this.at){throw new ParseError(msg,at);}
+  take(n){if(!Number.isSafeInteger(n)||n<0||this.at+n>this.bytes.length)this.fail('EndOfInput: truncated value at byte '+this.at);const start=this.at;this.at+=n;return this.bytes.subarray(start,this.at);}
+  byte(){return this.take(1)[0];}
+  varuint(){const start=this.at;let v=0n;for(let i=0;i<10;i++){const b=this.byte();if(i===9&&b>1)this.fail('InvalidVarint: 64-bit overflow',start);v|=BigInt(b&127)<<(7n*BigInt(i));if(!(b&128))return{start,end:this.at,value:v};}this.fail('InvalidVarint: too many bytes',start);}
+  integer(){const r=this.varuint();const n=(r.value>>1n)^(-(r.value&1n));return{...r,value:n};}
+  push(kind,start,end,label,description,extra={}){this.events.push({kind,start,end,label,description,...extra});return this.events.length-1;}
+  info(ctx,id){return (FIELD_NAMES[this.sample]||{})[ctx]?.[id]||['field_'+id,null];}
+  parse(){this.structure('root',0);if(this.at!==this.bytes.length)this.fail('Trailing bytes after root STOP marker',this.at);return this.events;}
+  structure(ctx,depth){if(depth>=16)this.fail('DepthLimit: browser demo refuses nesting beyond 16');let prev=0;let fields=0;while(true){if(++this.nodes>700)this.fail('Demo safety cap: too many decoded fields / elements');const start=this.at;const h=this.byte();if(h===0){this.push('stop',start,this.at,'STOP · end of '+ctx,'0x00 terminates this struct. A nested struct has its own STOP byte.',{context:ctx});return;}
+    const type=h&15,delta=h>>4;
+    if(!TYPE_NAMES[type])this.fail('InvalidWireType: '+type+' (0x'+hex(h)+')',start);
+    let id;
+    if(delta===0){const abs=this.integer();if(abs.value<-32768n||abs.value>32767n)this.fail('IntegerOverflow: field id is not i16',start);id=Number(abs.value);}
+    else{id=prev+delta;if(id>32767)this.fail('IntegerOverflow: field id too large',start);}
+    prev=id;fields++;
+    const [name,childCtx]=this.info(ctx,id);const display='#'+id+' '+name;
+    const isBool=(type===T.TRUE||type===T.FALSE);
+    this.push('header',start,this.at,display,`Field ${id} is ${name}. High nibble ${delta} ${delta?'adds to the preceding field ID':'means the absolute field ID follows'}; low nibble ${type} means ${TYPE_NAMES[type]}.`+(isBool?' This boolean value is encoded in the header itself.':''),{ctx,fieldId:id,delta,wireType:type,wireName:TYPE_NAMES[type],headerByte:h,value:isBool?(type===T.TRUE?'true':'false'):null});
+    if(isBool)continue;
+    this.value(type,name,childCtx||ctx,depth,ctx+'.'+name);
+  }}
+  value(type,name,childCtx,depth,path){
+    switch(type){
+      case T.BYTE:{const start=this.at,b=this.byte();this.push('value',start,this.at,`${name} = ${b>127?b-256:b}`,`A BYTE is stored directly in a single byte.`,{value:String(b>127?b-256:b),path});break;}
+      case T.I16:case T.I32:case T.I64:{const r=this.integer();this.push('value',r.start,r.end,`${name} = ${r.value}`,`Zigzag decodes the unsigned varint back to a signed integer. Value ${r.value} was encoded in ${r.end-r.start} byte(s).`,{value:String(r.value),path,varint:true});break;}
+      case T.DOUBLE:{const start=this.at,b=this.take(8);const dv=new DataView(b.buffer,b.byteOffset,8);const value=dv.getFloat64(0,true);this.push('value',start,this.at,`${name} = ${value}`,`Compact DOUBLE uses 8 little-endian bytes.`,{value:String(value),path});break;}
+      case T.BINARY:{const r=this.varuint();const n=Number(r.value);if(n>this.bytes.length-this.at)this.fail('EndOfInput: binary length exceeds remaining input',r.start);this.push('length',r.start,r.end,`${name} · ${fmt(n)} bytes`,`Length is an unsigned varint. The following ${fmt(n)} payload bytes belong to the existing input buffer.`,{value:String(n),path});const start=this.at,b=this.take(n);const decoded=new TextDecoder('utf-8',{fatal:false}).decode(b);const printable=/^[\x20-\x7E]*$/.test(decoded);const text=printable?'"'+decoded.slice(0,45)+(decoded.length>45?'…':'')+'"':n+' binary bytes';this.push('value',start,this.at,`${name} = ${text}`,`Reader::binary() returns a borrowed subslice (&[u8]); it does not allocate a String or copy these bytes.`,{value:text,path});break;}
+      case T.STRUCT:{this.structure(childCtx,depth+1);break;}
+      case T.LIST:case T.SET:{const start=this.at,b=this.byte();const element=b&15;let count=b>>4;if(count===15){const v=this.varuint();count=Number(v.value);}if(!TYPE_NAMES[element])this.fail('InvalidWireType in list: '+element,start);if(count>200)this.fail('Demo safety cap: list length exceeds 200',start);this.push('list',start,this.at,`${name} · ${count} elements`,`The high nibble encodes a short list length (${count}); the low nibble gives the element wire type (${TYPE_NAMES[element]}). Large lists use an additional unsigned varint.`,{listCount:count,wireType:element,wireName:TYPE_NAMES[element],path});for(let i=0;i<count;i++){this.value(element,`${name}[${i}]`,childCtx,depth+1,path+'['+i+']');}break;}
+      case T.MAP:{const r=this.varuint();const count=Number(r.value);if(count>100)this.fail('Demo safety cap: map length exceeds 100',r.start);let keyType=null,valueType=null;if(count){const b=this.byte();keyType=b>>4;valueType=b&15;if(!TYPE_NAMES[keyType]||!TYPE_NAMES[valueType])this.fail('Invalid map wire type',r.start);}this.push('list',r.start,this.at,`${name} · map(${count})`,`Map field starts with an entry count followed by key/value wire types when non-empty.`,{listCount:count,path});for(let i=0;i<count;i++){this.value(keyType,`key[${i}]`,childCtx,depth+1,path);this.value(valueType,`value[${i}]`,childCtx,depth+1,path);}break;}
+      case T.UUID:{const s=this.at;this.take(16);this.push('value',s,this.at,`${name} · UUID`,`Compact UUID uses 16 bytes.`,{path});break;}
+      case T.TRUE:case T.FALSE:{const s=this.at,b=this.byte();if(b!==1&&b!==2&&b!==0)this.fail('InvalidBool element '+b,s);this.push('value',s,this.at,`${name} = ${b===1}`,`Booleans in collections use explicit bytes; struct boolean fields carry the value in the field header.`,{path,value:String(b===1)});break;}
+      default:this.fail('Unsupported wire type '+type);
+    }
+  }
+}
+
+let state={sample:'simple',corrupt:'clean',bytes:SAMPLES.simple,events:[],error:null,step:-1,playing:false,timer:null,custom:false,region:'magic',memoryMode:'visitor',codeTab:'reader',stage:'range'};
+function buildCurrent(){
+  stopClock();
+  let bytes=state.custom?state.bytes:SAMPLES[state.sample];
+  if(!state.custom){
+    bytes=Uint8Array.from(bytes);
+    if(state.corrupt==='truncated')bytes=bytes.slice(0,Math.max(1,bytes.length-3));
+    if(state.corrupt==='type')bytes[0]=(bytes[0]&240)|15;
+  }
+  state.bytes=bytes;state.events=[];state.error=null;state.step=-1;
+  try{const parser=new CompactTrace(bytes,state.sample);parser.parse();state.events=parser.events;}
+  catch(e){const parserError=e instanceof ParseError?e:new ParseError(String(e),0);
+    // Decode once again to collect the successful prefix and attach an error event.
+    const probe=new CompactTrace(bytes,state.sample);try{probe.parse();}catch(_){}
+    state.events=probe.events;
+    const at=Math.max(0,Math.min(bytes.length-1,parserError.offset));
+    state.events.push({kind:'error',start:at,end:Math.min(bytes.length,at+1),label:parserError.message,description:'The parser rejects malformed input rather than assuming a field/value is valid.',error:true});
+    state.error=parserError.message;
+  }
+  renderDecoder();
+}
+function stopClock(){if(state.timer){clearInterval(state.timer);state.timer=null;}state.playing=false;const t=$('play-text'),s=$('play-symbol');if(t)t.textContent='PLAY DECODE';if(s)s.textContent='▶';}
+function setStep(n){state.step=Math.max(-1,Math.min(state.events.length-1,n));renderDecoder();}
+function clockTick(){if(state.step>=state.events.length-1){stopClock();return;}setStep(state.step+1);}
+function toggleClock(){if(state.playing){stopClock();return;}if(state.step>=state.events.length-1)state.step=-1;state.playing=true;$('play-text').textContent='PAUSE';$('play-symbol').textContent='Ⅱ';clockTick();state.timer=setInterval(clockTick,690);}
+function byteKind(index){const event=state.events.find(e=>index>=e.start&&index<e.end);return event?event.kind:'value';}
+function renderHex(){
+  const bytes=state.bytes;const active=state.events[state.step];const past=active?active.end:0;let html='';
+  for(let i=0;i<bytes.length;i+=16){html+=`<div class="hex-line"><span class="hex-address">${i.toString(16).padStart(4,'0').toUpperCase()}</span><div class="hex-bytes">`;
+    for(let j=0;j<16;j++){const at=i+j;if(at<bytes.length){let cl='byte-cell';if(active&&at>=active.start&&at<active.end)cl+=' is-selected';else if(at<past)cl+=' is-past';else if(active)cl+=' is-future';html+=`<button type="button" class="${cl}" data-byte="${at}" data-kind="${byteKind(at)}" aria-label="Byte ${at}: ${hex(bytes[at])}" title="offset ${at}">${hex(bytes[at])}</button>`;}else html+='<span class="byte-placeholder"></span>';}
+    html+='</div></div>';
+  }
+  $('hex-table').innerHTML=html;
+  $('buffer-length').textContent=bytes.length+' BYTES';
+  $('decode-status').textContent=state.error?'REJECTED INPUT':'VALID STRUCT';$('decode-status').classList.toggle('is-error',!!state.error);
+  $('byte-offset').textContent='READER OFFSET '+(active?active.end:0);
+  $('step-counter').textContent=(state.step+1)+' / '+state.events.length;
+  $('step-progress').style.width=(state.events.length?(state.step+1)/state.events.length*100:0)+'%';
+  $('step-back').disabled=state.step<0;$('step-forward').disabled=state.step>=state.events.length-1;
+}
+function renderTrace(){
+  const events=state.events;
+  $('trace-list').innerHTML=events.map((e,i)=>`<button type="button" class="trace-row ${i===state.step?'is-active':''} ${i>state.step?'is-future':''}" data-step="${i}" title="Inspect ${esc(e.label)}"><span class="trace-idx">${String(i+1).padStart(2,'0')}</span><span><strong>${esc(e.label)}</strong><small>${esc(e.kind.toUpperCase())} · ${e.start}…${e.end}${e.wireName?' · '+e.wireName:''}</small></span></button>`).join('');
+  const active=$('trace-list').querySelector('.trace-row.is-active');if(active&&active.scrollIntoView){const container=$('trace-list');const desired=active.offsetTop-container.offsetTop-container.clientHeight/2+active.offsetHeight/2;container.scrollTop=Math.max(0,desired);}
+}
+function renderDecode(){const e=state.events[state.step];const head=$('decode-step-type'),content=$('decode-content'),bits=$('bit-explainer');if(!e){head.textContent='READY';content.innerHTML='<h4>Select a byte or press Next.</h4><p>The reader advances over a borrowed <code>&amp;[u8]</code> and never constructs a complete generated Thrift object graph.</p><div class="decode-note">Reader { input: &amp;[u8], offset: 0, last_field_id: 0 }</div>';bits.innerHTML='<div class="nibble"><small>HIGH 4 BITS</small><strong>----</strong><span>field-ID delta</span></div><div class="nibble"><small>LOW 4 BITS</small><strong>----</strong><span>wire type</span></div>';return;}
+  head.textContent=e.kind.toUpperCase();content.innerHTML=`<h4 class="${e.error?'error-text':''}">${esc(e.label)}</h4><p>${esc(e.description)}</p><div class="decode-stats"><span>OFFSET ${e.start}…${e.end}</span><span>${e.end-e.start} BYTE${e.end-e.start===1?'':'S'}</span>${e.fieldId!==undefined?`<span>FIELD #${e.fieldId}</span>`:''}${e.wireName?`<span>${esc(e.wireName)}</span>`:''}</div>`;
+  if(e.kind==='header')bits.innerHTML=`<div class="nibble"><small>HIGH NIBBLE / FIELD DELTA</small><strong>${binary4(e.delta)}</strong><span>${e.delta===0?'explicit field ID':`previous ID + ${e.delta}`}</span></div><div class="nibble"><small>LOW NIBBLE / WIRE TYPE</small><strong>${binary4(e.wireType)}</strong><span>${esc(e.wireName)}</span></div>`;
+  else if(e.varint)bits.innerHTML='<div class="nibble"><small>ENCODING STEP 1</small><strong>ZZ</strong><span>zigzag sign fold</span></div><div class="nibble"><small>ENCODING STEP 2</small><strong>7b</strong><span>varint: seven bits per byte</span></div>';
+  else bits.innerHTML=`<div class="nibble"><small>BYTE WINDOW</small><strong>${e.start}</strong><span>inclusive start</span></div><div class="nibble"><small>CURSOR AFTER READ</small><strong>${e.end}</strong><span>exclusive end</span></div>`;
+}
+function renderDecoder(){renderHex();renderTrace();renderDecode();}
+function setSample(name){state.sample=name;state.custom=false;state.corrupt='clean';$$('[data-sample]').forEach(b=>{const yes=b.dataset.sample===name;b.classList.toggle('is-active',yes);b.setAttribute('aria-pressed',String(yes));});$$('[data-corrupt]').forEach(b=>{const yes=b.dataset.corrupt==='clean';b.classList.toggle('is-active',yes);b.setAttribute('aria-pressed',String(yes));});$('sample-about').textContent=SAMPLE_INFO[name].description;buildCurrent();}
+function setCorrupt(value){state.corrupt=value;state.custom=false;$$('[data-corrupt]').forEach(b=>{const yes=b.dataset.corrupt===value;b.classList.toggle('is-active',yes);b.setAttribute('aria-pressed',String(yes));});buildCurrent();}
+
+const FILE_REGIONS={
+  magic:{name:'PAR1 — opening magic',range:'0…3',description:'The opening four bytes identify a standard unencrypted Parquet file. The footer locator checks the final four bytes separately.'},
+  pages:{name:'Column chunks and data pages',range:'4…footer start − 1',description:'Column data lives in encoded and usually compressed pages. It is not Thrift. The footer tells you which byte ranges hold each column chunk.'},
+  footer:{name:'Serialized FileMetaData',range:'size − 8 − footer_length…size − 9',description:'A Compact Protocol struct containing schema, row groups, column chunks, codecs, data-page offsets and statistics. The transport buffers this window and the parser borrows it.'},
+  length:{name:'Footer length (u32 little-endian)',range:'size − 8…size − 5',description:'Exactly four bytes describe the preceding serialized Thrift footer length. This is not a Thrift varint; it belongs to the Parquet file trailer.'},
+  tail:{name:'PAR1 — trailing magic',range:'size − 4…size − 1',description:'Four ASCII bytes (50 41 52 31). They validate the trailer before requesting a footer range.'}
+};
+function renderRegion(){const r=FILE_REGIONS[state.region];$('file-region-detail').innerHTML=`<div class="mini-label">SELECTED REGION <span>${esc(r.range)}</span></div><strong>${esc(r.name)}</strong><p>${esc(r.description)}</p>`;$$('[data-region]').forEach(b=>{const on=b.dataset.region===state.region;b.classList.toggle('is-selected',on);b.setAttribute('aria-pressed',String(on));});}
+function renderFooterSize(){const size=1_048_576, len=Number($('footer-size').value),end=size-8,start=end-len;$('footer-size-out').textContent=fmt(len)+' B';$('trailer-range').textContent='bytes='+(size-8)+'-'+(size-1);$('footer-range').textContent='bytes='+start+'-'+(end-1);$('footer-size-explain').textContent=fmt(len)+' bytes, held by the transport';}
+
+const CODE={
+  reader:{path:'src/reader.rs',title:'One cursor, borrowed input.',description:'Reader keeps the existing input slice, an offset, and bounded nesting counters. StructReader keeps the previous field ID in its scoped stack frame, not on the heap.',facts:['input: &\'a [u8]','offset: usize','max_depth: 64'],code:`pub struct Reader<'a> {
+    input: &'a [u8],
+    offset: usize,
+    depth: u16,
+    max_depth: u16,
+}
+
+pub fn binary(&mut self) -> Result<&'a [u8]> {
+    let len = self.var_u32()? as usize;
+    self.take(len) // borrowed subslice
+}`},
+  visitor:{path:'src/parquet.rs',title:'Inspect only fields you need.',description:'The visitor extracts column offsets, codecs, compressed sizes and statistics. Unknown fields are recursively skipped without materializing generated metadata structs.',facts:['ColumnChunkInfo<\'a> (borrowed)','callback per column','unknown fields: skip()'],code:`pub fn scan_footer<'a>(
+    metadata: &'a [u8],
+    mut visit: impl FnMut(ColumnChunkInfo<'a>)
+        -> Result<()>,
+) -> Result<FooterSummary> {
+    let mut reader = Reader::new(metadata);
+    let mut root = reader.structure()?;
+    // Visit row groups and columns in place.
+    // Unknown field? root.skip(field.kind)?;
+    // ...
+}`},
+  writer:{path:'src/writer.rs',title:'Caller-owned output, too.',description:'Writer delegates bytes to a Sink. SliceSink writes into a fixed-capacity buffer and returns OutputFull if the caller did not provide enough space.',facts:['trait Sink { write(&[u8]) }','SliceSink<\'a>','OutputFull instead of Vec growth'],code:`pub trait Sink {
+    fn write(&mut self, bytes: &[u8])
+        -> Result<()>;
+}
+
+pub struct SliceSink<'a> {
+    buffer: &'a mut [u8],
+    used: usize,
+}
+
+// Writer<Sink> never owns a growable
+// output Vec or generated object graph.`}
+};
+function renderCode(){const c=CODE[state.codeTab];$('source-code').textContent=c.code;$('source-path').textContent=c.path;$('source-title').textContent=c.title;$('source-description').textContent=c.description;$('source-facts').innerHTML=c.facts.map(f=>`<span>${esc(f)}</span>`).join('');$$('[data-code]').forEach(b=>{const on=b.dataset.code===state.codeTab;b.classList.toggle('is-active',on);b.setAttribute('aria-pressed',String(on));});}
+function renderMemory(){const rows=Number($('row-group-count').value),cols=Number($('column-count').value),chunks=rows*cols,isVisitor=state.memoryMode==='visitor';$('row-group-output').textContent=rows;$('column-output').textContent=cols;$('chunk-count').textContent=fmt(chunks);const graphCount=1+rows+2*chunks;$('object-count').textContent=isVisitor?'0':fmt(graphCount);$('memory-narrative').textContent=isVisitor?`The codec borrows one footer buffer and visits ${fmt(chunks)} column chunks. It constructs zero parser-owned heap metadata objects; your callback chooses what to retain.`:`Illustrative object model: one FileMetaData, ${rows} RowGroups, and two modeled objects per column chunk. That's at least ${fmt(graphCount)} object nodes, before lists and strings. This is not a measured Thrift library allocation count.`;$('memory-mode-title').textContent=isVisitor?'BORROWED + VISITED':'DESERIALIZED OBJECT TREE';$$('[data-memory-mode]').forEach(b=>{const on=b.dataset.memoryMode===state.memoryMode;b.classList.toggle('is-active',on);b.setAttribute('aria-pressed',String(on));});
+  if(isVisitor){$('ownership-flow').innerHTML=`<div class="ownership-box borrowed"><b>Transport footer buffer</b><small>owned bytes · lifetime 'a</small></div><div class="ownership-arrow">↓</div><div class="ownership-box"><b>Reader&lt;'a&gt; { input, offset }</b><small>borrowed bytes · stack cursor</small></div><div class="ownership-arrow">↓</div><div class="ownership-box temp"><b>visit(ColumnChunkInfo&lt;'a&gt;)</b><small>${fmt(chunks)} callbacks · no retained graph</small></div>`;}
+  else{$('ownership-flow').innerHTML=`<div class="ownership-box borrowed"><b>Transport footer buffer</b><small>existing bytes</small></div><div class="ownership-arrow">↓</div><div class="ownership-pool">${Array.from({length:Math.min(72,graphCount)},(_,i)=>`<span class="ownership-unit" style="opacity:${.55+(i%5)*.1}" aria-hidden="true"></span>`).join('')}</div><div class="pool-caption">${fmt(graphCount)} modeled object nodes · visual capped at 72</div>`;}
+}
+const STAGES={
+  range:{kicker:'01 / INPUT OWNERSHIP',title:'Transport supplies the bytes.',description:'An R2 or S3 range request supplies a slice of the Parquet object. The transport owns the incoming bytes and decides the I/O buffer size; the metadata codec does not fetch objects.',tags:['R2 / S3 RANGE','CALLER OWNS INPUT','BOUNDED I/O'],pattern:'range'},
+  header:{kicker:'02 / THRIFT COMPACT',title:'Parse the small page header.',description:'PageFramer accumulates a bounded, caller-owned header buffer until page_header() succeeds. It then knows the compressed payload size and emits a Start(PageHeader) event.',tags:['PAGE_HEADER V1 / V2','THRIFT COMPACT','BOUNDED HEADER'],pattern:'header'},
+  inflate:{kicker:'03 / COMPRESSION',title:'Unpack with explicit scratch.',description:'The page assembler processes body chunks and hands them to an inflater. Raw Snappy and uncompressed paths are included; codec history/output buffers are supplied by the caller.',tags:['SNAPPY','CALLER SCRATCH','BODY FRAGMENTS'],pattern:'inflate'},
+  values:{kicker:'04 / PARQUET ENCODINGS',title:'Values are not Thrift.',description:'PLAIN, hybrid RLE/bit-packed, dictionary IDs and DELTA decoders consume the page values. Byte arrays can be emitted as borrowed Start/Chunk/End fragments instead of String allocations.',tags:['PLAIN','RLE','DELTA','BORROWED FRAGMENTS'],pattern:'values'}
+};
+function renderStage(){const s=STAGES[state.stage];$('stage-kicker').textContent=s.kicker;$('stage-title').textContent=s.title;$('stage-description').textContent=s.description;$('stage-tags').innerHTML=s.tags.map(t=>`<span>${esc(t)}</span>`).join('');const cells=28;$('stage-visual').innerHTML=`<div class="stage-art" aria-hidden="true">${Array.from({length:cells},(_,i)=>{let cls='';if(s.pattern==='range')cls=i%7<4?'on':'';if(s.pattern==='header')cls=i<8?'on':i%7===0?'alt':'';if(s.pattern==='inflate')cls=i%4!==0?'on':'alt';if(s.pattern==='values')cls=i%3===0?'alt':'on';return `<i class="${cls}"></i>`;}).join('')}</div><span class="stage-visual-label">${esc(s.tags[0])} · ${esc(s.pattern.toUpperCase())}</span>`;$$('[data-stage]').forEach(b=>{const on=b.dataset.stage===state.stage;b.classList.toggle('is-active',on);b.setAttribute('aria-pressed',String(on));});}
+function bind(){
+  $$('[data-sample]').forEach(b=>b.addEventListener('click',()=>setSample(b.dataset.sample)));
+  $$('[data-corrupt]').forEach(b=>b.addEventListener('click',()=>setCorrupt(b.dataset.corrupt)));
+  $('step-forward').addEventListener('click',()=>{stopClock();setStep(state.step+1);});
+  $('step-back').addEventListener('click',()=>{stopClock();setStep(state.step-1);});
+  $('reset-steps').addEventListener('click',()=>{stopClock();setStep(-1);});
+  $('play-steps').addEventListener('click',toggleClock);
+  $('hex-table').addEventListener('click',e=>{const b=e.target.closest('[data-byte]');if(!b)return;const at=Number(b.dataset.byte);let index=state.events.findIndex(v=>at>=v.start&&at<v.end);if(index<0)index=state.events.findIndex(v=>v.start>=at);if(index>=0){stopClock();setStep(index);}});
+  $('trace-list').addEventListener('click',e=>{const b=e.target.closest('[data-step]');if(b){stopClock();setStep(Number(b.dataset.step));}});
+  $('edit-hex-toggle').addEventListener('click',()=>{const wrap=$('custom-hex-wrap'),open=wrap.hidden;wrap.hidden=!open;$('edit-hex-toggle').setAttribute('aria-expanded',String(open));$('edit-hex-toggle').querySelector('span').textContent=open?'−':'+';if(open)$('custom-hex').value=Array.from(state.bytes).map(hex).join(' ');});
+  $('apply-hex').addEventListener('click',()=>{const raw=$('custom-hex').value.trim().replace(/(?:0x)/gi,'').replace(/[\s,;:_-]+/g,'');if(raw.length===0||raw.length%2!==0||!/^[0-9a-fA-F]+$/.test(raw)){alert('Enter an even number of hexadecimal digits (0–9, A–F).');return;}if(raw.length>4096){alert('This browser explainer limits custom examples to 2,048 bytes.');return;}const bytes=Uint8Array.from(raw.match(/../g).map(s=>parseInt(s,16)));state.sample='custom';state.custom=true;state.corrupt='clean';state.bytes=bytes;$$('[data-sample]').forEach(b=>{b.classList.remove('is-active');b.setAttribute('aria-pressed','false');});$$('[data-corrupt]').forEach(b=>{const on=b.dataset.corrupt==='clean';b.classList.toggle('is-active',on);b.setAttribute('aria-pressed',String(on));});$('sample-about').textContent=SAMPLE_INFO.custom.description;buildCurrent();});
+  $('restore-hex').addEventListener('click',()=>{setSample('simple');$('custom-hex').value=Array.from(state.bytes).map(hex).join(' ');});
+  $$('[data-region]').forEach(b=>b.addEventListener('click',()=>{state.region=b.dataset.region;renderRegion();}));
+  $('footer-size').addEventListener('input',renderFooterSize);
+  $$('[data-memory-mode]').forEach(b=>b.addEventListener('click',()=>{state.memoryMode=b.dataset.memoryMode;renderMemory();}));
+  $('row-group-count').addEventListener('input',renderMemory);$('column-count').addEventListener('input',renderMemory);
+  $$('[data-code]').forEach(b=>b.addEventListener('click',()=>{state.codeTab=b.dataset.code;renderCode();}));
+  $$('[data-stage]').forEach(b=>b.addEventListener('click',()=>{state.stage=b.dataset.stage;renderStage();}));
+  document.addEventListener('keydown',e=>{if(['TEXTAREA','INPUT','BUTTON'].includes(document.activeElement?.tagName))return;if(e.key==='ArrowRight'&&location.hash==='#wire'){e.preventDefault();stopClock();setStep(state.step+1);}if(e.key==='ArrowLeft'&&location.hash==='#wire'){e.preventDefault();stopClock();setStep(state.step-1);}});
+}
+function init(){bind();renderFooterSize();renderRegion();renderMemory();renderCode();renderStage();buildCurrent();window.__WCOL_THRIFT_DEBUG__={getState:()=>({sample:state.sample,events:state.events.length,bytes:state.bytes.length,error:state.error,step:state.step}),getExamples:()=>Object.fromEntries(Object.entries(SAMPLES).map(([k,v])=>[k,Array.from(v).map(hex).join(' ')]))};}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Chapters 05–06: page anatomy, encoding recipes and one row reconstructed.
+// The examples below follow the low-level encodings in the supplied Rust crate.
+// Actual byte tapes are generated/decoded here for teaching; the page metadata
+// is illustrative, and the real allocation-free implementation is in Rust.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  'use strict';
+  const byId = id => document.getElementById(id);
+  const hex2 = byte => Number(byte).toString(16).padStart(2, '0').toUpperCase();
+  const html = text => String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  const utf8 = new TextEncoder();
+
+  const LAYOUTS = {
+    v1: {
+      summary:'A V1 page has one Thrift header followed by a compressed body. When optional, the decompressed body begins with length-prefixed definition levels before the encoded values.',
+      segments:[
+        { id:'header', title:'PageHeader', hint:'THRIFT COMPACT', tone:'meta', grow:1.25, label:'metadata', source:'src/pages/frame.rs', memory:'Caller-owned header scratch', description:'PageFramer incrementally recognizes the compact-encoded PageHeader. For DATA_PAGE, the header specifies the value count, encoding, and compressed/uncompressed byte lengths. The header is outside the compressed payload.' },
+        { id:'body', title:'Compressed body', hint:'LEVELS + VALUES', tone:'values', grow:3, label:'compressed bytes', source:'src/pages/assemble.rs', memory:'Caller-owned Inflate buffers', description:'In a V1 nullable page, decompress the whole body, then read the 4-byte definition-level stream length, hybrid RLE levels, and encoded physical values. A required flat column has no levels to consume.' }
+      ]
+    },
+    v2: {
+      summary:'A V2 page has an uncompressed levels section, followed by a values section that may be compressed. The header gives the exact levels lengths.',
+      segments:[
+        { id:'header', title:'PageHeader', hint:'THRIFT COMPACT', tone:'meta', grow:1.15, label:'metadata', source:'src/pages/frame.rs', memory:'Caller-owned header scratch', description:'The Thrift DataPageHeaderV2 records num_values, num_nulls, num_rows, encoding, definition_levels_byte_length and is_compressed. It also identifies the compressed payload boundary.' },
+        { id:'levels', title:'Definition levels', hint:'UNCOMPRESSED', tone:'levels', grow:1.65, label:'level bytes', source:'src/values/levels.rs', memory:'1 presence bit per row (if optional)', description:'For this flat-column decoder, repetition-level bytes are zero. Definition levels, if present, are RLE/bit-packed hybrid with length from the V2 header, not a V1-style 4-byte prefix. A 1 means present, a 0 means null.' },
+        { id:'values', title:'Encoded values', hint:'OPTIONAL COMPRESSION', tone:'values', grow:2.7, label:'value bytes', source:'src/pages/assemble.rs', memory:'Caller-owned codec scratch', description:'The value section is decompressed only if DataPageHeaderV2.is_compressed and the column codec require it. The value decoder then emits non-null physical values, aligned to positions via the presence bitmap.' }
+      ]
+    },
+    dict: {
+      summary:'A dictionary page stores the actual values, usually using PLAIN encoding. Subsequent data pages contain compact dictionary indices—not repeated strings.',
+      segments:[
+        { id:'header', title:'PageHeader', hint:'DICTIONARY_PAGE', tone:'meta', grow:1.25, label:'metadata', source:'src/pages/frame.rs', memory:'Caller-owned header scratch', description:'The dictionary page header supplies the dictionary entry count and encoding. The supplied crate accepts PLAIN (0) and the older PLAIN_DICTIONARY label (2) for dictionary page values.' },
+        { id:'entries', title:'Dictionary values', hint:'PLAIN VALUES', tone:'dictionary', grow:3.2, label:'entry bytes', source:'src/pages/decode.rs', memory:'The application owns retained dictionary entries', description:'The FlatPage decoder emits Location::Dictionary(index) for each value. For BYTE_ARRAY, PLAIN uses a 4-byte little-endian length followed by borrowed UTF-8 bytes. The caller decides how to retain/resolve the entries.' }
+      ]
+    }
+  };
+
+  const DATA = {
+    country: ['France','Slovenia','France','Japan','Slovenia','Japan','France','Slovenia'],
+    temp: [18.5,21.5,17.25,20,22,23.5,19.5,16.5],
+    active: [true,false,true,false,true,true,false,true],
+    dict: ['France','Slovenia','Japan']
+  };
+  const DICT_IDS = DATA.country.map(name => DATA.dict.indexOf(name));
+
+  const dictionaryBytes = (() => {
+    const bytes=[];
+    for (const name of DATA.dict) {
+      const text=utf8.encode(name), n=text.length;
+      bytes.push(n & 255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255,...text);
+    }
+    return Uint8Array.from(bytes);
+  })();
+  const plainFloats = (()=>{
+    const result=new Uint8Array(DATA.temp.length*4), view=new DataView(result.buffer);
+    DATA.temp.forEach((value,i)=>view.setFloat32(i*4,value,true));
+    return result;
+  })();
+  const plainBoolean = Uint8Array.of(DATA.active.reduce((packed,value,index)=>packed | ((value?1:0)<<index),0));
+  const dictData = (()=>{
+    // One 8-value hybrid bit-packed run, bit-width=2; run header 0x03.
+    const packed=DICT_IDS.reduce((v,id,index)=>v | (id << (index*2)),0);
+    return Uint8Array.of(2,3,packed&255,(packed>>>8)&255);
+  })();
+
+  function readHybridDictionaryIds(bytes, count, maxId) {
+    const width=bytes[0];
+    if(width>32)throw new Error('Invalid dictionary bit width');
+    const out=[];
+    let at=1;
+    function varuint(){let n=0,shift=0;while(at<bytes.length){const b=bytes[at++];n+=(b&127)*2**shift;if(!(b&128))return n;shift+=7;if(shift>28)throw new Error('Invalid varuint');}throw new Error('Truncated run header');}
+    while(out.length<count){
+      const run=varuint(), n=run>>>1;
+      if(n===0)throw new Error('Zero-length hybrid run');
+      if(!(run&1)){
+        const len=Math.ceil(width/8);
+        if(at+len>bytes.length)throw new Error('Truncated RLE value');
+        let v=0;for(let i=0;i<len;i++)v+=bytes[at++]*2**(8*i);
+        for(let i=0;i<n && out.length<count;i++)out.push(v);
+      }else{
+        const groups=n, runBytes=groups*width;
+        if(at+runBytes>bytes.length)throw new Error('Truncated packed run');
+        const origin=at;
+        for(let i=0;i<groups*8 && out.length<count;i++){
+          const bit=i*width;let v=0;
+          for(let b=0;b<width;b++){const bitAt=bit+b;v|=((bytes[origin+(bitAt>>>3)] >>> (bitAt&7))&1)<<b;}
+          out.push(v);
+        }
+        at+=runBytes;
+      }
+    }
+    if(out.some(id=>id>=maxId))throw new Error('Dictionary index out of range');
+    return out;
+  }
+  function decodePlainDictionary(bytes, count){
+    const out=[];let at=0;
+    const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength), decoder=new TextDecoder();
+    while(out.length<count){
+      if(at+4>bytes.length)throw new Error('Truncated dictionary entry length');
+      const n=view.getUint32(at,true);at+=4;
+      if(n>bytes.length-at)throw new Error('Truncated dictionary entry');
+      out.push(decoder.decode(bytes.subarray(at,at+n)));at+=n;
+    }
+    return out;
+  }
+  function decodePlainFloats(bytes,count){
+    if(bytes.byteLength<count*4)throw new Error('Truncated floats');
+    const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+    return Array.from({length:count},(_,i)=>view.getFloat32(i*4,true));
+  }
+  function decodePlainBooleans(bytes,count){
+    return Array.from({length:count},(_,i)=>Boolean((bytes[i>>>3] >>>(i&7))&1));
+  }
+  const parsedDict=decodePlainDictionary(dictionaryBytes,DATA.dict.length);
+  const parsedIds=readHybridDictionaryIds(dictData,DATA.country.length,DATA.dict.length);
+  const parsedFloats=decodePlainFloats(plainFloats,DATA.temp.length);
+  const parsedBooleans=decodePlainBooleans(plainBoolean,DATA.active.length);
+  if(parsedIds.some((v,i)=>parsedDict[v]!==DATA.country[i])||parsedFloats.some((v,i)=>v!==DATA.temp[i])||parsedBooleans.some((v,i)=>v!==DATA.active[i])){
+    throw new Error('Synthetic Parquet demo byte-encoding mismatch');
+  }
+
+  const formatTape = (bytes, highlighted=[],max=Infinity) => {
+    const marked=new Set(highlighted);
+    return '<div class="byte-tape">'+Array.from(bytes).slice(0,max).map((b,i)=>`<span class="tape-byte ${marked.has(i)?'mark':''}" title="byte ${i}">${hex2(b)}</span>`).join('')+'</div>';
+  };
+  const chips = (arr,activeIndex=null,tone='mark') => '<div class="stream-mini">'+arr.map((v,i)=>`<span class="${i===activeIndex?tone:''}">${html(v)}</span>`).join('')+'</div>';
+  const arrow = '<div class="tape-arrow">↓ DECODES TO</div>';
+  const schematic = steps => '<div class="schematic-flow">'+steps.map((s,i)=>`${i?'<span class="schematic-arrow">→</span>':''}<div class="segment"><b>${html(s.name)}</b><small>${html(s.value)}</small></div>`).join('')+'</div>';
+
+  const ENCODINGS = {
+    float:{subtitle:'PHYSICAL / FLOAT · PLAIN (0)', title:'Four bytes become one number.', status:'EXACT ENCODED BYTES', description:'A FLOAT is IEEE-754 binary32, stored little-endian. PlainValues<f32> emits numeric values directly from borrowed fragments; a truncated value uses fixed-size carry.', output:'Value::F32(22.0)',source:'src/values/plain.rs',memory:'PLAIN fixed-width values use at most a 12-byte partial carry buffer (large enough for INT96); ordinary aligned floats can be read directly from the input slice.',view:()=>formatTape([0,0,0xB0,0x41],[0,1,2,3])+arrow+'<div class="stream-value-large blue">22.0 <small style="font:10px ui-monospace,monospace;color:#769faa">FLOAT32</small></div><div class="tape-caption">0x41B00000 · little-endian IEEE-754 · 4 bytes</div>'},
+    bool:{subtitle:'PHYSICAL / BOOLEAN · PLAIN (0)',title:'Eight booleans. One byte.',status:'EXACT ENCODED BYTES',description:'BOOLEAN PLAIN values are bit-packed least-significant-bit first. Bit 0 of 0xB5 is row 0; bit 7 is row 7. The PlainBool decoder emits one value per logical position.',output:'[true, false, true, false, true, true, false, true]',source:'src/values/plain.rs',memory:'Only the current byte and bit offset are retained. The final byte can contain unused padding bits.',view:()=>formatTape(plainBoolean,[0])+arrow+'<div class="enc-bits">'+parsedBooleans.map((v,i)=>`<span>${+v}<small>row ${i}</small></span>`).join('')+'</div><div class="tape-caption">0xB5 = binary 10110101 · read from right to left (LSB first)</div>'},
+    dictionary:{subtitle:'PHYSICAL / BYTE_ARRAY · RLE_DICTIONARY (8)',title:'Send indices, not repeated strings.',status:'EXACT ENCODED BYTES',description:'The dictionary page stores the values separately using PLAIN. The data page starts with a one-byte bit width, followed by RLE/bit-packed hybrid index runs. DictionaryIds emits checked numeric IDs, not expanded strings.',output:'DictionaryId → [0,1,0,2,1,2,0,1]',source:'src/values/rle.rs · src/pages/decode.rs',memory:'The index decoder keeps tiny fixed-size run state. Dictionary entries are retained and resolved by the caller, outside the decoding codec.',view:()=>'<div class="tape-caption">DATA PAGE / bit width 02 · 1 packed group (03) · two packed bytes (84 49)</div>'+formatTape(dictData,[0,1,2,3])+arrow+chips(parsedIds.map(x=>String(x)))+'<div class="tape-caption">The string dictionary is a distinct PLAIN-encoded page.</div>'},
+    rle:{subtitle:'OPTIONAL LEVELS / RLE (3)',title:'Null positions have their own stream.',status:'EXACT RLE BYTES',description:'For an optional flat column, a definition level of 1 means present and 0 means null. Eight repeated 1 values can be encoded as the RLE run 10 01. V1 prefixes this level stream with a four-byte length; V2 uses the length in its page header.',output:'present = [1,1,1,1,1,1,1,1]',source:'src/values/levels.rs',memory:'FlatPage builds one caller-owned presence bit per row so that subsequent physical values can be aligned to row positions; absent physical values produce Null(row).',view:()=>'<div class="tape-caption">V1 optional definition levels: length prefix + RLE payload</div>'+formatTape([2,0,0,0,16,1],[4,5])+arrow+chips(['1','1','1','1','1','1','1','1'])+'<div class="tape-caption">V2: the same payload 10 01 appears without the four-byte prefix.</div>'},
+    bytes:{subtitle:'PHYSICAL / BYTE_ARRAY · PLAIN (0)',title:'Read length, then borrow the bytes.',status:'EXACT ENCODED BYTES',description:'A PLAIN BYTE_ARRAY is a 4-byte little-endian length followed by the raw bytes. ByteArrays emits Start, borrowed Chunk slices, then End, even when one value spans multiple incoming reads.',output:'Start(6) → Chunk("France") → End',source:'src/values/plain.rs',memory:'Only a 4-byte pending length is held internally. Chunk(&[u8]) borrows the caller input and is valid only during the callback.',view:()=>'<div class="tape-caption">PLAIN UTF-8 "France" / little-endian length 6</div>'+formatTape([6,0,0,0,70,114,97,110,99,101],[4,5,6,7,8,9])+arrow+'<div class="stream-value-large">"France"</div>'},
+    delta:{subtitle:'PHYSICAL / INT32 + INT64 · DELTA_BINARY_PACKED (5)',title:'Store the changes, not each integer.',status:'SCHEMATIC VALUES',description:'A delta block records an initial value, block geometry, the minimum delta and bit-packed residuals. The decoder reconstructs values incrementally; the mini-block widths live in caller-owned scratch.',output:'[100, 101, 105, 106]',source:'src/values/delta_binary.rs',memory:'Caller provides one byte per mini-block width (commonly four bytes for a 128-value block). No vector of all decoded integers is required.',view:()=>schematic([{name:'VALUES',value:'100 · 101 · 105 · 106'},{name:'DELTAS',value:'+1 · +4 · +1'},{name:'MIN + RESIDUAL',value:'min = 1, residuals = 0 · 3 · 0'},{name:'RESTORE',value:'prefix sum → integers'}])+'<div class="tape-caption">The diagram illustrates the arithmetic, not a complete Parquet block header.</div>'},
+    'delta-length':{subtitle:'PHYSICAL / BYTE_ARRAY · DELTA_LENGTH_BYTE_ARRAY (6)',title:'Lengths first. Then raw string bytes.',status:'SCHEMATIC VALUES',description:'String lengths are themselves DELTA_BINARY_PACKED before the concatenated byte payload. A one-pass decoder needs the lengths while it consumes the bytes that follow.',output:'["dog", "trees", "X"]',source:'src/values/delta_bytes.rs',memory:'The caller supplies 4 bytes of length workspace per physical value, plus delta mini-block widths. String fragments still borrow incoming data.',view:()=>schematic([{name:'LENGTHS',value:'3 · 5 · 1'},{name:'UTF-8 BODY',value:'dogtreesX'},{name:'SLICES',value:'[dog] [trees] [X]'}])+'<div class="tape-caption">These are decoded lengths; their actual length stream is DELTA_BINARY_PACKED.</div>'},
+    'delta-prefix':{subtitle:'PHYSICAL / BYTE_ARRAY · DELTA_BYTE_ARRAY (7)',title:'Reuse a prefix from the previous value.',status:'SCHEMATIC VALUES',description:'The prefix length and suffix length streams are delta-encoded. Each string is reconstructed using the previous string prefix plus fresh suffix bytes. The decoder emits borrowed fragments.',output:'["install", "installer", "instance"]',source:'src/values/delta_bytes.rs',memory:'Caller workspace contains 8 bytes per value for prefix/suffix lengths, mini-block widths, and a bounded previous-value buffer. No per-value string allocation is required by the decoder.',view:()=>schematic([{name:'PREFIX LENGTHS',value:'0 · 7 · 3'},{name:'SUFFIXES',value:'install · er · tance'},{name:'REBUILD',value:'install → installer → instance'}])+'<div class="tape-caption">Previous-value scratch enables reconstruction without an owned String per row.</div>'}
+  };
+
+  const ROW_STAGES = [
+    {name:'STORAGE',title:'Columns live apart.',description:'Parquet is columnar: these values do not occur as a contiguous three-field record on disk. The COUNTRY column has a dictionary page and an index data page; TEMPERATURE and ACTIVE have their own data pages.'},
+    {name:'PAGE HEADERS',title:'Thrift selects the decoding path.',description:'Each page begins with a Compact-encoded PageHeader. The country data page declares RLE_DICTIONARY, temperature declares PLAIN FLOAT, and active declares PLAIN BOOLEAN. All three example columns are required, so they have no definition-level stream.'},
+    {name:'PAGE BYTES',title:'Read the encoded bytes.',description:'The sample bodies are uncompressed so the byte tapes below are exact Parquet value bytes. The same decoders would receive decompressed fragments if an actual page used raw Snappy.'},
+    {name:'DECODE',title:'Three independent value decoders.',description:'Country yields a numeric dictionary ID. Temperature reads four little-endian IEEE-754 bytes. Active selects one bit from its bit-packed byte. There is no row object inside any of these decoders.'},
+    {name:'RESOLVE',title:'Align by row position, resolve the ID.',description:'The caller looks up the country ID in its dictionary and associates all three typed values with the same logical row ordinal. The page decoder itself emits a DictionaryId, not an allocated UTF-8 string.'},
+    {name:'ROW',title:'The record emerges at the consumer.',description:'Only now does the logical row exist in this demonstration. A real vectorised query can consume the decoded columns directly, without allocating a row-shaped JavaScript or Rust object for every input record.'}
+  ];
+
+  const state={layout:'v1',segment:'header',encoding:'float',row:4,step:2,playTimer:null};
+  function renderAnatomy(){
+    const model=LAYOUTS[state.layout];
+    if(!model.segments.some(s=>s.id===state.segment))state.segment=model.segments[0].id;
+    const selected=model.segments.find(s=>s.id===state.segment);
+    byId('anatomy-summary').textContent=model.summary;
+    byId('anatomy-strip').innerHTML=model.segments.map((s,i)=>`<button class="anatomy-block ${s.id===state.segment?'is-active':''}" style="--grow:${s.grow}" type="button" data-page-segment="${s.id}" data-tone="${s.tone}" aria-pressed="${s.id===state.segment}"><span class="anatomy-block-count">0${i+1}</span><strong>${html(s.title)}</strong><small>${html(s.hint)}</small></button>`).join('');
+    byId('anatomy-kind').textContent=selected.label.toUpperCase();
+    byId('anatomy-title').textContent=selected.title;
+    byId('anatomy-description').textContent=selected.description;
+    byId('anatomy-source').textContent=selected.source;
+    byId('anatomy-memory').textContent=selected.memory;
+    document.querySelectorAll('[data-layout]').forEach(btn=>{const on=btn.dataset.layout===state.layout;btn.classList.toggle('is-active',on);btn.setAttribute('aria-pressed',String(on));});
+  }
+  function renderEncoding(){
+    const e=ENCODINGS[state.encoding];
+    byId('encoding-subtitle').textContent=e.subtitle;byId('encoding-title').textContent=e.title;
+    byId('encoding-status').textContent=e.status;byId('encoding-description').textContent=e.description;
+    byId('encoding-visual').innerHTML=e.view();
+    byId('encoding-output').textContent=e.output;byId('encoding-source').textContent=e.source;
+    byId('encoding-memory').textContent=e.memory;
+    document.querySelectorAll('[data-encoding]').forEach(btn=>{const on=btn.dataset.encoding===state.encoding;btn.classList.toggle('is-active',on);btn.setAttribute('aria-pressed',String(on));});
+  }
+
+  function rowObject(index){return {country:parsedDict[parsedIds[index]],temperature_c:parsedFloats[index],active:parsedBooleans[index]};}
+  function rowPreview(index){
+    const record=rowObject(index),id=parsedIds[index];
+    if(state.step<3)return {country:'[encoded bytes]',temperature_c:'[encoded bytes]',active:'[encoded bits]'};
+    if(state.step===3)return {country:{dictionary_id:id},temperature_c:record.temperature_c,active:record.active};
+    return record;
+  }
+  function rowCard(type){
+    const i=state.row,step=state.step,id=parsedIds[i];
+    const labels={country:['COUNTRY','BYTE_ARRAY','DICTIONARY','D'],float:['TEMPERATURE','FLOAT32','PLAIN','f'],bool:['ACTIVE','BOOLEAN','PLAIN','b']};
+    const key=type==='country'?'country':type;
+    const [name,physical,encoding,glyph]=labels[key];
+    const modeClass=key==='float'?'tone-float':key==='bool'?'tone-bool':'';
+    const typeInfo=key==='country'?'DATA_PAGE / RLE_DICTIONARY':key==='float'?'DATA_PAGE / PLAIN FLOAT':'DATA_PAGE / PLAIN BOOLEAN';
+    let label='',visual='',description='',outcome='AWAITING DECODE';
+    if(step===0){
+      label='STORAGE LAYOUT';
+      if(key==='country'){visual=chips(['Dictionary page','Data page']);description='The dictionary values and packed indices are in separate pages of one column chunk.';}
+      if(key==='float'){visual=chips(['FLOAT × 8','4 bytes each']);description='Eight float values, placed consecutively in the temperature column page.';}
+      if(key==='bool'){visual=chips(['BOOLEAN × 8','1 packed byte']);description='Eight boolean values, packed into one byte in the active column page.';}
+    }else if(step===1){
+      label='HEADER DECISION';
+      visual=chips(key==='country'?['DICTIONARY_PAGE / PLAIN',typeInfo]:[typeInfo,'8 values','UNCOMPRESSED']);
+      description='Compact PageHeader identifies the page type, physical encoding, value count and compressed sizes.';
+    }else if(step===2){
+      label='EXACT PAGE BYTES';
+      if(key==='country'){
+        visual='<div class="tape-caption">DATA PAGE / WIDTH · RUN · PACKED IDs</div>'+formatTape(dictData,[2+(i*2>>>3)])+'<div class="tape-caption">DICTIONARY PAGE / selected value: '+html(parsedDict[id])+'</div>'+formatTape(dictionaryBytes,(()=>{let start=0;for(let n=0;n<id;n++)start+=4+utf8.encode(parsedDict[n]).length;return Array.from({length:4+utf8.encode(parsedDict[id]).length},(_,n)=>start+n);})());
+        description='Bit-width 2, one 8-value packed run. A separate PLAIN dictionary page holds the UTF-8 strings.';
+      }
+      if(key==='float'){
+        visual='<div class="tape-caption">32 BYTES / SELECTED FLOAT = ROW '+i+'</div>'+formatTape(plainFloats,Array.from({length:4},(_,n)=>i*4+n));description='The selected four bytes form a little-endian float32. All values are contiguous within this page.';
+      }
+      if(key==='bool'){
+        visual='<div class="tape-caption">ONE BYTE / ALL 8 VALUES</div>'+formatTape(plainBoolean,[0])+'<div class="stream-bit-row">'+parsedBooleans.map((v,n)=>`<span class="${n===i?'mark':''}">${+v}<small>${n}</small></span>`).join('')+'</div>';
+        description='The highlighted bit is the selected row position. BOOLEAN PLAIN is LSB-first.';
+      }
+    }else if(step===3){
+      label='RUST VALUE DECODER';
+      if(key==='country'){visual=schematic([{name:'HybridRle',value:`bit width 2 · row ${i}`},{name:'DictionaryIds',value:`DictionaryId(${id})`}]);description='src/values/rle.rs returns the numeric index. It does not allocate or expand strings.';outcome=`DictionaryId(${id})`;}
+      if(key==='float'){visual=schematic([{name:'PlainValues<f32>',value:Array.from(plainFloats.slice(i*4,i*4+4)).map(hex2).join(' ')},{name:'Value::F32',value:String(parsedFloats[i])}]);description='A 4-byte LE conversion yields a typed scalar.';outcome=`F32(${parsedFloats[i]})`;}
+      if(key==='bool'){visual=schematic([{name:'PlainBool',value:`(0x${hex2(plainBoolean[0])} >> ${i}) & 1`},{name:'Value::Boolean',value:String(parsedBooleans[i])}]);description='The decoder extracts a single bit and advances the row ordinal.';outcome=`Boolean(${parsedBooleans[i]})`;}
+    }else{
+      label=step===4?'CALLER-SIDE ALIGNMENT':'RECONSTRUCTED VALUE';
+      const value=key==='country'?parsedDict[id]:key==='float'?parsedFloats[i]:parsedBooleans[i];
+      if(key==='country')visual=schematic([{name:`DictionaryId(${id})`,value:'borrowed numeric index'},{name:`dictionary[${id}]`,value:JSON.stringify(value)}]);
+      if(key==='float')visual='<div class="stream-value-large blue">'+value+'<span style="font-size:11px;color:#7598b1"> °C</span></div>';
+      if(key==='bool')visual='<div class="stream-value-large amber">'+String(value).toUpperCase()+'</div>';
+      description=key==='country'?'The caller resolves the ID using its retained dictionary. The page decoder itself emitted only the index.':'This scalar is associated with the same logical row number as the other columns.';
+      outcome=JSON.stringify(value);
+    }
+    return `<article class="stream-card ${modeClass}" aria-label="${name} decoder"><div class="stream-card-head"><div><span class="stream-glyph">${glyph}</span><div><strong>${name}</strong><small>${physical} / ${encoding}</small></div></div><span class="stream-number">COL ${key==='country'?'00':key==='float'?'01':'02'}</span></div><div class="stream-stage-label">${label}</div><div class="stream-visual">${visual}</div><p class="stream-desc">${description}</p><div class="stream-outcome"><span class="tiny-label">${step<3?'DECODE STATUS':'EMITTED VALUE'}</span><strong>${html(outcome)}</strong></div></article>`;
+  }
+  function renderRows(){
+    byId('row-picker-body').innerHTML=DATA.country.map((name,index)=>`<tr tabindex="0" role="button" aria-label="Select row ${index}" aria-selected="${index===state.row}" class="${index===state.row?'is-selected':''}" data-row="${index}"><td>${String(index).padStart(2,'0')}</td><td>${html(name)}</td><td>${DATA.temp[index].toFixed(2)}</td><td>${DATA.active[index]?'true':'false'}</td></tr>`).join('');
+    byId('row-stages').innerHTML=ROW_STAGES.map((st,index)=>`<button type="button" data-row-step="${index}" class="${state.step===index?'is-active':index<state.step?'is-complete':''}" aria-pressed="${state.step===index}"><span>0${index+1}</span><strong>${html(st.name)}</strong></button>`).join('');
+    const st=ROW_STAGES[state.step];
+    byId('row-stage-index').textContent=`0${state.step+1} / 0${ROW_STAGES.length}`;
+    byId('row-stage-title').textContent=st.title;byId('row-stage-description').textContent=st.description;
+    byId('row-streams').innerHTML=rowCard('country')+rowCard('float')+rowCard('bool');
+    byId('merge-row-index').textContent=String(state.row).padStart(2,'0');
+    byId('row-json').textContent=JSON.stringify(rowPreview(state.row),null,2);
+    byId('row-result-note').textContent=state.step<3?'The selected row is not a contiguous record in the file; the physical values have not been decoded yet.':state.step===3?'Values are decoded. The country is still only a dictionary ID; resolving that ID is a caller responsibility.':'The consumer aligns decoded values by row position. In WCOL the query engine can process columnar values without allocating a row object per record.';
+    byId('row-prev').disabled=state.step===0;
+    byId('row-next').disabled=state.step===ROW_STAGES.length-1;
+    byId('row-play').textContent=state.playTimer?'Ⅱ PAUSE':'▶ PLAY';
+  }
+  function stopPlayback(){if(state.playTimer!==null){clearInterval(state.playTimer);state.playTimer=null;}renderPlay();}
+  function renderPlay(){byId('row-play').textContent=state.playTimer?'Ⅱ PAUSE':'▶ PLAY';}
+  function setStage(index){state.step=Math.max(0,Math.min(ROW_STAGES.length-1,index));renderRows();if(state.step===ROW_STAGES.length-1)stopPlayback();}
+  function play(){
+    if(state.playTimer!==null){stopPlayback();return;}
+    if(state.step===ROW_STAGES.length-1)state.step=0;
+    state.playTimer=setInterval(()=>{if(state.step<ROW_STAGES.length-1)setStage(state.step+1);else stopPlayback();},1200);
+    renderRows();
+  }
+  function bind(){
+    byId('anatomy-switch').addEventListener('click',e=>{const btn=e.target.closest('[data-layout]');if(!btn)return;state.layout=btn.dataset.layout;state.segment=LAYOUTS[state.layout].segments[0].id;renderAnatomy();});
+    byId('anatomy-strip').addEventListener('click',e=>{const btn=e.target.closest('[data-page-segment]');if(!btn)return;state.segment=btn.dataset.pageSegment;renderAnatomy();});
+    byId('encoding-options').addEventListener('click',e=>{const btn=e.target.closest('[data-encoding]');if(!btn)return;state.encoding=btn.dataset.encoding;renderEncoding();});
+    const chooseRow=target=>{const tr=target.closest('[data-row]');if(!tr)return;stopPlayback();state.row=Number(tr.dataset.row);renderRows();};
+    byId('row-picker-body').addEventListener('click',e=>chooseRow(e.target));
+    byId('row-picker-body').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseRow(e.target);}});
+    byId('row-stages').addEventListener('click',e=>{const btn=e.target.closest('[data-row-step]');if(!btn)return;stopPlayback();setStage(Number(btn.dataset.rowStep));});
+    byId('row-prev').addEventListener('click',()=>{stopPlayback();setStage(state.step-1);});
+    byId('row-next').addEventListener('click',()=>{stopPlayback();setStage(state.step+1);});
+    byId('row-play').addEventListener('click',play);
+    byId('row-copy').addEventListener('click',async()=>{
+      const text=JSON.stringify(rowObject(state.row),null,2);
+      try{
+        if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);}
+        else {const el=document.createElement('textarea');el.value=text;el.style.position='fixed';el.style.left='-9999px';document.body.append(el);el.select();if(!document.execCommand('copy'))throw Error('Clipboard access unavailable');el.remove();}
+        byId('row-copy').textContent='COPIED ✓';setTimeout(()=>{if(byId('row-copy'))byId('row-copy').textContent='COPY JSON ↗';},1800);
+      }catch(e){byId('row-copy').textContent='COPY FAILED';setTimeout(()=>{if(byId('row-copy'))byId('row-copy').textContent='COPY JSON ↗';},1800);}
+    });
+  }
+  function init(){renderAnatomy();renderEncoding();renderRows();bind();
+    window.__WCOL_PARQUET_DEBUG__={
+      getState:()=>({layout:state.layout,encoding:state.encoding,row:state.row,step:state.step}),
+      getDecoded:()=>({dictionary:parsedDict,ids:parsedIds,floats:parsedFloats,booleans:parsedBooleans}),
+      getEncoded:()=>({dictionary:Array.from(dictionaryBytes),indices:Array.from(dictData),floats:Array.from(plainFloats),booleans:Array.from(plainBoolean)}),
+      decodeHybridDictionaryIds:readHybridDictionaryIds
+    };
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+
+</script>
+</head>
+<body data-chapter="03">
+  <div class="glow-backdrop" aria-hidden="true"></div>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="index.html" aria-label="WCOL systems explainers home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></span><strong>wcol<span>/</span></strong><span class="brand-rule"></span><span class="brand-sub">CHAPTER 03</span></a>
+      <nav class="topnav" aria-label="On this page">
+        <a href="#file">FILE</a><a href="#wire">THRIFT</a><a href="#memory">MEMORY</a><a href="#pages">PAGE PIPELINE</a><a href="#decoding">ENCODINGS</a><a href="#row">A ROW</a>
+      </nav>
+      <div class="header-links"><span class="signal-dot"></span><span class="chapter-number">PARQUET</span></div>
+    </div>
+  </header>
+
+  <main id="top" class="shell">
+    <section class="hero" aria-labelledby="hero-heading">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="eyebrow-star">✳</span> CHAPTER 03 <span class="eyebrow-muted">/ PARQUET DECODE</span></div>
+        <h1 id="hero-heading">Read the bytes.<br><span>Skip the objects.</span></h1>
+        <p>Every Parquet file carries a compact map of its own data. We walk the Thrift metadata without building object trees, decode column pages incrementally, then reconstruct real values from dictionary IDs, float bytes and boolean bits.</p>
+        <div class="hero-actions"><a class="button-primary" href="#wire">STEP THROUGH THE BYTES <span>↘</span></a><a class="button-link" href="#memory">SEE THE MEMORY MODEL <span>↗</span></a></div>
+      </div>
+      <div class="hero-art" aria-label="Conceptual metadata cursor drawing">
+        <div class="art-top"><span>READER&lt;'a&gt;</span><span class="art-live"><i></i> BORROWED BYTES</span></div>
+        <div class="art-grid" aria-hidden="true">
+          <span class="art-byte">15</span><span class="art-byte">02</span><span class="art-byte">19</span><span class="art-byte">2C</span><span class="art-byte is-lit">16</span><span class="art-byte is-lit">80</span><span class="art-byte is-lit">10</span><span class="art-byte">00</span>
+          <div class="art-cursor"><span>↑</span><small>offset</small></div>
+        </div>
+        <div class="art-bottom"><span>input: &amp;[u8]</span><span>offset: usize</span><span>heap allocations: <b>0</b></span></div>
+      </div>
+    </section>
+
+    <section class="stat-strip" aria-label="Design properties">
+      <div><strong>8 <small>BYTES</small></strong><span>locate the footer</span></div>
+      <div><strong>0 <small>HEAP ALLOCS</small></strong><span>inside the Thrift codec</span></div>
+      <div><strong>64 <small>LEVELS</small></strong><span>default recursion limit</span></div>
+      <div><strong>NO_STD</strong><span>safe Rust, no dependencies</span></div>
+    </section>
+
+    <section class="thrift-definition" aria-label="What is Apache Thrift and why is it in Parquet?">
+      <article><div class="definition-kicker">BEFORE THE BYTES / 01</div><h2>What is Thrift?</h2><p>Apache Thrift is an interface-definition language and a family of serialisation protocols. A schema gives each field a number and a type; <em>Compact Protocol</em> packs that information into small binary structures.</p><div class="definition-code">struct FileMetaData { <span>1: i32 version</span>; … }</div></article>
+      <article><div class="definition-kicker">BEFORE THE BYTES / 02</div><h2>Why does Parquet use it?</h2><p>Parquet defines metadata in <code>parquet.thrift</code> and stores its Compact-encoded form in file footers and page headers. It uses Thrift as a <strong>file format encoding</strong>—not for network RPC, and not for the encoded column values.</p><div class="definition-code">parquet.thrift <span>→</span> Compact bytes <span>→</span> footer</div></article>
+    </section>
+
+    <section id="file" class="chapter" aria-labelledby="file-heading">
+      <div class="chapter-intro"><div class="chapter-index">01 / THE FILE</div><div><h2 id="file-heading">The last eight bytes tell you where to look.</h2><p>Parquet stores the serialized <code>FileMetaData</code> near the end of the object. You can locate it with two small range reads instead of downloading the whole dataset.</p></div></div>
+      <div class="file-layout panel">
+        <div class="panel-heading"><div><span class="panel-number">01A</span><h3>Dissect a Parquet object</h3></div><span class="panel-pill">ILLUSTRATIVE FILE · 1 MiB</span></div>
+        <div class="file-main">
+          <div class="file-left">
+            <div class="file-ruler"><span>BYTE 0</span><span>FILE SIZE: 1,048,576 BYTES</span><span>EOF</span></div>
+            <div class="file-blocks" role="group" aria-label="Parquet file regions">
+              <button class="file-region magic is-selected" type="button" data-region="magic" aria-pressed="true">PAR1</button>
+              <button class="file-region pages" type="button" data-region="pages" aria-pressed="false"><span>DATA PAGES · COLUMN CHUNKS</span><small>compressed data</small></button>
+              <button class="file-region footer" type="button" data-region="footer" aria-pressed="false"><span>THRIFT</span><small>metadata</small></button>
+              <button class="file-region length" type="button" data-region="length" aria-pressed="false">LEN</button>
+              <button class="file-region magic" type="button" data-region="tail" aria-pressed="false">PAR1</button>
+            </div>
+            <div class="file-region-detail" id="file-region-detail"><div class="mini-label">SELECTED REGION <span>0…3</span></div><strong>PAR1 — opening magic</strong><p>The opening four bytes identify a standard unencrypted Parquet file. The footer locator checks the final four bytes separately.</p></div>
+            <div class="file-slider-header"><label for="footer-size">Try a different metadata size</label><output id="footer-size-out">2,048 B</output></div>
+            <input id="footer-size" type="range" min="256" max="8192" step="256" value="2048" aria-label="Footer length in bytes">
+            <div class="slider-ends"><span>256 B</span><span>8,192 B</span></div>
+          </div>
+          <div class="file-steps">
+            <div class="aside-label">R2 RANGE REQUESTS</div>
+            <div class="fetch-step"><span class="fetch-num">01</span><div><strong>Read the trailer</strong><code id="trailer-range">bytes=1048568-1048575</code><small>4-byte little-endian footer length + PAR1</small></div></div>
+            <div class="fetch-line"></div>
+            <div class="fetch-step"><span class="fetch-num">02</span><div><strong>Fetch only the footer</strong><code id="footer-range">bytes=1046520-1048567</code><small id="footer-size-explain">2,048 bytes, held by the transport</small></div></div>
+            <div class="fetch-line"></div>
+            <div class="fetch-step"><span class="fetch-num">03</span><div><strong>Visit fields in-place</strong><code>scan_footer(&amp;bytes, visitor)</code><small>Offsets, compression, row groups and statistics</small></div></div>
+            <div class="fetch-foot"><span class="signal-dot"></span> THE CODEC DOES NOT OWN THE FOOTER BUFFER</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="wire" class="chapter" aria-labelledby="wire-heading">
+      <div class="chapter-intro"><div class="chapter-index">02 / THE WIRE</div><div><h2 id="wire-heading">Thrift Compact is a tiny bytecode for metadata.</h2><p>Apache Thrift defines typed fields and a compact binary encoding. Parquet uses its <strong>Compact Protocol</strong> to store file metadata and page headers. Step through the actual wire rules—not a screenshot of a parser.</p></div></div>
+      <div class="wire-layout">
+        <aside class="panel wire-controls">
+          <div class="panel-heading"><div><span class="panel-number">02A</span><h3>Feed the reader</h3></div><span class="panel-pill">EXPERIMENT</span></div>
+          <div class="controls-body">
+            <div class="control-label">COMPACT PROTOCOL EXAMPLES</div>
+            <div class="sample-buttons" id="sample-buttons" role="group" aria-label="Thrift examples">
+              <button type="button" data-sample="simple" class="is-active" aria-pressed="true"><b>Simple struct</b><small>Varints · booleans · bytes</small></button>
+              <button type="button" data-sample="footer" aria-pressed="false"><b>Parquet footer</b><small>Nested structs · lists</small></button>
+              <button type="button" data-sample="page" aria-pressed="false"><b>Page header V2</b><small>Nested page metadata</small></button>
+            </div>
+            <div class="sample-about" id="sample-about">An invented four-field struct, encoded using the actual Compact Protocol rules.</div>
+            <div class="control-label space-top">INJECT A PROTOCOL ERROR</div>
+            <div class="toggle-row" id="corruption-controls" role="group" aria-label="Wire errors">
+              <button type="button" data-corrupt="clean" class="is-active" aria-pressed="true">Clean</button><button type="button" data-corrupt="truncated" aria-pressed="false">Truncate</button><button type="button" data-corrupt="type" aria-pressed="false">Bad type</button>
+            </div>
+            <button class="toggle-hex" type="button" id="edit-hex-toggle" aria-expanded="false">EDIT RAW HEX <span>+</span></button>
+            <div id="custom-hex-wrap" class="custom-hex" hidden><label for="custom-hex">Replace example bytes (hex, spaces optional)</label><textarea id="custom-hex" spellcheck="false" rows="4" aria-label="Custom Compact Protocol hexadecimal bytes"></textarea><div class="hex-actions"><button id="apply-hex" type="button" class="button-small">PARSE INPUT ↗</button><button id="restore-hex" type="button" class="button-minimal">RESTORE SAMPLE</button></div></div>
+            <div class="control-separator"></div>
+            <div class="control-label">DECODER CLOCK <span id="step-counter">0 / 0</span></div>
+            <div class="timeline-track" aria-hidden="true"><div id="step-progress"></div></div>
+            <div class="clock-controls"><button id="step-back" type="button" aria-label="Previous step" title="Previous step">←</button><button id="step-forward" type="button" aria-label="Next step" title="Next step">→</button><button id="play-steps" class="button-primary" type="button"><span id="play-symbol">▶</span> <span id="play-text">PLAY DECODE</span></button><button id="reset-steps" type="button" aria-label="Reset" title="Reset">↺</button></div>
+            <div class="control-note"><span class="signal-dot"></span> CLICK ANY HEX BYTE TO INSPECT ITS FIELD</div>
+          </div>
+        </aside>
+        <div class="wire-right">
+          <section class="panel bytes-panel" aria-label="Live Thrift byte explorer">
+            <div class="panel-heading"><div><span class="panel-number">02B</span><h3>Byte-level view</h3></div><div class="panel-controls"><span id="buffer-length">0 BYTES</span><span class="decode-status" id="decode-status">VALID STRUCT</span></div></div>
+            <div class="hex-legend"><span><i class="legend-header"></i> FIELD HEADER</span><span><i class="legend-length"></i> LENGTH / LIST</span><span><i class="legend-value"></i> VALUE</span><span><i class="legend-stop"></i> STOP</span></div>
+            <div class="hex-table" id="hex-table" role="group" aria-label="Clickable Thrift hexadecimal bytes"></div>
+            <div class="byte-status"><span>BUFFER OWNED BY CALLER</span><span id="byte-offset">READER OFFSET 0</span></div>
+          </section>
+          <div class="wire-bottom">
+            <section class="panel decode-panel" aria-label="Current decoder step">
+              <div class="panel-heading"><div><span class="panel-number">02C</span><h3>What the cursor sees</h3></div><span class="panel-pill" id="decode-step-type">AWAITING STEP</span></div>
+              <div class="decode-content" id="decode-content"><h4>Select a byte or press Next.</h4><p>The reader advances over a borrowed <code>&amp;[u8]</code> and never constructs a complete generated Thrift object graph.</p></div>
+              <div class="bit-explainer" id="bit-explainer"><div class="nibble"><small>HIGH 4 BITS</small><strong>----</strong><span>field-ID delta</span></div><div class="nibble"><small>LOW 4 BITS</small><strong>----</strong><span>wire type</span></div></div>
+            </section>
+            <section class="panel event-panel" aria-label="Decoded fields and byte events">
+              <div class="panel-heading"><div><span class="panel-number">02D</span><h3>Decode trace</h3></div><span class="panel-pill">CLICK A STEP</span></div>
+              <div class="trace-list" id="trace-list"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+      <div class="wire-cards"><article><div class="concept-kicker">FIELD HEADERS</div><h3>Two nibbles, one byte.</h3><p>The high nibble is the delta from the previous field ID; the low nibble identifies the wire type. A delta of zero means an explicit field ID follows.</p></article><article><div class="concept-kicker">SIGNED INTEGERS</div><h3>Zigzag, then varint.</h3><p>Negative and positive integers become small unsigned numbers before LEB128-style variable-length encoding. <code>−1 → 1</code>, <code>1 → 2</code>.</p></article><article><div class="concept-kicker">NESTED STRUCTS</div><h3>Field IDs reset per scope.</h3><p>Every nested struct has its own delta context. The reader uses a scoped cursor, not a heap-allocated object tree or a heap-allocated nesting stack.</p></article></div>
+      <div class="wire-footnote"><span class="signal-dot"></span> THE INTERACTIVE DECODER IS A JAVASCRIPT TEACHING MODEL. ZERO HEAP ALLOCATIONS REFERS TO THE RUST COMPACT METADATA CODEC IN THE UPLOADED SOURCE.</div>
+    </section>
+
+    <section id="memory" class="chapter" aria-labelledby="memory-heading">
+      <div class="chapter-intro"><div class="chapter-index">03 / OWNERSHIP</div><div><h2 id="memory-heading">No generated metadata tree. No parser heap.</h2><p>The input footer already exists as bytes in the transport's buffer. WCOL holds a borrowed slice, advances an offset, and emits a temporary view of each interesting column to a callback.</p></div></div>
+      <div class="memory-panel panel">
+        <div class="panel-heading"><div><span class="panel-number">03A</span><h3>Two ways to inspect metadata</h3></div><span class="panel-pill">MODEL · NOT A BENCHMARK</span></div>
+        <div class="memory-main">
+          <div class="memory-controls">
+            <div class="comparison-switch" role="group" aria-label="Memory parsing approach"><button type="button" data-memory-mode="visitor" class="is-active" aria-pressed="true">WCOL VISITOR</button><button type="button" data-memory-mode="objects" aria-pressed="false">GENERATED OBJECT GRAPH</button></div>
+            <div class="memory-controls-inner">
+              <div class="slider-heading"><label for="row-group-count">Row groups</label><output id="row-group-output">8</output></div><input id="row-group-count" type="range" min="1" max="64" value="8" step="1"><div class="slider-heading second-slider"><label for="column-count">Columns per row group</label><output id="column-output">24</output></div><input id="column-count" type="range" min="2" max="128" value="24" step="2">
+              <div class="memory-metrics"><div><span>POTENTIAL COLUMN CHUNKS</span><strong id="chunk-count">192</strong></div><div><span>METADATA GRAPH OBJECTS</span><strong id="object-count">0</strong></div></div>
+              <p id="memory-narrative">The same borrowed footer is visited column by column. The codec does not allocate metadata objects. The application can choose whether to retain each result.</p>
+            </div>
+          </div>
+          <div class="memory-viz">
+            <div class="memory-viz-head"><span>MEMORY OWNERSHIP</span><span id="memory-mode-title">BORROWED + VISITED</span></div>
+            <div class="ownership-flow" id="ownership-flow"></div>
+            <div class="ownership-bottom"><span class="signal-dot"></span><span>FOOTER BUFFER IS REAL MEMORY, OWNED OUTSIDE THE CODEC</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="code-explainer panel">
+        <div class="panel-heading"><div><span class="panel-number">03B</span><h3>How the Rust API does it</h3></div><div class="code-tabs" role="group" aria-label="Rust source samples"><button type="button" class="is-active" data-code="reader" aria-pressed="true">Reader</button><button type="button" data-code="visitor" aria-pressed="false">Visitor</button><button type="button" data-code="writer" aria-pressed="false">Writer</button></div></div>
+        <div class="code-body"><pre id="source-code" class="source-code"></pre><aside><div class="source-path" id="source-path">src/reader.rs</div><h4 id="source-title">One cursor, borrowed input.</h4><p id="source-description">Reader holds a borrowed slice, offset and nesting counters. It never allocates or takes ownership of the bytes.</p><div class="source-facts" id="source-facts"></div></aside></div>
+      </div>
+      <div class="memory-caveat"><b>STACK IS NOT HEAP.</b> For row groups up to 512 columns, <code>scan_footer</code> uses a fixed inline stack array of <code>ColumnChunkInfo</code>. Wider groups take a bounded rewind-and-visit path rather than building a heap collection. The codec still requires the footer to be available as a contiguous borrowed slice.</div>
+    </section>
+
+    <section id="pages" class="chapter" aria-labelledby="pages-heading">
+      <div class="chapter-intro"><div class="chapter-index">04 / THE BOUNDARY</div><div><h2 id="pages-heading">Thrift describes the pages. It doesn't decode them.</h2><p>The same Compact Protocol is used for Parquet page headers. The compressed page payloads use separate Parquet encodings and codecs. WCOL deliberately keeps these layers apart.</p></div></div>
+      <div class="page-panel panel">
+        <div class="panel-heading"><div><span class="panel-number">04A</span><h3>Follow a column page</h3></div><span class="panel-pill">SELECT A STAGE</span></div>
+        <div class="pipeline" id="pipeline" role="group" aria-label="Parquet page decoding pipeline"><button data-stage="range" type="button" class="is-active" aria-pressed="true"><span class="pipeline-id">01</span><strong>R2 RANGE</strong><small>bytes arrive</small></button><span class="pipeline-arrow">→</span><button data-stage="header" type="button" aria-pressed="false"><span class="pipeline-id">02</span><strong>THRIFT HEADER</strong><small>PageHeader</small></button><span class="pipeline-arrow">→</span><button data-stage="inflate" type="button" aria-pressed="false"><span class="pipeline-id">03</span><strong>DECOMPRESS</strong><small>Snappy / codec</small></button><span class="pipeline-arrow">→</span><button data-stage="values" type="button" aria-pressed="false"><span class="pipeline-id">04</span><strong>PARQUET VALUES</strong><small>PLAIN · RLE · DELTA</small></button></div>
+        <div class="stage-inspector"><div class="stage-details"><div class="stage-kicker" id="stage-kicker">01 / I/O</div><h3 id="stage-title">Transport supplies the bytes.</h3><p id="stage-description">An R2 or S3 range request supplies a slice of the object. The transport owns the input and the limits on how much is buffered.</p><div id="stage-tags" class="stage-tags"></div></div><div class="stage-visual" id="stage-visual"></div></div>
+      </div>
+      <div class="boundary-notes"><div><span class="boundary-num">01 / NOT MAGIC</span><h3>Allocation-free codec ≠ no memory.</h3><p>Footer bytes must be buffered contiguously for the current metadata parser. Streaming page decoders may need caller-owned scratch, presence bitmaps and decompression history.</p></div><div><span class="boundary-num">02 / DEFENSIVE</span><h3>Untrusted input needs limits.</h3><p>Depth is bounded (64 by default); offsets, tags and varints are checked. Global footer-size and collection-count limits belong to the caller.</p></div><div><span class="boundary-num">03 / FORWARD COMPATIBLE</span><h3>Skip fields you don't need.</h3><p>The parser can recursively skip unknown values or borrow their raw encoded bytes for rewriting. No full schema-generated object model is required.</p></div></div>
+    </section>
+
+    <section id="decoding" class="chapter decoding-chapter" aria-labelledby="decoding-heading">
+      <div class="chapter-intro"><div class="chapter-index">05 / THE DECODERS</div><div><h2 id="decoding-heading">A page is a pipeline, not a blob.</h2><p>The Thrift <code>PageHeader</code> only tells us <em>how</em> the next bytes are encoded. The actual values pass through a separate, incremental decoder. These are the paths implemented by the uploaded <code>compact-parquet-thrift</code> crate.</p></div></div>
+      <div class="decoder-support-key"><span class="support-chip"><i></i> IMPLEMENTED IN THE SUPPLIED CRATE</span><span class="support-label">FLAT COLUMNS · V1 + V2 · BORROWED INPUT · CALLER-OWNED SCRATCH</span></div>
+
+      <div class="panel anatomy-panel">
+        <div class="panel-heading"><div><span class="panel-number">05A</span><h3>What actually sits inside a page?</h3></div><span class="panel-pill">SELECT A LAYOUT</span></div>
+        <div class="anatomy-head">
+          <div class="anatomy-switch" id="anatomy-switch" role="group" aria-label="Parquet page layout">
+            <button type="button" data-layout="v1" class="is-active" aria-pressed="true">DATA PAGE V1</button>
+            <button type="button" data-layout="v2" aria-pressed="false">DATA PAGE V2</button>
+            <button type="button" data-layout="dict" aria-pressed="false">DICTIONARY PAGE</button>
+          </div>
+          <p id="anatomy-summary">In V1, an optional column's definition levels and encoded values are compressed together as one page body.</p>
+        </div>
+        <div class="anatomy-ruler"><span>PARQUET COLUMN CHUNK</span><span>BYTE ORDER →</span></div>
+        <div class="anatomy-strip" id="anatomy-strip" role="group" aria-label="Click a region of the page"></div>
+        <div class="anatomy-inspector">
+          <div><span class="tiny-label" id="anatomy-kind">SELECTED SEGMENT</span><h4 id="anatomy-title">Thrift PageHeader</h4><p id="anatomy-description">The page header tells the decoder which encoding and compression path follows.</p></div>
+          <div class="anatomy-inspector-side"><span class="tiny-label">SOURCE PATH</span><code id="anatomy-source">src/pages/frame.rs</code><span class="tiny-label">ALLOCATION MODEL</span><span id="anatomy-memory">Caller-owned header scratch</span></div>
+        </div>
+        <div class="anatomy-footer"><span class="signal-dot"></span> PAGE V2 CAN LEAVE LEVELS UNCOMPRESSED; THRIFT HEADERS REMAIN OUTSIDE THE COMPRESSED BODY.</div>
+      </div>
+
+      <div class="panel encoding-panel">
+        <div class="panel-heading"><div><span class="panel-number">05B</span><h3>Explore the physical encodings</h3></div><span class="panel-pill">REAL BYTES WHERE SHOWN · OTHERWISE SCHEMATIC</span></div>
+        <div class="encoding-grid">
+          <aside class="encoding-options" id="encoding-options" role="group" aria-label="Choose a supported Parquet encoding">
+            <button type="button" data-encoding="float" class="is-active" aria-pressed="true"><span class="enc-option-code">PLAIN</span><strong>Float / integer</strong><small>Fixed-width, little-endian</small></button>
+            <button type="button" data-encoding="bool" aria-pressed="false"><span class="enc-option-code">PLAIN</span><strong>Boolean bits</strong><small>Eight values per byte</small></button>
+            <button type="button" data-encoding="dictionary" aria-pressed="false"><span class="enc-option-code">RLE_DICTIONARY</span><strong>Dictionary IDs</strong><small>Bit width + hybrid runs</small></button>
+            <button type="button" data-encoding="rle" aria-pressed="false"><span class="enc-option-code">RLE / BIT-PACKED</span><strong>Definition levels</strong><small>Nullable row alignment</small></button>
+            <button type="button" data-encoding="bytes" aria-pressed="false"><span class="enc-option-code">PLAIN</span><strong>Byte arrays</strong><small>Length + borrowed chunks</small></button>
+            <button type="button" data-encoding="delta" aria-pressed="false"><span class="enc-option-code">DELTA_BINARY_PACKED</span><strong>Delta integers</strong><small>Mini-block residuals</small></button>
+            <button type="button" data-encoding="delta-length" aria-pressed="false"><span class="enc-option-code">DELTA_LENGTH_BYTE_ARRAY</span><strong>Delta-length strings</strong><small>Lengths before strings</small></button>
+            <button type="button" data-encoding="delta-prefix" aria-pressed="false"><span class="enc-option-code">DELTA_BYTE_ARRAY</span><strong>Prefix-compressed strings</strong><small>Previous-value scratch</small></button>
+          </aside>
+          <div class="encoding-workspace">
+            <div class="encoding-head"><div><span class="tiny-label" id="encoding-subtitle">PHYSICAL / FLOAT · PLAIN</span><h4 id="encoding-title">Four bytes become one number.</h4></div><span class="encoding-status" id="encoding-status">EXACT ENCODED BYTES</span></div>
+            <p id="encoding-description" class="encoding-desc">A FLOAT value is represented by four IEEE-754 little-endian bytes. The Rust decoder reads borrowed input and emits <code>Value::F32</code>.</p>
+            <div class="encoding-visual" id="encoding-visual"></div>
+            <div class="encoding-outcome"><span class="tiny-label">DECODER OUTPUT</span><strong id="encoding-output">Value::F32(22.0)</strong><code id="encoding-source">src/values/plain.rs</code></div>
+            <div class="encoding-foot"><span class="tiny-label">MEMORY OWNERSHIP</span><p id="encoding-memory">No per-value heap allocation. A partially received fixed-width value needs at most 12 bytes of carry.</p></div>
+          </div>
+        </div>
+      </div>
+
+      <details class="support-matrix">
+        <summary><span><b>DECODER COVERAGE</b> / exact supported encoding × physical-type combinations</span><span class="matrix-open-label">EXPAND MATRIX <i>+</i></span></summary>
+        <div class="support-matrix-wrap"><table><thead><tr><th>ENCODING</th><th>PHYSICAL TYPES / ROLE</th><th>DECODER / CONSTRAINT</th></tr></thead><tbody>
+          <tr><td>PLAIN</td><td>BOOLEAN, INT32, INT64, INT96, FLOAT, DOUBLE, BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY</td><td>PlainBool / PlainValues / ByteArrays / FixedByteArrays</td></tr>
+          <tr><td>RLE</td><td>BOOLEAN; definition levels</td><td>RleBool; Levels. Boolean RLE has a 4-byte length prefix in V1 <em>and</em> V2</td></tr>
+          <tr><td>RLE_DICTIONARY (8), PLAIN_DICTIONARY (2)</td><td>Dictionary-encoded data pages</td><td>DictionaryIds emits checked IDs; caller resolves strings or other values</td></tr>
+          <tr><td>DELTA_BINARY_PACKED (5)</td><td>INT32, INT64</td><td>DeltaBinary with caller-provided mini-block width workspace</td></tr>
+          <tr><td>DELTA_LENGTH_BYTE_ARRAY (6)</td><td>BYTE_ARRAY</td><td>DeltaLengthByteArrays; caller supplies lengths array</td></tr>
+          <tr><td>DELTA_BYTE_ARRAY (7)</td><td>BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY</td><td>DeltaByteArrays; caller supplies prefix/suffix and previous-value scratch</td></tr>
+          <tr><td>DICTIONARY_PAGE</td><td>PLAIN (0), legacy PLAIN_DICTIONARY (2)</td><td>Entries emitted at Location::Dictionary(index), caller retains the dictionary</td></tr>
+          <tr><td>PAGE COMPRESSION</td><td>UNCOMPRESSED (0), SNAPPY (1)</td><td>Identity or RawSnappy; other codecs require custom Inflate</td></tr>
+        </tbody></table></div>
+        <div class="support-matrix-note">This matrix describes the uploaded <code>compact-parquet-thrift</code> page layer, not every Parquet feature or every decoder elsewhere in the WCOL repository. Nested/repeated data and BYTE_STREAM_SPLIT are not included here.</div>
+      </details>
+
+      <div class="coverage-panel">
+        <div><span class="coverage-kicker">BUILT-IN COMPRESSION</span><strong>UNCOMPRESSED · RAW SNAPPY</strong><p><code>Identity</code> forwards borrowed bytes; <code>RawSnappy</code> uses caller-provided history and output buffers. Other codecs require an external <code>Inflate</code> implementation.</p></div>
+        <div><span class="coverage-kicker">DATA SHAPES</span><strong>FLAT REQUIRED / OPTIONAL</strong><p>Definition levels 0 or 1, repetition level 0. One-bit-per-row presence workspace for nullable columns. Nested/repeated pages are outside this assembler.</p></div>
+        <div><span class="coverage-kicker">EXPLICIT LIMITATIONS</span><strong>NO BYTE_STREAM_SPLIT / ALP</strong><p>No built-in ZSTD, GZIP or BYTE_STREAM_SPLIT value decoder here. These are limits of the uploaded crate, not general Parquet limitations.</p></div>
+      </div>
+    </section>
+
+    <section id="row" class="chapter row-chapter" aria-labelledby="row-heading">
+      <div class="chapter-intro"><div class="chapter-index">06 / THE RECONSTRUCTION</div><div><h2 id="row-heading">Three column streams. One row.</h2><p>Parquet stores columns separately, not row-shaped records. Choose a row below, then advance the decoder to see one <strong>dictionary-encoded string</strong>, one <strong>FLOAT</strong>, and one <strong>BOOLEAN</strong> rejoin at their shared row position.</p></div></div>
+      <div class="panel row-demo-panel">
+        <div class="panel-heading"><div><span class="panel-number">06A</span><h3>Choose the row to reconstruct</h3></div><span class="panel-pill">8-ROW SYNTHETIC, BYTE-ACCURATE EXAMPLE</span></div>
+        <div class="row-picker-wrap"><table class="row-picker" id="row-picker"><thead><tr><th>ROW</th><th>COUNTRY <span>BYTE_ARRAY / DICT</span></th><th>TEMP °C <span>FLOAT / PLAIN</span></th><th>ACTIVE <span>BOOLEAN / PLAIN</span></th></tr></thead><tbody id="row-picker-body"></tbody></table></div>
+        <div class="row-demo-note"><span class="signal-dot"></span> EACH COLUMN HAS ITS OWN PARQUET PAGE(S). THE SELECTED ROW NUMBER IS A LOGICAL POSITION, NOT A CONTIGUOUS RECORD ON DISK.</div>
+      </div>
+      <div class="panel row-stage-panel">
+        <div class="panel-heading"><div><span class="panel-number">06B</span><h3>Step through the decode</h3></div><div class="row-play-controls"><button type="button" id="row-prev" aria-label="Previous decoding stage">←</button><button type="button" id="row-play" aria-label="Play decoding stages">▶ PLAY</button><button type="button" id="row-next" aria-label="Next decoding stage">NEXT →</button></div></div>
+        <div id="row-stages" class="row-stages" role="group" aria-label="Decoding stages"></div>
+        <div class="row-stage-caption"><span class="tiny-label" id="row-stage-index">01 / 06</span><h4 id="row-stage-title">Stored separately.</h4><p id="row-stage-description">Each selected value lives in a separate column chunk.</p></div>
+        <div class="row-streams" id="row-streams"></div>
+        <div class="row-merge-connector"><span></span><div>ROW POSITION <b id="merge-row-index">4</b> · JOIN BY ORDINAL <span class="merge-icon">↓</span></div><span></span></div>
+        <div class="row-result">
+          <div class="row-result-top"><div><span class="tiny-label">RECONSTRUCTED ROW / CALLER-SIDE ASSEMBLY</span><h4>One logical record.</h4></div><button type="button" id="row-copy">COPY JSON ↗</button></div>
+          <pre id="row-json" aria-live="polite"></pre>
+          <div class="row-result-note" id="row-result-note">The Rust page decoder emits typed values and numeric dictionary IDs. The caller resolves the ID and aligns the three columns by row position.</div>
+        </div>
+      </div>
+      <div class="row-takeaways">
+        <div><span>01 / DICTIONARIES</span><strong>The data page contains an ID, not a string.</strong><p>The dictionary page decodes to caller-managed entries. The data page returns <code>DictionaryId(index)</code>; the caller chooses when to resolve it.</p></div>
+        <div><span>02 / FLOATS</span><strong>Read four bytes, emit one f32.</strong><p><code>PlainValues&lt;f32&gt;</code> accepts fragmented input and retains at most a fixed-size partial value.</p></div>
+        <div><span>03 / BOOLEANS</span><strong>One byte carries eight row values.</strong><p><code>PlainBool</code> reads the bits least-significant first and emits each row's boolean independently.</p></div>
+      </div>
+    </section>
+
+    <section class="outro"><span>THE ENGINEERING TRADE-OFF</span><h2>From an R2 byte range to a typed value.</h2><p>Borrow the metadata. Decode page bytes incrementally. Keep scratch memory caller-owned. Reconstruct only the rows and values the query needs—that is the compact I/O foundation for WCOL.</p><div><a class="button-primary" href="#row">FOLLOW THE ROW ↗</a><a class="button-link" href="https://github.com/davidgtonge/wcol" target="_blank" rel="noopener noreferrer">EXPLORE WCOL SOURCE ↗</a></div></section>
+  </main>
+  <footer><div class="shell footer-inner"><span>wcol<span class="accent">/</span> <em>SYSTEMS EXPLAINER · 03</em></span><span>SYNTHETIC EXAMPLES · EXACT PLAIN / DICTIONARY BYTES · RUST DECODERS IN THE UPLOADED CRATE</span></div></footer>
+  <script src="_site.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+[package]
+name = "wcol_wasm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wcol-file = { path = "../wcol-file" }
+
+[features]
+bench_api = ["wcol-file/bench_api"]
+sql_api = ["wcol-file/sql_api"]
+timing = ["wcol-file/timing"]
+simd_like_raw = ["wcol-file/simd_like_raw"]
+simd_like_dict = ["wcol-file/simd_like_dict"]
+simd_all = ["wcol-file/simd_all"]

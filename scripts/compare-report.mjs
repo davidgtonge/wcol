@@ -14,7 +14,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dataDir = join(root, "data");
 const rustDir = join(root, "rust");
 const cliBin = join(rustDir, "target", "release", "wcol-cli");
-const sqlFile = join(rustDir, "wcol-sql-parser", "readme.md");
+const sqlFile = join(rustDir, "wcol-plan/src/plan/sql_parser/readme.md");
 
 const STORAGE_PAIRS = [
   ["crates_versions", "crates_versions.parquet", "crates_versions.wcol"],
@@ -85,10 +85,10 @@ function printStorage() {
 }
 
 function wasmPath() {
-  const simd = join(root, "rust", "wcol-wasm", "pkg", "wasm", "wcol_wasm.simd.wasm");
-  if (existsSync(simd)) return simd;
-  const plain = join(root, "rust", "wcol-wasm", "pkg", "wasm", "wcol_wasm.wasm");
-  return existsSync(plain) ? plain : null;
+  const release = join(rustDir, "target", "wasm32-unknown-unknown", "release", "wcol.wasm");
+  if (existsSync(release)) return release;
+  const speed = join(rustDir, "target", "wasm32-unknown-unknown", "release", "wcol_node.wasm");
+  return existsSync(speed) ? speed : null;
 }
 
 function printWasmSizes() {
@@ -124,7 +124,7 @@ function parseBenchLine(line) {
 
 function benchWcol() {
   if (!existsSync(cliBin)) {
-    console.log("wcol-cli not built — cargo build -p wcol-cli --release");
+    console.log("wcol-cli not built — cargo build -p wcol-cli --release --manifest-path rust/Cargo.toml");
     return {};
   }
   if (!existsSync(BENCH_WCOL)) {

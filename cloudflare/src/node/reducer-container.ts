@@ -1,0 +1,210 @@
+/**
+ * A hash reducer in a Cloudflare Container: the native reducer (`rust/wcol-reducer`) with
+ * dedicated memory and local-disk spill, behind the same RPC methods a node reducer answers.
+ *
+ * The container app uses the `durable_object` scheduling policy, so nothing is provisioned
+ * until this object starts its container. One container per reducer per attempt: it starts on
+ * `prepareReducer` and is destroyed as soon as its output has been read or the attempt aborts.
+ * The inactivity timeout is only a backstop for a coordinator that disappears mid-job.
+ */
+import { DurableObject } from "cloudflare:workers";
+import { DEFAULT_CONTAINER_INSTANCE, type ContainerInstance } from "./containers.ts";
+import { coloOnce } from "../colo.ts";
+import type { ReducerPlacementFacts } from "./types.ts";
+import type { AcceptScanEdgeParams, GraphTaskEnv, HashAttemptParams, PrepareReducerHandle, PrepareReducerParams } from "./types.ts";
+
+const REDUCER_PORT = 8080;
+/** The `images` entry in `wrangler.node.toml`. */
+const REDUCER_IMAGE = "reducer";
+const READY_TIMEOUT_MS = 30_000;
+const READY_POLL_MS = 100;
+const BACKSTOP_IDLE_MS = 30_000;
+
+/** Settles once this attempt's reducer has started; scans may reach it before that. */
+function gate(): { promise: Promise<void>; open: () => void; fail: (error: unknown) => void } {
+  let open!: () => void;
+  let fail!: (error: unknown) => void;
+  const promise = new Promise<void>((resolve, reject) => ((open = resolve), (fail = reject)));
+  // A failed prepare is reported by prepare itself; waiting scans see it when they await.
+  promise.catch(() => undefined);
+  return { promise, open, fail };
+}
+
+export class WcolReducer extends DurableObject<GraphTaskEnv> {
+  /** Scan edges this reducer was given; a finished scan that sent none is marked absent. */
+  private readonly opened = new Set<number>();
+  private expectedScans = 0;
+  private started = gate();
+  /** Edge uploads to the container that have not finished, for the abort log. */
+  private readonly uploading = new Set<number>();
+  /** Set when this object stops its own container, whose SIGKILL (exit 137) is then expected. */
+  private stopping = false;
+  /** Per scan edge: when its accept arrived, when the reducer had started, when its upload ended (epoch ms). */
+  private readonly edgeTimes = new Map<number, [number, number, number]>();
+  private slot = -1;
+  private jobId = "";
+  private readyAt = 0;
+  private instance: ContainerInstance = DEFAULT_CONTAINER_INSTANCE;
+  /** How long the container took to answer, from `start`. */
+  private readyMs = 0;
+
+  async prepareReducer(params: PrepareReducerParams): Promise<PrepareReducerHandle> {
+    this.slot = params.slot;
+    this.jobId = params.jobId;
+    try {
+      await this.startContainer(params.containerInstance ?? DEFAULT_CONTAINER_INSTANCE);
+      await this.reducerCall(`/start?inputs=${params.expectedScans}`, {
+        method: "POST",
+        // The program arrived over RPC, so it owns its buffer.
+        body: params.program as Uint8Array<ArrayBuffer>,
+      });
+    } catch (error) {
+      this.started.fail(error);
+      await this.shutDown();
+      throw error;
+    }
+    this.expectedScans = params.expectedScans;
+    this.opened.clear();
+    // The output request is opened before scans are let in, so it is waiting when they send.
+    const body = this.output();
+    this.started.open();
+    return { ready: true, invokedSlots: [params.slot], body };
+  }
+
+  async placement(): Promise<ReducerPlacementFacts> {
+    return { colo: await coloOnce(), runtime: "container", instance: this.instance, readyMs: this.readyMs };
+  }
+
+  async waitConsumeReady(_params: HashAttemptParams): Promise<void> {
+    await this.started.promise;
+  }
+
+  async acceptScanEdge(params: AcceptScanEdgeParams): Promise<{ accepted: true }> {
+    const arrived = Date.now();
+    await this.started.promise;
+    const gated = Date.now();
+    this.opened.add(params.scanIndex);
+    const scan = params.scanIndex;
+    this.uploading.add(scan);
+    await this.reducerCall(`/input/${scan}`, { method: "PUT", body: params.stream }).finally(() => this.uploading.delete(scan));
+    this.edgeTimes.set(scan, [arrived, gated, Date.now()]);
+    return { accepted: true };
+  }
+
+  async completeScan(params: HashAttemptParams): Promise<void> {
+    if (params.scanIndex == null) throw new Error("completeScan needs scanIndex");
+    await this.started.promise;
+    await this.markAbsent(params.scanIndex);
+  }
+
+  async sealReducer(_params: HashAttemptParams): Promise<void> {
+    await this.started.promise;
+    for (let scan = 0; scan < this.expectedScans; scan++) await this.markAbsent(scan);
+  }
+
+  async abortHashAttempt(params: HashAttemptParams & { error?: string }): Promise<void> {
+    this.started.fail(new Error(`attempt aborted: ${params.error ?? "no reason"}`));
+    if (this.ctx.container?.running) {
+      const status = await this.reducerCall("/status").catch((e: unknown) => `unreachable: ${String(e)}`);
+      console.log(JSON.stringify({ event: "container_reducer_abort", status, uploading: [...this.uploading] }));
+    }
+    await this.shutDown();
+  }
+
+  private container(): Container {
+    const container = this.ctx.container;
+    if (!container) throw new Error("WcolReducer has no container: check the containers entry in wrangler.node.toml");
+    return container;
+  }
+
+  private reducerFetch(path: string, init?: RequestInit): Promise<Response> {
+    return this.container().getTcpPort(REDUCER_PORT).fetch(`http://reducer${path}`, init);
+  }
+
+  /**
+   * A request whose answer is short. The body is always read: an unread one keeps its
+   * connection open, and a Durable Object has only six, which the edges need.
+   */
+  private async reducerCall(path: string, init?: RequestInit): Promise<string> {
+    const response = await this.reducerFetch(path, init);
+    const text = await response.text();
+    if (!response.ok) throw new Error(`container reducer ${path}: ${response.status} ${text}`);
+    return text;
+  }
+
+  /** Start a fresh container and wait until the reducer answers on its port. */
+  private async startContainer(instance: ContainerInstance): Promise<void> {
+    const container = this.container();
+    // A container still running here belongs to an earlier, abandoned prepare.
+    if (container.running) await container.destroy();
+    const image = container.images[REDUCER_IMAGE];
+    if (!image) throw new Error(`no container image named ${REDUCER_IMAGE}`);
+    const startedAt = Date.now();
+    this.stopping = false;
+    container.start({ image, instance, enableInternet: false });
+    this.ctx.waitUntil(
+      container.monitor().catch((error: unknown) => {
+        // Only an exit this object did not ask for is news: a crash or an out-of-memory kill.
+        if (!this.stopping) console.log(JSON.stringify({ event: "container_reducer_exit", error: String(error) }));
+      }),
+    );
+    await container.setInactivityTimeout(BACKSTOP_IDLE_MS);
+    while (!(await this.reducerCall("/health").then(() => true, () => false))) {
+      if (Date.now() - startedAt > READY_TIMEOUT_MS) {
+        await this.shutDown();
+        throw new Error(`container reducer not ready after ${READY_TIMEOUT_MS} ms`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
+    }
+    this.readyAt = Date.now();
+    this.instance = instance;
+    this.readyMs = this.readyAt - startedAt;
+    console.log(JSON.stringify({ event: "container_reducer_ready", slot: this.slot, at: this.readyAt, instance, ms: this.readyAt - startedAt }));
+  }
+
+  private async markAbsent(scanIndex: number): Promise<void> {
+    if (this.opened.has(scanIndex)) return;
+    this.opened.add(scanIndex);
+    await this.reducerCall(`/absent/${scanIndex}`, { method: "POST" });
+  }
+
+  /**
+   * The reducer's output. The request is opened, not awaited: its headers arrive with the
+   * first output bytes, after every scan has sent, so waiting here would hold the scans back.
+   * Once the output ends the reducer's status decides success, then the container stops.
+   */
+  private output(): ReadableStream<Uint8Array> {
+    const response = this.reducerFetch("/output");
+    return new ReadableStream<Uint8Array>({
+      start: async (controller) => {
+        try {
+          const reader = (await response).body?.getReader();
+          if (!reader) throw new Error("container reducer sent no output");
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          const status = await this.reducerCall("/status");
+          if (!status.startsWith("ok")) throw new Error(`container reducer: ${status}`);
+          const timing = { slot: this.slot, readyAt: this.readyAt, status, doEdges: Object.fromEntries(this.edgeTimes) };
+          console.log(JSON.stringify({ event: "container_reducer_done", ...timing }));
+          // Diagnostic: tail drops events at this fan-out, so each reducer also files its edge timeline.
+          await this.env.OUTPUT?.put(`_diag/${this.jobId}/reducer-${this.slot}.json`, JSON.stringify(timing));
+          controller.close();
+        } catch (error) {
+          controller.error(error);
+        } finally {
+          await this.shutDown();
+        }
+      },
+    });
+  }
+
+  /** Stop the container now: a running one is billed until it does. */
+  private async shutDown(): Promise<void> {
+    const container = this.container();
+    this.stopping = true;
+    if (container.running) await container.destroy().catch(() => undefined);
+  }
+}

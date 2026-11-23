@@ -6,7 +6,7 @@ import { dirname, resolve, join } from "node:path";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(scriptDir, "..");
-const wasmDir = resolve(rootDir, "rust", "wcol-wasm");
+const wasmDir = resolve(rootDir, "archive", "rust", "wcol-wasm");
 const wasmBindgenLiteBuildJs = resolve(
   rootDir,
   "node_modules/wasm-bindgen-lite/src/cli/build.js"

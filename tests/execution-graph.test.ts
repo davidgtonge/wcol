@@ -1,0 +1,101 @@
+import { strict as assert } from "node:assert";
+import { describe, it } from "node:test";
+import {
+  COORDINATOR_SLOT,
+  decodeExecutionPlanWire,
+  WHOLE_STREAM,
+  WIRE_TAG_EXECUTION_GRAPH_V1,
+  WIRE_TAG_EXECUTION_GRAPH_V2,
+  WIRE_TAG_METADATA_PARTIAL,
+} from "../src/runtime/coordinator/execution-graph.ts";
+import { completionAccepted } from "../src/runtime/coordinator/task-identity.ts";
+
+describe("execution graph wire", () => {
+  it("decodes metadata partial tag 0", () => {
+    const partial = new Uint8Array([1, 2, 3]);
+    const wire = new Uint8Array(5 + partial.byteLength);
+    wire[0] = WIRE_TAG_METADATA_PARTIAL;
+    new DataView(wire.buffer).setUint32(1, partial.byteLength, true);
+    wire.set(partial, 5);
+    const plan = decodeExecutionPlanWire(wire);
+    assert.equal(plan.kind, "metadata_partial");
+    if (plan.kind !== "metadata_partial") return;
+    assert.deepEqual(plan.partial, partial);
+  });
+
+  it("decodes minimal graph tag 4", () => {
+    const program = new Uint8Array([0xff, 1, 0, 0, 0, 14, 1, 0, 0, 0]);
+    const parts: number[] = [WIRE_TAG_EXECUTION_GRAPH_V1];
+    const pushU32 = (n: number) => {
+      parts.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >> 24) & 255);
+    };
+    pushU32(1);
+    pushU32(0);
+    pushU32(COORDINATOR_SLOT);
+    pushU32(0);
+    const view = new ArrayBuffer(8);
+    new DataView(view).setBigUint64(0, BigInt(0), true);
+    parts.push(...new Uint8Array(view));
+    pushU32(program.byteLength);
+    parts.push(...program);
+    pushU32(0xffff_ffff); // no run-time work
+    pushU32(0);
+    pushU32(0);
+    parts.push(0);
+    const wire = new Uint8Array(parts);
+    const plan = decodeExecutionPlanWire(wire);
+    assert.equal(plan.kind, "graph");
+    if (plan.kind !== "graph") return;
+    assert.equal(plan.rootTaskId, 0);
+    assert.equal(plan.tasks[0]?.slot, COORDINATOR_SLOT);
+    assert.equal(plan.edges.length, 0);
+  });
+
+  it("decodes a partition id on tag 5 and leaves tag 4 whole-stream", () => {
+    const wire = graphWire(WIRE_TAG_EXECUTION_GRAPH_V2, 3);
+    const plan = decodeExecutionPlanWire(wire);
+    assert.equal(plan.kind, "graph");
+    if (plan.kind !== "graph") return;
+    assert.equal(plan.edges[0]?.partition, 3);
+    const whole = graphWire(WIRE_TAG_EXECUTION_GRAPH_V2, WHOLE_STREAM);
+    const decoded = decodeExecutionPlanWire(whole);
+    if (decoded.kind !== "graph") return;
+    assert.equal(decoded.edges[0]?.partition, undefined);
+  });
+});
+
+function graphWire(tag: number, partition: number): Uint8Array {
+  const parts: number[] = [tag];
+  const pushU32 = (n: number) => {
+    parts.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >> 24) & 255);
+  };
+  pushU32(1);
+  pushU32(0);
+  pushU32(COORDINATOR_SLOT);
+  pushU32(0);
+  parts.push(...new Uint8Array(8));
+  pushU32(1);
+  parts.push(0);
+  pushU32(0xffff_ffff); // no run-time work
+  pushU32(1);
+  pushU32(0);
+  pushU32(0);
+  parts.push(1);
+  if (tag === WIRE_TAG_EXECUTION_GRAPH_V2) pushU32(partition);
+  pushU32(0);
+  parts.push(1);
+  return new Uint8Array(parts);
+}
+
+describe("task identity fencing", () => {
+  it("rejects stale attempts", () => {
+    assert.equal(
+      completionAccepted({ identity: { queryId: "q", taskId: 1, attempt: 2 }, result: null }, {
+        queryId: "q",
+        taskId: 1,
+        attempt: 1,
+      }),
+      false,
+    );
+  });
+});

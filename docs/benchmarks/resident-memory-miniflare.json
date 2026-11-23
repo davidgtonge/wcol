@@ -1,0 +1,281 @@
+{
+  "formatVersion": 1,
+  "date": "2026-11-12",
+  "environment": "Local Miniflare/workerd, SQLite Durable Objects, R2 emulation; eight DOUBLE features, four clusters, two workers, 8192-row Parquet groups.",
+  "command": "npm run test:iterative-miniflare",
+  "featureLimitBytes": 41943040,
+  "runs": [
+    {
+      "event": "resident_memory_benchmark",
+      "rows": 16384,
+      "dimensions": 8,
+      "workers": 2,
+      "measurements": [
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 524288,
+            "loadPeakBytes": 524288,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 5242880,
+            "wallMs": 52
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 262144,
+            "loadPeakBytes": 524288,
+            "normalizePeakBytes": 786432,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 5242880,
+            "wallMs": 0
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 262144,
+            "loadPeakBytes": 524288,
+            "normalizePeakBytes": 786432,
+            "roundPeakBytes": 262144,
+            "wasmMemoryBytes": 5242880,
+            "wallMs": 1,
+            "count": 2
+          }
+        },
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 524288,
+            "loadPeakBytes": 524288,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 5242880,
+            "wallMs": 40
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 262144,
+            "loadPeakBytes": 524288,
+            "normalizePeakBytes": 786432,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 5242880,
+            "wallMs": 1
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 262144,
+            "loadPeakBytes": 524288,
+            "normalizePeakBytes": 786432,
+            "roundPeakBytes": 262144,
+            "wasmMemoryBytes": 5242880,
+            "wallMs": 1,
+            "count": 2
+          }
+        }
+      ]
+    },
+    {
+      "event": "resident_memory_benchmark",
+      "rows": 65536,
+      "dimensions": 8,
+      "workers": 2,
+      "measurements": [
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 2097152,
+            "loadPeakBytes": 3145728,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 8585216,
+            "wallMs": 30
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 1048576,
+            "loadPeakBytes": 3145728,
+            "normalizePeakBytes": 3145728,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 8585216,
+            "wallMs": 1
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 1048576,
+            "loadPeakBytes": 3145728,
+            "normalizePeakBytes": 3145728,
+            "roundPeakBytes": 1048576,
+            "wasmMemoryBytes": 8585216,
+            "wallMs": 2,
+            "count": 2
+          }
+        },
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 2097152,
+            "loadPeakBytes": 3145728,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 8585216,
+            "wallMs": 29
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 1048576,
+            "loadPeakBytes": 3145728,
+            "normalizePeakBytes": 3145728,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 8585216,
+            "wallMs": 1
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 1048576,
+            "loadPeakBytes": 3145728,
+            "normalizePeakBytes": 3145728,
+            "roundPeakBytes": 1048576,
+            "wasmMemoryBytes": 8585216,
+            "wallMs": 2,
+            "count": 2
+          }
+        }
+      ]
+    },
+    {
+      "event": "resident_memory_benchmark",
+      "rows": 262144,
+      "dimensions": 8,
+      "workers": 2,
+      "measurements": [
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 8388608,
+            "loadPeakBytes": 12582912,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 21430272,
+            "wallMs": 77
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 4194304,
+            "loadPeakBytes": 12582912,
+            "normalizePeakBytes": 12582912,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 21430272,
+            "wallMs": 3
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 4194304,
+            "loadPeakBytes": 12582912,
+            "normalizePeakBytes": 12582912,
+            "roundPeakBytes": 4194304,
+            "wasmMemoryBytes": 21430272,
+            "wallMs": 7,
+            "count": 2
+          }
+        },
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 8388608,
+            "loadPeakBytes": 12582912,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 21430272,
+            "wallMs": 75
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 4194304,
+            "loadPeakBytes": 12582912,
+            "normalizePeakBytes": 12582912,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 21430272,
+            "wallMs": 4
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 4194304,
+            "loadPeakBytes": 12582912,
+            "normalizePeakBytes": 12582912,
+            "roundPeakBytes": 4194304,
+            "wasmMemoryBytes": 21430272,
+            "wallMs": 6,
+            "count": 2
+          }
+        }
+      ]
+    },
+    {
+      "event": "resident_memory_benchmark",
+      "rows": 524288,
+      "dimensions": 8,
+      "workers": 2,
+      "measurements": [
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 16777216,
+            "loadPeakBytes": 25165824,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 38535168,
+            "wallMs": 122
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 8388608,
+            "loadPeakBytes": 25165824,
+            "normalizePeakBytes": 25165824,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 38535168,
+            "wallMs": 7
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 8388608,
+            "loadPeakBytes": 25165824,
+            "normalizePeakBytes": 25165824,
+            "roundPeakBytes": 8388608,
+            "wasmMemoryBytes": 38535168,
+            "wallMs": 13,
+            "count": 2
+          }
+        },
+        {
+          "load": {
+            "limitBytes": 41943040,
+            "featureBytes": 16777216,
+            "loadPeakBytes": 25165824,
+            "normalizePeakBytes": 0,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 38535168,
+            "wallMs": 123
+          },
+          "normalization": {
+            "limitBytes": 41943040,
+            "featureBytes": 8388608,
+            "loadPeakBytes": 25165824,
+            "normalizePeakBytes": 25165824,
+            "roundPeakBytes": 0,
+            "wasmMemoryBytes": 38535168,
+            "wallMs": 6
+          },
+          "rounds": {
+            "limitBytes": 41943040,
+            "featureBytes": 8388608,
+            "loadPeakBytes": 25165824,
+            "normalizePeakBytes": 25165824,
+            "roundPeakBytes": 8388608,
+            "wasmMemoryBytes": 38535168,
+            "wallMs": 13,
+            "count": 2
+          }
+        }
+      ]
+    }
+  ]
+}

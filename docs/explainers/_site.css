@@ -1,0 +1,252 @@
+/* Shared chrome for the WCOL systems explainer site. */
+:root {
+  --wcol-site-bg: #070f16;
+  --wcol-site-panel: #0c1721;
+  --wcol-site-line: #213541;
+  --wcol-site-line-soft: #182b35;
+  --wcol-site-white: #eef6f7;
+  --wcol-site-text: #b4c5cb;
+  --wcol-site-muted: #7e939e;
+  --wcol-site-faint: #56717d;
+  --wcol-site-teal: #51d5c3;
+  --wcol-site-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --wcol-site-sans: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.wcol-site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: 56px;
+  border-bottom: 1px solid var(--wcol-site-line-soft);
+  background: rgba(7, 15, 22, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Keep chapter sticky bars under the shared site header. */
+body[data-chapter] .topbar {
+  top: 56px;
+}
+
+.wcol-site-header-inner {
+  height: 100%;
+  max-width: 1580px;
+  margin: 0 auto;
+  padding: 0 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.wcol-site-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--wcol-site-white);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wcol-site-brand-mark {
+  display: grid;
+  grid-template-columns: repeat(2, 6px);
+  gap: 3px;
+}
+
+.wcol-site-brand-mark i {
+  width: 6px;
+  height: 6px;
+  background: #4bcab9;
+  border-radius: 1px;
+}
+
+.wcol-site-brand-mark i:nth-child(2),
+.wcol-site-brand-mark i:nth-child(3) {
+  background: #3d8790;
+}
+
+.wcol-site-brand-word {
+  font: 750 18px/1 var(--wcol-site-sans);
+  letter-spacing: -0.07em;
+}
+
+.wcol-site-brand-word span {
+  color: var(--wcol-site-teal);
+}
+
+.wcol-site-brand-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--wcol-site-line);
+  margin: 0 2px;
+}
+
+.wcol-site-brand-label {
+  font: 600 10px var(--wcol-site-mono);
+  color: #a0b3bb;
+  letter-spacing: 0.1em;
+}
+
+.wcol-site-nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-width: 0;
+}
+
+.wcol-site-chapters {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.wcol-site-chapters a {
+  color: #9caeb7;
+  font: 600 10px var(--wcol-site-mono);
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wcol-site-chapters a:hover {
+  color: var(--wcol-site-white);
+}
+
+.wcol-site-chapters a.is-active {
+  color: var(--wcol-site-teal);
+}
+
+.wcol-site-source {
+  border: 1px solid var(--wcol-site-line);
+  padding: 8px 12px;
+  border-radius: 5px;
+  color: var(--wcol-site-white);
+  font: 600 10px var(--wcol-site-mono);
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.wcol-site-source:hover {
+  border-color: #43817d;
+  color: var(--wcol-site-teal);
+}
+
+.wcol-site-pager {
+  max-width: 1580px;
+  margin: 72px auto 0;
+  padding: 0 34px;
+}
+
+.wcol-site-pager-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  border-top: 1px solid var(--wcol-site-line);
+  padding-top: 28px;
+  padding-bottom: 8px;
+}
+
+.wcol-site-pager a {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 20px;
+  border: 1px solid var(--wcol-site-line);
+  border-radius: 7px;
+  background: var(--wcol-site-panel);
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+  transition: border-color 0.16s, transform 0.16s;
+}
+
+.wcol-site-pager a:hover {
+  border-color: #43817d;
+  transform: translateY(-1px);
+}
+
+.wcol-site-pager a.is-empty {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.wcol-site-pager-next {
+  text-align: right;
+  align-items: flex-end;
+}
+
+.wcol-site-pager-kicker {
+  font: 700 10px var(--wcol-site-mono);
+  letter-spacing: 0.08em;
+  color: var(--wcol-site-teal);
+}
+
+.wcol-site-pager-title {
+  font: 600 18px/1.25 var(--wcol-site-sans);
+  letter-spacing: -0.03em;
+  color: var(--wcol-site-white);
+}
+
+.wcol-site-pager-blurb {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--wcol-site-muted);
+  max-width: 360px;
+}
+
+@media (max-width: 960px) {
+  .wcol-site-header-inner,
+  .wcol-site-pager {
+    padding: 0 17px;
+  }
+
+  .wcol-site-chapters a span {
+    display: none;
+  }
+
+  .wcol-site-chapters {
+    gap: 12px;
+  }
+
+  .wcol-site-brand-label {
+    display: none;
+  }
+
+  .wcol-site-brand-divider {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .wcol-site-nav {
+    gap: 10px;
+  }
+
+  .wcol-site-chapters {
+    gap: 8px;
+  }
+
+  .wcol-site-chapters a {
+    font-size: 9px;
+  }
+
+  .wcol-site-source {
+    padding: 7px 9px;
+  }
+
+  .wcol-site-pager-inner {
+    grid-template-columns: 1fr;
+  }
+
+  .wcol-site-pager-next {
+    text-align: left;
+    align-items: flex-start;
+  }
+
+  .wcol-site-pager a.is-empty {
+    display: none;
+  }
+}

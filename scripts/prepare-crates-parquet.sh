@@ -136,5 +136,5 @@ COPY (
 echo ""
 echo "Parquet files written to $OUT/"
 echo "Encode to .wcol when wcol-cli is available:"
-echo "  cargo run --manifest-path rust/wcol-cli/Cargo.toml -- $OUT/<name>.parquet -o $OUT/<name>.wcol"
+echo "  cargo run --manifest-path archive/rust/wcol-cli/Cargo.toml -- $OUT/<name>.parquet -o $OUT/<name>.wcol"
 echo "Then: npm run prepare:datasets"

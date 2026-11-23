@@ -1,0 +1,11 @@
+name = "df-planner-spike"
+main = "worker.ts"
+compatibility_date = "2025-12-10"
+
+[limits]
+cpu_ms = 60000
+
+[[rules]]
+type = "CompiledWasm"
+globs = ["**/*.wasm"]
+fallthrough = true

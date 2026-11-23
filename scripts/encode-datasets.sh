@@ -3,11 +3,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI_ROOT="${WCOL_CLI_ROOT:-$(cd "$ROOT/../wcol/rust" 2>/dev/null && pwd || true)}"
+CLI_ROOT="${WCOL_CLI_ROOT:-$ROOT/archive/rust}"
 OUT="$ROOT/data"
 
 if [[ ! -f "$CLI_ROOT/Cargo.toml" ]]; then
-  echo "wcol-cli not found. Set WCOL_CLI_ROOT to the rust/ dir containing wcol-cli." >&2
+  echo "wcol-cli not found. Set WCOL_CLI_ROOT to the Cargo workspace containing wcol-cli (default archive/rust)." >&2
   exit 1
 fi
 

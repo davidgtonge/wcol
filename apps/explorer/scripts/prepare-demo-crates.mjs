@@ -13,7 +13,7 @@ const repoRoot = path.join(appRoot, "../..");
 const PARQUET = path.join(repoRoot, "data", "crates_versions.parquet");
 const SOURCE_WCOL = path.join(repoRoot, "data", "crates_versions.wcol");
 const OUT = path.join(appRoot, "demo", "data", "crates_versions.wcol");
-const CLI = path.join(repoRoot, "rust", "target", "release", "wcol-cli");
+const CLI = path.join(repoRoot, "archive", "rust", "target", "release", "wcol-cli");
 
 function newestMtime(paths) {
   return Math.max(...paths.map((p) => fs.statSync(p).mtimeMs));
@@ -47,7 +47,7 @@ function convertFromParquet() {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   const build = spawnSync(
     "cargo",
-    ["build", "-p", "wcol-cli", "--release", "--manifest-path", path.join(repoRoot, "rust", "Cargo.toml")],
+    ["build", "-p", "wcol-cli", "--release", "--manifest-path", path.join(repoRoot, "archive", "rust", "Cargo.toml")],
     { stdio: "inherit", cwd: repoRoot }
   );
   if (build.status !== 0) process.exit(build.status ?? 1);

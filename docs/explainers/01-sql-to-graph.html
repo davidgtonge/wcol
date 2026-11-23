@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a1017" />
+    <meta name="description" content="Explore how WCOL turns a SQL query into a distributed, bounded-memory execution graph." />
+    <title>WCOL / 01 — From SQL to a distributed graph</title>
+    <link rel="stylesheet" href="_site.css" />
+    <style>
+:root {
+  color-scheme: dark;
+  --bg: #080e14;
+  --surface: #0e161f;
+  --surface-raised: #111d28;
+  --surface-alt: #0b131b;
+  --border: #24313d;
+  --border-soft: #1c2934;
+  --text: #e9f1f4;
+  --muted: #9aaab6;
+  --faint: #627481;
+  --mint: #59d6c1;
+  --mint-strong: #2ab59e;
+  --mint-wash: rgba(89, 214, 193, .09);
+  --blue: #819ef6;
+  --blue-wash: rgba(129, 158, 246, .09);
+  --amber: #e6bd80;
+  --amber-wash: rgba(230, 189, 128, .09);
+  --red: #ed9488;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.5; min-width: 330px; }
+button, textarea, select, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: default; opacity: .5; }
+button:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+a { color: inherit; }
+::selection { background: rgba(89, 214, 193, .27); }
+.shell { width: min(calc(100% - 76px), 1810px); margin-inline: auto; }
+.ambient { pointer-events:none; position:absolute; z-index:-1; border-radius:50%; filter: blur(100px); }
+.ambient-one { top: -240px; right: 10%; width: 720px; height: 430px; background: rgba(29, 96, 112, .095); }
+.ambient-two { top: 440px; left: -350px; width: 800px; height: 800px; background: rgba(50, 85, 130, .065); }
+
+.site-header { height: 70px; border-bottom: 1px solid var(--border-soft); background: rgba(8, 14, 20, .7); }
+.header-inner { display: flex; align-items: center; justify-content: space-between; height: 100%; gap: 20px; }
+.brand { text-decoration: none; display:flex; gap: 10px; align-items:center; white-space: nowrap; }
+.brand-symbol { width: 24px; height: 24px; display: grid; grid-template-columns: repeat(2, 7px); grid-template-rows: repeat(2, 7px); gap: 3px; align-content:center; justify-content:center; transform: rotate(0deg); }
+.brand-symbol i { background: var(--mint); border-radius: 1.5px; }
+.brand-symbol i:nth-child(2) { opacity: .37; }
+.brand-symbol i:nth-child(3) { opacity: .65; }
+.brand-word { font: 800 23px/.9 var(--mono); letter-spacing: -1.7px; }
+.brand-slash { color: var(--mint); }
+.brand-divider { width: 1px; height: 21px; background: #35424d; margin: 0 5px; }
+.brand-subtitle { color: #9cabb5; font: 600 10px/1 var(--mono); letter-spacing: 1.55px; }
+.header-actions { display:flex; align-items:center; gap: 28px; }
+.header-eyebrow, .header-link { font: 600 10px/1.4 var(--mono); letter-spacing: 1.05px; color: var(--muted); }
+.header-eyebrow { display:flex; align-items:center; gap: 9px; }
+.header-version { color: var(--faint); }
+.header-link { text-decoration:none; border: 1px solid var(--border); padding: 8px 11px; border-radius: 4px; transition: color .2s, border-color .2s; }
+.header-link:hover { color: var(--mint); border-color: var(--mint-strong); }
+.status-dot { width:7px; height:7px; display: inline-block; flex:none; border-radius:50%; background: var(--mint); box-shadow: 0 0 0 3px rgba(89,214,193,.10); }
+.main-content { padding-top: 46px; }
+.hero { display:flex; justify-content:space-between; align-items:flex-end; gap: 40px; margin-bottom: 36px; }
+.hero-copy { max-width: 860px; }
+.eyebrow { color:var(--mint); font:700 10px/1.4 var(--mono); letter-spacing: 1.5px; }
+.small-cross { font-size: 15px; margin-right: 7px; vertical-align: middle; }
+.eyebrow-index { color: var(--faint); margin-left: 11px; }
+.hero h1 { font-size: clamp(32px, 3.35vw, 54px); letter-spacing:-2.3px; line-height:1.13; margin: 16px 0 13px; font-weight: 670; }
+.hero h1 span { color: var(--mint); }
+.hero p { font-size: 15px; color: var(--muted); max-width: 750px; line-height:1.7; margin:0; }
+.hero-constraint { display:flex; align-items:center; gap: 17px; margin: 0 5px 4px 0; padding-left:24px; border-left:1px solid var(--border); white-space: nowrap; }
+.constraint-visual { width:40px; height:40px; display:grid; grid-template-columns:repeat(4,7px); grid-template-rows:repeat(2,13px); gap:4px; align-items:end; }
+.constraint-visual span { background:#41635f; border:1px solid #42615d; border-radius:1px; }
+.constraint-visual span:nth-child(2),.constraint-visual span:nth-child(4),.constraint-visual span:nth-child(7) { background: var(--mint); border-color:var(--mint); }
+.constraint-visual span:nth-child(3),.constraint-visual span:nth-child(6) { height:8px; }
+.constraint-number { font: 600 30px/1.2 var(--mono); letter-spacing:-1.9px; }
+.constraint-number span { font-size:14px; color: var(--muted); font-weight: 500; letter-spacing: 0; margin-left: 5px; }
+.constraint-label { margin-top:5px; color:var(--faint); font: 700 9px/1.5 var(--mono); letter-spacing: .6px; }
+
+.workbench { display:grid; grid-template-columns: 292px minmax(0, 1fr) 278px; gap:12px; align-items:stretch; }
+.panel { min-width:0; background:rgba(14,22,31,.93); border:1px solid var(--border); border-radius: 7px; overflow:hidden; }
+.panel-heading { height:55px; display:flex; align-items:center; justify-content:space-between; padding: 0 19px; border-bottom: 1px solid var(--border); background:linear-gradient(90deg,rgba(255,255,255,.019),transparent); }
+.panel-title { display:flex; align-items:center; gap:11px; }
+.panel-title h2 { font-size: 13px; font-weight: 650; letter-spacing: -.12px; margin:0; }
+.panel-index { font: 600 11px var(--mono); color: var(--mint); }
+.tiny-tag { font:600 9px/1.2 var(--mono); color:var(--faint); letter-spacing: .8px; }
+.controls-content { padding: 20px 17px 19px; }
+.section-heading { display:flex; align-items:center; justify-content:space-between; color: var(--muted); font: 600 10px/1.5 var(--mono); letter-spacing: .85px; margin-bottom:12px; }
+.section-heading label { cursor: text; }
+.section-hint { font-size: 9px; font-weight: 500; letter-spacing: .3px; color:var(--faint); }
+.preset-list { display:flex; flex-wrap:wrap; gap:6px; margin-bottom: 12px; }
+.preset { font:600 10px/1.5 var(--mono); border:1px solid var(--border); border-radius:4px; padding:7px 9px; background:#0a121a; color:var(--muted); white-space:nowrap; transition:.15s; }
+.preset:hover { border-color:#587169; color:var(--text); }
+.preset.is-selected { background:var(--mint-wash); border-color:#397b72; color:var(--mint); }
+.editor-frame { border:1px solid #314250; border-radius:5px; overflow:hidden; background: #080f17; box-shadow:inset 0 1px 0 rgba(255,255,255,.02); }
+.editor-bar { height:32px; padding:0 11px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #24313c; background: #101b25; font: 600 10px var(--mono); color: var(--muted); }
+.editor-filename { display:flex; align-items:center; gap:7px; }
+.file-square { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:3px; font:800 9px var(--mono); background:rgba(230,189,128,.14); color:var(--amber); }
+.editor-language { color:var(--faint); }
+.editor-body { display:flex; padding: 12px 10px 13px 0; align-items:stretch; }
+.editor-gutter { width:32px; flex:none; text-align:right; color:#51626f; font: 11.5px/1.85 var(--mono); padding-right: 9px; user-select:none; }
+#query-editor { display:block; width:100%; min-height:174px; resize:vertical; outline:none; border:0; background:transparent; color:#c7e6e0; font: 11.5px/1.85 var(--mono); padding:0 0 0 3px; margin:0; white-space:pre; tab-size:2; }
+#query-editor:focus-visible { outline: none; }
+.editor-frame:focus-within { border-color: #479a8e; }
+.editor-help { color:var(--faint); font-size:11px; line-height:1.5; margin:9px 1px 13px; min-height:16px; }
+.editor-help.has-error { color:var(--red); }
+.primary-button { width:100%; border-radius:5px; padding:12px 11px; color:#081714; font-weight:750; letter-spacing:.02em; font-size:12px; background:var(--mint); border:1px solid #79e6d4; display:flex; align-items:center; gap:10px; transition:background .17s, transform .17s; }
+.primary-button:hover { background:#82ead8; }
+.primary-button:active { transform:translateY(1px); }
+.run-icon { color:#1c6d61; font-family:var(--mono); font-size:15px; }
+.button-arrow { margin-left:auto; font-size:16px; }
+.control-divider { border-top:1px solid var(--border); margin: 22px 0 20px; }
+.topology-control { margin-bottom:17px; }
+.topology-label { display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; }
+.topology-label label { color:#c6d4dc; font-size:12px; }
+.topology-label strong { color:var(--mint); font:700 14px var(--mono); }
+input[type="range"] { display:block; width:100%; height:4px; border-radius:4px; accent-color:var(--mint); cursor:pointer; }
+.range-ends { display:flex; justify-content:space-between; color:var(--faint); margin-top: 9px; font:10px var(--mono); }
+.reducers-control { margin-top:20px; }
+.segmented { display:grid; grid-template-columns:repeat(3, 1fr); background:#09121a; padding:3px; border:1px solid var(--border); border-radius:5px; gap:3px; }
+.segmented button { color:#8a9aa7; background:transparent; border:1px solid transparent; font:600 11px var(--mono); padding:8px 5px; border-radius:3px; }
+.segmented button:hover { color:var(--text); }
+.segmented button.is-active { background:#20333b; border-color:#335a58; color:var(--mint); }
+.topology-summary { background:#0a131b; border:1px solid #233b3f; border-radius:5px; padding:12px; margin-top:20px; }
+.topology-summary>div:first-child { display:flex; align-items:center; justify-content:space-between; }
+.summary-label { font: 600 9px var(--mono); color:#7b9c9a; letter-spacing:.65px; }
+.topology-summary strong { font:700 22px var(--mono); color:var(--mint); }
+.summary-note { display:flex; align-items:center; gap:7px; margin-top:6px; color:var(--faint); font-size:11px; }
+.teal-dot { width:5px; height:5px; border-radius:50%; background:var(--mint); }
+
+.canvas-panel { display:flex; flex-direction:column; }
+.canvas-heading { padding-left:19px; padding-right:15px; flex:none; }
+.view-switch { display:flex; gap:2px; padding:3px; background:#0a131b; border:1px solid var(--border); border-radius:4px; }
+.view-switch button { padding:7px 10px; border:0; border-radius:3px; color:var(--muted); background:transparent; font:600 10px var(--mono); }
+.view-switch button.is-active { color:#def2ef; background:#263c43; }
+.view-switch button:hover:not(.is-active) { color:white; }
+.canvas-meta { display:flex; align-items:center; justify-content:space-between; padding: 13px 20px 9px; gap:20px; color:var(--faint); font: 600 9px/1.3 var(--mono); letter-spacing:.65px; }
+.meta-left { display:flex; align-items:center; gap:8px; }
+.meta-indicator { display:inline-block; border:1px solid #5c9e92; width:7px; height:7px; border-radius:2px; background:var(--mint); }
+.meta-right { display:flex; align-items:center; gap:9px; white-space:nowrap; }
+.meta-separator { color:#455966; }
+.graph-viewport { position:relative; min-height: 440px; border-top:1px solid transparent; }
+.graph-scroll { display:flex; align-items:flex-start; width:100%; min-height: 420px; overflow-x:auto; overflow-y:hidden; padding: 0; scrollbar-color:#344754 #111b25; scrollbar-width:thin; }
+#execution-graph { display:block; flex:none; width: max(100%, 1000px); height:auto; background:rgba(5,11,17,.42); }
+.graph-hint { background:rgba(8,16,24,.94); border-top:1px solid var(--border-soft); color:var(--faint); padding: 10px 17px; display:flex; align-items:center; gap:10px; font: 600 9px var(--mono); letter-spacing:.6px; }
+.hint-icon { font-size:14px; color:var(--mint); }
+.graph-hint-right { margin-left:auto; }
+.logical-viewport { min-height: 440px; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:26px 14px 20px; background:radial-gradient(ellipse at top,rgba(39,77,81,.12),transparent 70%),#0a121a; }
+.logical-viewport[hidden], .graph-viewport[hidden] { display:none !important; }
+.logical-header { text-align:center; }
+.logical-header p { color:var(--muted); max-width:390px; font-size:12px; margin:9px auto 0; }
+.logical-tree { width:min(92%,580px); margin: 20px auto 12px; display:flex; flex-direction:column; align-items:stretch; }
+.logical-item { border:1px solid #344452; border-radius:5px; background:#101e2b; padding:9px 15px; display:flex; justify-content:space-between; align-items:center; gap:15px; color:var(--text); min-height:42px; text-align:left; }
+.logical-item strong { font-size:12px; }
+.logical-item span { color:var(--faint); font:10px var(--mono); }
+.logical-connector { height:14px; width:1px; background:#496a71; margin:auto; position:relative; }
+.logical-connector::after { content:""; position:absolute; bottom:0; left:-3px; border-left:4px solid transparent; border-right:4px solid transparent; border-top:5px solid #496a71; }
+.logical-item:hover { border-color:#61ad9d; }
+.logical-caption { color:var(--faint); font-size:10px; text-align:center; margin-top:auto; padding-top:8px; }
+
+.playback { border-top:1px solid var(--border); margin-top:auto; background:linear-gradient(180deg,#111b24,#101923); }
+.playback-top { display:flex; align-items:center; justify-content:space-between; padding: 15px 17px 12px; gap:15px; }
+.playback-heading { display:flex; align-items:center; gap:15px; }
+.timeline-label { color:var(--muted); font:650 10px var(--mono); letter-spacing:.9px; }
+.timeline-count { color:var(--faint); font:10px var(--mono); white-space:nowrap; }
+.playback-controls { display:flex; align-items:center; gap:6px; }
+.speed-label { font:700 9px var(--mono); color:var(--faint); margin-right:4px; }
+#speed-control { appearance:none; background:#0b151e; color:var(--muted); border:1px solid #2c3b48; font:11px var(--mono); border-radius:3px; padding:7px 18px 7px 8px; cursor:pointer; }
+.icon-button { border:1px solid #2e404c; background:#101f2b; color:#c7d5da; border-radius:3px; width:30px; height:30px; font:19px var(--mono); display:flex; align-items:center; justify-content:center; }
+.icon-button:hover { background:#21303b; }
+.play-button { border:1px solid #59bbaa; background:#244b48; color:#b6ede4; border-radius:3px; padding:6px 11px; font:700 11px var(--mono); height:30px; min-width:70px; display:flex; align-items:center; gap:8px; justify-content:center; }
+.play-button:hover { background:#32625c; }
+#play-icon { font-size:10px; }
+.phase-track { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:5px; padding:0 17px; }
+.phase-chip { background:#0c151d; border:1px solid var(--border); border-radius:3px; color:var(--faint); min-height:51px; text-align:left; padding:8px 7px; transition:background .15s, border-color .15s; overflow:hidden; }
+.phase-chip .chip-number { display:block; font:700 9px var(--mono); margin-bottom:5px; }
+.phase-chip .chip-title { display:block; font:650 9px var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.phase-chip.is-completed { border-color:#2f5b56; color:#81bcb2; background:#112420; }
+.phase-chip.is-current { border-color:#4eafa0; background:#1b3838; color:#aff5e7; box-shadow:inset 0 2px 0 rgba(100,236,211,.23); }
+.phase-chip:hover { border-color:#69928d; }
+.phase-explanation { display:flex; align-items:center; gap:12px; padding:16px 17px 17px; }
+.phase-number { font:700 26px var(--mono); color:#3c736f; line-height:1; border-right:1px solid #35444b; padding-right:13px; }
+.phase-explanation h3 { font-size:12px; font-weight:670; margin:0 0 3px; }
+.phase-explanation p { color:var(--muted); line-height:1.45; font-size:11px; margin:0; max-width:650px; }
+.phase-status { display:flex; align-items:center; gap:7px; color:var(--mint); font: 700 9px var(--mono); margin-left:auto; white-space:nowrap; }
+.pulse-circle { width:6px; height:6px; border-radius:50%; background:var(--mint); }
+.is-playing .pulse-circle { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% {opacity:.3;box-shadow:0 0 0 5px rgba(89,214,193,.12)} }
+
+.inspect-panel { display:flex; flex-direction:column; }
+.inspector-body { padding: 21px 19px; }
+.inspector-top { display:flex; justify-content:space-between; gap:10px; align-items:center; }
+.inspector-eyebrow { color:var(--mint); font:700 9px var(--mono); letter-spacing:1px; }
+.inspector-id { color:var(--faint); font: 10px var(--mono); }
+.inspect-icon { display:flex; align-items:center; justify-content:center; width:48px; height:48px; border:1px solid #426965; background:#1a3534; color:var(--mint); border-radius:8px; font-size:26px; margin:22px 0 16px; }
+#inspect-title { font-size:18px; line-height:1.3; letter-spacing:-.45px; margin:0 0 8px; }
+#inspect-description { font-size:12px; line-height:1.65; color:var(--muted); margin:0; }
+.inspector-rule { border-top:1px solid var(--border); margin: 23px 0; }
+.inspect-properties { display:flex; flex-direction:column; gap:15px; }
+.property-item { display:flex; flex-direction:column; gap:5px; }
+.property-item .property-label { color:var(--faint); font:650 9px var(--mono); letter-spacing:.8px; }
+.property-item .property-value { color:#d4e0e5; font:12px/1.5 var(--mono); overflow-wrap:anywhere; }
+.property-value .pill { display:inline-block; border:1px solid #376c66; color:var(--mint); font:650 10px var(--mono); padding:2px 6px; border-radius:3px; }
+.inspect-section-label { color:var(--faint); font:700 9px var(--mono); letter-spacing:.9px; margin-bottom:9px; }
+.inspect-note { margin:0; color:#b0c1c9; font-size:12px; line-height:1.75; }
+.source-path { color:var(--amber); font:11px/1.7 var(--mono); word-break:break-word; background:#0a121a; padding:11px; border:1px solid var(--border); border-radius:4px; }
+.copy-source { border:0; padding:10px 0 0; color:var(--mint); background:transparent; font: 650 11px var(--mono); text-align:left; }
+.copy-source:hover { color:#a0faea; }
+.inspector-footer { display:flex; align-items:center; gap:8px; margin-top:auto; border-top:1px solid var(--border); padding:14px 18px; color:var(--muted); font:650 9px var(--mono); }
+.inspector-footer-end { margin-left:auto; color:var(--faint); }
+
+/* SVG primitives, declared here so the graph can be updated without rebuilding CSS. */
+#execution-graph .canvas-grid { opacity:.42; }
+#execution-graph .lane { fill:#10202a; fill-opacity:.34; stroke:#273843; stroke-width:1; stroke-dasharray:3 8; }
+#execution-graph .lane-label { font:700 11px var(--mono); fill:#728592; letter-spacing:1.3px; }
+#execution-graph .lane-count { font:550 10px var(--mono); fill:#4e6877; }
+#execution-graph .graph-node { outline:none; cursor:pointer; }
+#execution-graph .node-body { fill:#111e29; stroke:#3a4a56; stroke-width:1; transition:fill .15s,stroke .15s; }
+#execution-graph .node-accent { fill:#5bd8c1; }
+#execution-graph .node-type { font:700 10px var(--mono); fill:#e2eef2; letter-spacing:.15px; }
+#execution-graph .node-subtitle { font:500 9px var(--mono); fill:#859ba9; }
+#execution-graph .node-index { font:650 9px var(--mono); fill:#4d7f79; }
+#execution-graph .graph-node[data-kind="storage"] .node-body,#execution-graph .graph-node[data-kind="output"] .node-body { fill:#172b2c; stroke:#46736f; }
+#execution-graph .graph-node[data-kind="sort"] .node-body { fill:#1b2330; stroke:#52617f; }
+#execution-graph .graph-node[data-kind="sort"] .node-accent { fill:var(--blue); }
+#execution-graph .graph-node[data-kind="spill"] .node-body { fill:#29241e; stroke:#82623a; }
+#execution-graph .graph-node[data-kind="spill"] .node-accent { fill:var(--amber); }
+#execution-graph .graph-node:hover .node-body,#execution-graph .graph-node.is-selected .node-body,#execution-graph .graph-node:focus-visible .node-body { stroke:#9fece0; stroke-width:1.7; fill:#1b383a; }
+#execution-graph .graph-node.is-active .node-body { stroke:#5bcab8; fill:#1b3736; }
+#execution-graph .graph-node.is-selected.is-active .node-body { stroke:#b9fff0; stroke-width:2; }
+#execution-graph .edge { fill:none; stroke:#396b70; stroke-opacity:.26; stroke-width:1.2; transition:stroke-opacity .2s,stroke-width .2s; pointer-events:stroke; }
+#execution-graph .edge.edge-read { stroke:#568c85; }
+#execution-graph .edge.edge-shuffle { stroke:#51b6aa; }
+#execution-graph .edge.edge-output { stroke:#819ef6; }
+#execution-graph .edge.edge-spill { stroke:#c99a5d; }
+#execution-graph .edge.is-highlighted { stroke-opacity:.75; stroke-width:2; }
+#execution-graph .edge.is-active { stroke-opacity:.86; stroke-width:1.8; stroke-dasharray:5 8; }
+#execution-graph .edge.is-muted { stroke-opacity:.09; }
+#execution-graph.is-playing .edge.is-active { animation: flow-dashes 1.2s linear infinite; }
+@keyframes flow-dashes { to { stroke-dashoffset:-52; } }
+#execution-graph .edge-caption { font:700 10px var(--mono); fill:#6da9a4; letter-spacing:.6px; }
+#execution-graph .edge-caption-secondary { font:500 9px var(--mono); fill:#637f86; }
+#execution-graph .graph-badge-bg { fill:#0f2024; stroke:#2b5856; }
+#execution-graph .graph-badge-text { font:650 10px var(--mono); fill:#8cdecf; }
+#execution-graph .graph-note { font:500 10px var(--mono); fill:#5d7180; }
+#execution-graph .dashed-rule { stroke:#2b404a; stroke-dasharray:4 7; }
+#execution-graph .spilling-label { font:700 10px var(--mono); fill:var(--amber); }
+
+.lower-section { margin: 71px 0 83px; }
+.lower-title h2 { font-size:clamp(27px,2.5vw,40px); letter-spacing:-1.1px; margin:10px 0 5px; }
+.lower-title>p { font-size:14px; color:var(--muted); margin:0; }
+.principles { margin-top: 27px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.principle { padding: 25px 26px 26px; border:1px solid var(--border); background:rgba(14,22,31,.7); border-radius:6px; min-height:190px; }
+.principle-count { font:700 10px var(--mono); color:var(--mint); letter-spacing:.8px; }
+.principle-symbol { color:var(--mint); font:36px var(--mono); height:53px; margin-top:10px; }
+.principle h3 { margin:3px 0 7px; font-size:16px; font-weight:670; letter-spacing:-.2px; }
+.principle p { margin:0; color:var(--muted); font-size:12px; line-height:1.75; }
+.site-footer { border-top:1px solid var(--border); }
+.footer-inner { display:flex; justify-content:space-between; align-items:center; min-height:80px; gap:20px; color:var(--faint); font:650 10px var(--mono); letter-spacing:.5px; }
+.footer-inner .brand-word { font-size:18px; color:var(--text); }
+.footer-divider { color:#46616d; margin:0 10px; }
+.footer-inner a { text-decoration:none; color:#aacfc8; }
+.footer-inner a:hover { color:var(--mint); }
+
+@media (max-width: 1680px) {
+  .workbench { grid-template-columns: 288px minmax(0, 1fr); }
+  .inspect-panel { grid-column:2; }
+  .inspector-body { display:grid; grid-template-columns:1fr 1fr 1.18fr; gap:26px; align-items:start; }
+  .inspect-primary { min-width:0; }
+  .inspect-secondary { border-left:1px solid var(--border); padding-left:25px; height:100%; }
+  .inspect-tertiary { min-width:0; border-left:1px solid var(--border); padding-left:25px; }
+  .inspect-secondary>.inspector-rule:first-child,.inspect-tertiary>.inspector-rule:first-child { display:none; }
+  .inspect-icon { margin:13px 0 12px; }
+  .inspect-panel .panel-heading { height:47px; }
+}
+@media (max-width: 1120px) {
+  .shell { width:calc(100% - 38px); }
+  .hero { align-items:flex-start; }
+  .hero-constraint { display:none; }
+  .workbench { grid-template-columns: 1fr; }
+  .controls-panel,.inspect-panel { grid-column:1; }
+  .controls-content { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap: 0 22px; align-items:start; }
+  .controls-content>.section-heading:first-child,.preset-list,.editor-frame,.editor-help,.primary-button { grid-column:1; }
+  .controls-content>.control-divider { display:none; }
+  .controls-content>.section-heading:nth-of-type(2) { grid-row:1; grid-column:2; }
+  .topology-control,.topology-summary { grid-column:2; }
+  .topology-control:nth-of-type(1) { grid-row:2; }
+  .topology-control.reducers-control { margin-top:0; }
+  .topology-summary { margin-top:0; }
+  .inspect-panel { grid-column:1; }
+}
+@media (max-width: 670px) {
+  .shell { width:calc(100% - 24px); }
+  .site-header { height:58px; }
+  .brand-word { font-size:21px; }
+  .brand-subtitle,.brand-divider,.header-eyebrow { display:none; }
+  .main-content { padding-top:35px; }
+  .hero { margin-bottom:27px; }
+  .hero h1 { font-size:37px; letter-spacing:-1.5px; }
+  .hero p { font-size:13px; }
+  .controls-content { display:block; }
+  .controls-content>.control-divider { display:block; }
+  .topology-control.reducers-control { margin-top:20px; }
+  .topology-summary { margin-top:20px; }
+  .panel-heading { padding-inline:13px; }
+  .canvas-heading { gap:8px; }
+  .view-switch button { padding:6px 7px; font-size:9px; }
+  .canvas-meta { padding-inline:12px; }
+  .meta-right { display:none; }
+  #execution-graph { min-width:950px; }
+  .graph-hint { font-size:8px; }
+  .graph-hint-right { display:none; }
+  .playback-top { flex-wrap:wrap; gap:9px; }
+  .playback-controls { margin-left:auto; }
+  .phase-track { gap:3px; padding-inline:9px; }
+  .phase-chip { padding:6px 3px; min-height:48px; }
+  .phase-chip .chip-number,.phase-chip .chip-title { font-size:8px; }
+  .phase-explanation { padding-inline:11px; }
+  .phase-status { display:none; }
+  .inspector-body { display:block; padding:18px; }
+  .inspect-secondary,.inspect-tertiary { border:0; padding:0; }
+  .inspect-secondary>.inspector-rule:first-child,.inspect-tertiary>.inspector-rule:first-child { display:block; }
+  .principles { grid-template-columns:1fr; }
+  .lower-section { margin:55px 0; }
+  .footer-inner { flex-wrap:wrap; padding:17px 0; gap:10px; font-size:9px; }
+  .footer-inner>div:nth-child(2) { width:100%; }
+}
+@media (prefers-reduced-motion:reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; scroll-behavior:auto !important; }
+}
+
+/* Prevent decorative glow from widening narrow screens; inner graph stays scrollable. */
+body { overflow-x: clip; }
+@media (max-width: 670px) {
+  .inspect-secondary { height: auto; }
+  .ambient-two { display:none; }
+}
+
+    </style>
+
+  </head>
+  <body data-chapter="01">
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="index.html" aria-label="WCOL systems explainers home">
+          <span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span class="brand-word">wcol<span class="brand-slash">/</span></span>
+          <span class="brand-divider"></span>
+          <span class="brand-subtitle">CHAPTER 01</span>
+        </a>
+        <nav class="header-actions" aria-label="On this page">
+          <span class="header-eyebrow"><span class="status-dot"></span> SQL TO GRAPH</span>
+          <a class="header-link" href="#workbench">WORKBENCH</a>
+          <a class="header-link" href="#constraints">CONSTRAINTS</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top" class="shell main-content">
+      <div class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow"><span class="small-cross">✳</span> CHAPTER 01 <span class="eyebrow-index">/ SQL TO GRAPH</span></div>
+          <h1>From SQL to <span>distributed execution.</span></h1>
+          <p>A query starts as a few lines of SQL. WCOL turns it into a graph of streaming operators that can run across small, memory-constrained compute nodes.</p>
+        </div>
+        <div class="hero-constraint" aria-label="Core architectural constraint">
+          <div class="constraint-visual" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+          <div><div class="constraint-number">128<span>MiB</span></div><div class="constraint-label">MEMORY PER ISOLATE</div></div>
+        </div>
+      </div>
+
+      <section id="workbench" class="workbench" aria-label="Interactive query execution explorer">
+        <aside class="panel controls-panel" aria-label="Query controls">
+          <div class="panel-heading">
+            <div class="panel-title"><span class="panel-index">01</span><h2>Configure query</h2></div>
+            <span class="tiny-tag">INPUT</span>
+          </div>
+          <div class="controls-content">
+            <div class="section-heading"><label for="query-editor">SQL QUERY</label><span class="section-hint">CLICK AN EXAMPLE</span></div>
+            <div class="preset-list" role="group" aria-label="Example queries">
+              <button type="button" class="preset is-selected" data-preset="group" aria-pressed="true">Aggregation</button>
+              <button type="button" class="preset" data-preset="high" aria-pressed="false">High cardinality</button>
+              <button type="button" class="preset" data-preset="sort" aria-pressed="false">Global sort</button>
+            </div>
+            <div class="editor-frame">
+              <div class="editor-bar"><span class="editor-filename"><span class="file-square">S</span> query.sql</span><span class="editor-language">SQL</span></div>
+              <div class="editor-body">
+                <div class="editor-gutter" id="editor-lines" aria-hidden="true">1<br>2<br>3<br>4<br>5<br>6</div>
+                <textarea id="query-editor" spellcheck="false" aria-label="SQL query" autocomplete="off" autocapitalize="off" autocorrect="off"></textarea>
+              </div>
+            </div>
+            <p class="editor-help" id="query-validation" role="status">Editable plan sketch. This page does not execute SQL.</p>
+            <button type="button" id="build-plan" class="primary-button"><span class="run-icon" aria-hidden="true">⌘</span> Build execution graph <span class="button-arrow">↗</span></button>
+
+            <div class="control-divider"></div>
+            <div class="section-heading"><span>TOPOLOGY</span><span class="section-hint">INTERACTIVE</span></div>
+            <div class="topology-control">
+              <div class="topology-label"><label for="scanner-count">Scan nodes</label><strong id="scanner-value">4</strong></div>
+              <input id="scanner-count" type="range" min="2" max="8" step="1" value="4" />
+              <div class="range-ends"><span>2</span><span>8</span></div>
+            </div>
+            <div class="topology-control reducers-control">
+              <div class="topology-label"><label for="reducer-choices">Reduce / sort nodes</label><strong id="reducer-value">4</strong></div>
+              <div class="segmented" id="reducer-choices" role="group" aria-label="Reducer count">
+                <button type="button" data-reducers="2" aria-pressed="false">2</button>
+                <button type="button" data-reducers="4" class="is-active" aria-pressed="true">4</button>
+                <button type="button" data-reducers="8" aria-pressed="false">8</button>
+              </div>
+            </div>
+            <div class="topology-summary">
+              <div><span class="summary-label">SHUFFLE CONNECTIONS</span><strong id="edge-count">16</strong></div>
+              <div class="summary-note"><span class="teal-dot"></span> Bounded streaming edges</div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="panel canvas-panel" aria-label="Execution graph">
+          <div class="panel-heading canvas-heading">
+            <div class="panel-title"><span class="panel-index">02</span><h2>Explore the plan</h2></div>
+            <div class="view-switch" role="tablist" aria-label="Plan view">
+              <button id="view-logical" type="button" role="tab" aria-selected="false">Logical</button>
+              <button id="view-physical" type="button" class="is-active" role="tab" aria-selected="true">Physical graph</button>
+            </div>
+          </div>
+          <div class="canvas-meta">
+            <div class="meta-left"><span class="meta-indicator"></span><span id="plan-description">HASH AGGREGATE / GROUP BY</span></div>
+            <div class="meta-right"><span id="execution-status">READY TO EXPLORE</span><span class="meta-separator">/</span><span id="graph-node-count">11 NODES</span></div>
+          </div>
+          <div id="physical-view" class="graph-viewport" role="tabpanel" aria-labelledby="view-physical">
+            <div class="graph-scroll">
+              <svg id="execution-graph" viewBox="0 0 1240 570" width="1240" height="570" role="img" aria-label="Interactive physical execution graph of a distributed SQL query"></svg>
+            </div>
+            <div class="graph-hint"><span class="hint-icon">↖</span> SELECT ANY NODE TO INSPECT IT <span class="graph-hint-right">HOVER EDGES TO TRACE DATA FLOW</span></div>
+          </div>
+          <div id="logical-view" class="logical-viewport" role="tabpanel" aria-labelledby="view-logical" hidden>
+            <div class="logical-header"><div class="eyebrow">SQL / OPERATOR TREE</div><p>Logical operations describe what the query must do, before placement chooses where it runs.</p></div>
+            <div id="logical-tree" class="logical-tree"></div>
+            <p class="logical-caption">Illustrative plan derived from the query shape; not output from the live WCOL planner.</p>
+          </div>
+          <div class="playback" aria-label="Execution walkthrough controls">
+            <div class="playback-top">
+              <div class="playback-heading"><span class="timeline-label">03 / EXECUTION REPLAY</span><span id="phase-counter" class="timeline-count">01 — 06</span></div>
+              <div class="playback-controls">
+                <label class="speed-label" for="speed-control">SPEED</label>
+                <select id="speed-control" aria-label="Playback speed"><option value="1">1×</option><option value="1.75">1.75×</option><option value="3">3×</option></select>
+                <button type="button" id="reset-playback" class="icon-button" aria-label="Reset playback" title="Reset">↺</button>
+                <button type="button" id="step-playback" class="icon-button" aria-label="Next step" title="Next step">›|</button>
+                <button type="button" id="toggle-playback" class="play-button"><span id="play-icon">▶</span><span id="play-label">Play</span></button>
+              </div>
+            </div>
+            <div id="phase-track" class="phase-track" role="group" aria-label="Execution stages"></div>
+            <div class="phase-explanation"><div class="phase-number" id="phase-number">01</div><div><h3 id="phase-title">Plan the query</h3><p id="phase-explanation">Compile logical operators into scan, exchange and compute tasks.</p></div><div class="phase-status"><span class="pulse-circle"></span><span id="phase-state">PLANNED</span></div></div>
+          </div>
+        </section>
+
+        <aside class="panel inspect-panel" aria-label="Node inspector">
+          <div class="panel-heading"><div class="panel-title"><span class="panel-index">03</span><h2>Node inspector</h2></div><span class="tiny-tag">DETAILS</span></div>
+          <div class="inspector-body">
+            <div class="inspect-primary">
+              <div class="inspector-top"><span class="inspector-eyebrow" id="inspect-type">EXECUTION NODE</span><span class="inspector-id" id="inspect-id">SCAN_00</span></div>
+              <div class="inspect-icon" id="inspect-icon" aria-hidden="true">⬡</div>
+              <h2 id="inspect-title">Parquet scanner</h2>
+              <p id="inspect-description">Each scanner reads its assigned Parquet row groups using range requests, then decodes and projects the columns needed downstream.</p>
+            </div>
+            <div class="inspect-secondary">
+              <div class="inspector-rule"></div>
+              <div class="inspect-properties" id="inspect-properties"></div>
+            </div>
+            <div class="inspect-tertiary">
+              <div class="inspector-rule"></div>
+              <div class="inspect-section-label">WHY IT MATTERS</div>
+              <p class="inspect-note" id="inspect-note">Scanners operate on bounded batches and avoid loading an entire dataset into memory.</p>
+              <div class="inspector-rule"></div>
+              <div class="inspect-section-label">IMPLEMENTATION</div>
+              <div class="source-path" id="inspect-source">rust/wcol-engine/src/exec/graph_host.rs</div>
+              <button type="button" class="copy-source" id="copy-source">Copy source path <span aria-hidden="true">↗</span></button>
+            </div>
+          </div>
+          <div class="inspector-footer"><span class="status-dot"></span> GRAPH METADATA <span class="inspector-footer-end">NOT A LIVE TRACE</span></div>
+        </aside>
+      </section>
+
+      <section id="constraints" class="lower-section" aria-label="Architectural notes">
+        <div class="lower-title"><span class="eyebrow">THE CONSTRAINTS</span><h2>Designed around the limits.</h2><p>These aren't implementation details added afterward. They shape the execution graph.</p></div>
+        <div class="principles">
+          <article class="principle"><div class="principle-count">01 / STREAMS</div><div class="principle-symbol">⇢</div><h3>Data moves in bounded frames.</h3><p>WCS frames have a 64 KiB payload cap. Mailboxes and backpressure prevent a slow consumer from forcing unbounded buffering upstream.</p></article>
+          <article class="principle"><div class="principle-count">02 / PLACEMENT</div><div class="principle-symbol">⫶</div><h3>One logical graph, many nodes.</h3><p>The graph describes computation. Placement assigns fragments to execution nodes, while the host handles streams and I/O.</p></article>
+          <article class="principle"><div class="principle-count">03 / MEMORY</div><div class="principle-symbol">▤</div><h3>Spill is part of execution.</h3><p>Hash aggregation flushes sorted runs when the working set grows too large, then merges those runs without keeping every group in memory.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer"><div class="shell footer-inner"><div><span class="brand-word">wcol<span class="brand-slash">/</span></span><span class="footer-divider">—</span> SYSTEMS EXPLAINER · 01</div><div>INTERACTIVE MODEL, NOT A LIVE QUERY RUN <span class="footer-divider">·</span> <a href="https://github.com/davidgtonge/wcol" target="_blank" rel="noopener noreferrer">GITHUB ↗</a></div></div></footer>
+    <script src="_site.js"></script>
+    <script>
+/*
+ * WCOL — SQL to distributed graph
+ * Dependency-free interactive explainer, not a SQL engine or live performance simulator.
+ * All generated execution diagrams are illustrative. No network calls are made.
+ */
+(() => {
+  "use strict";
+
+  const EXAMPLES = {
+    group: {
+      label: "Aggregation",
+      sql: `SELECT RegionID, COUNT(*) AS visits
+FROM hits
+WHERE AdvEngineID <> 0
+GROUP BY RegionID
+ORDER BY visits DESC
+LIMIT 10;`,
+    },
+    high: {
+      label: "High cardinality",
+      sql: `SELECT URL, COUNT(*) AS views
+FROM hits
+GROUP BY URL
+ORDER BY views DESC
+LIMIT 10;`,
+    },
+    sort: {
+      label: "Global sort",
+      sql: `SELECT UserID, URL
+FROM hits
+ORDER BY UserID ASC, URL DESC;`,
+    },
+  };
+
+  const STAGES = {
+    hash: [
+      { chip: "Plan", title: "Build the execution graph", status: "PLANNED", text: "The planner identifies the group keys, scan projections and final ordering, then places scan and hash-reduce fragments on nodes.", nodes: ["storage"], edges: [] },
+      { chip: "Read", title: "Read only the required Parquet ranges", status: "READING", text: "Scan nodes fetch Parquet row groups from R2 using byte-range reads. Object storage stays the durable source of truth.", nodes: ["storage", "scan"], edges: ["read"] },
+      { chip: "Decode", title: "Decode, filter and project", status: "SCANNING", text: "Rust/Wasm decodes column pages and applies the query's filters and projection in bounded batches, before any network exchange.", nodes: ["scan"], edges: [] },
+      { chip: "Shuffle", title: "Hash-partition the rows", status: "EXCHANGING", text: "Each row is routed by its grouping key. Scanners stream 64 KiB-bounded WCS frames to the corresponding reducers, with end-to-end backpressure.", nodes: ["scan", "reduce"], edges: ["shuffle"] },
+      { chip: "Reduce", title: "Aggregate within a memory budget", status: "REDUCING", text: "Reducers group matching keys. A pressure flush can write sorted runs to R2; the runs are merged to produce correct final aggregates.", nodes: ["reduce", "spill"], edges: ["spill"] },
+      { chip: "Output", title: "Finalise and publish the result", status: "COMPLETE", text: "The finaliser consumes reducer output as it arrives, applies the final order or limit, and produces the query result.", nodes: ["reduce", "finalizer", "output"], edges: ["final", "publish"] },
+    ],
+    sort: [
+      { chip: "Plan", title: "Plan a distributed global sort", status: "PLANNED", text: "The physical plan chooses a range exchange and independent sort partitions, followed by one Parquet output finalisation stage.", nodes: ["storage"], edges: [] },
+      { chip: "Read", title: "Read Parquet row groups", status: "READING", text: "Scanners request only the column pages and row groups needed for the ordered export.", nodes: ["storage", "scan"], edges: ["read"] },
+      { chip: "Decode", title: "Decode and project rows", status: "SCANNING", text: "Each scanner decodes and filters a bounded batch, preserving complete sort keys for the range exchange.", nodes: ["scan"], edges: [] },
+      { chip: "Exchange", title: "Route rows into ordered ranges", status: "EXCHANGING", text: "Rows are assigned to non-overlapping sort-key ranges. Each destination receives WCS frames from many scanners.", nodes: ["scan", "sort"], edges: ["shuffle"] },
+      { chip: "Sort", title: "Sort partitions independently", status: "SORTING", text: "Each partition sorts its assigned range and writes an independent Parquet shard. Partition order determines global order.", nodes: ["sort"], edges: ["final"] },
+      { chip: "Assemble", title: "Finalise a single Parquet result", status: "COMPLETE", text: "The Parquet finaliser copies row-group data in partition order and rewrites metadata. It does not re-sort those rows.", nodes: ["sort", "finalizer", "output"], edges: ["final", "publish"] },
+    ],
+    scan: [
+      { chip: "Plan", title: "Plan a distributed scan", status: "PLANNED", text: "The planner creates independent scan tasks and a final result operation.", nodes: ["storage"], edges: [] },
+      { chip: "Read", title: "Read Parquet ranges", status: "READING", text: "Scan tasks fetch independent Parquet row groups using bounded range requests.", nodes: ["storage", "scan"], edges: ["read"] },
+      { chip: "Decode", title: "Execute scan predicates", status: "SCANNING", text: "Rust/Wasm applies predicates and projections to column batches.", nodes: ["scan"], edges: [] },
+      { chip: "Stream", title: "Forward partial scan results", status: "STREAMING", text: "Bounded WCS streams carry partial outputs to the finishing nodes.", nodes: ["scan", "reduce"], edges: ["shuffle"] },
+      { chip: "Merge", title: "Combine partial results", status: "MERGING", text: "Independent partial results are merged without materialising the full source dataset.", nodes: ["reduce"], edges: [] },
+      { chip: "Output", title: "Publish the result", status: "COMPLETE", text: "The finaliser consumes stream output and publishes the requested result.", nodes: ["reduce", "finalizer", "output"], edges: ["final", "publish"] },
+    ],
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    editor: $("query-editor"), lines: $("editor-lines"), validation: $("query-validation"),
+    build: $("build-plan"), scanner: $("scanner-count"), scannerValue: $("scanner-value"),
+    reducerValue: $("reducer-value"), edgeCount: $("edge-count"),
+    logicalButton: $("view-logical"), physicalButton: $("view-physical"),
+    logicalView: $("logical-view"), physicalView: $("physical-view"),
+    svg: $("execution-graph"), logicalTree: $("logical-tree"),
+    planDescription: $("plan-description"), status: $("execution-status"), nodeCount: $("graph-node-count"),
+    phaseTrack: $("phase-track"), phaseCounter: $("phase-counter"),
+    phaseNumber: $("phase-number"), phaseTitle: $("phase-title"),
+    phaseExplanation: $("phase-explanation"), phaseState: $("phase-state"),
+    togglePlayback: $("toggle-playback"), playIcon: $("play-icon"), playLabel: $("play-label"),
+    reset: $("reset-playback"), step: $("step-playback"), speed: $("speed-control"),
+    inspectType: $("inspect-type"), inspectId: $("inspect-id"), inspectIcon: $("inspect-icon"),
+    inspectTitle: $("inspect-title"), inspectDescription: $("inspect-description"),
+    inspectProperties: $("inspect-properties"), inspectNote: $("inspect-note"),
+    inspectSource: $("inspect-source"), copySource: $("copy-source"),
+  };
+
+  const state = {
+    example: "group", sql: EXAMPLES.group.sql,
+    plan: null, scanners: 4, reducers: 4,
+    view: "physical", phase: 0, playing: false, speed: 1,
+    selectedNode: "scan-0", timer: null, nodes: [],
+  };
+
+  function htmlEscape(value) {
+    return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+  }
+
+  function normalizeSQL(sql) {
+    return sql.trim().replace(/\s+/g, " ").replace(/;$/, "");
+  }
+
+  function extractClause(sql, start, until) {
+    const re = new RegExp(`\\b${start}\\s+([\\s\\S]*?)(?=\\b(?:${until.join("|")})\\b|$)`, "i");
+    const match = sql.match(re);
+    return match ? match[1].trim().replace(/\s*;\s*$/, "") : "";
+  }
+
+  function derivePlan(sql) {
+    const clean = normalizeSQL(sql);
+    if (!/^select\s/i.test(clean) || !/\bfrom\s+hits\b/i.test(clean)) {
+      return { error: "Use a SELECT … FROM hits query. This is a visualiser, not a full SQL compiler." };
+    }
+    const hasGroup = /\bgroup\s+by\b/i.test(clean);
+    const hasOrder = /\border\s+by\b/i.test(clean);
+    const hasWhere = /\bwhere\b/i.test(clean);
+    const hasLimit = /\blimit\s+\d+/i.test(clean);
+    const mode = hasGroup ? "hash" : hasOrder ? "sort" : "scan";
+    const groupKeys = hasGroup ? extractClause(clean, "GROUP BY", ["HAVING", "ORDER BY", "LIMIT"]) : "";
+    const orderKeys = hasOrder ? extractClause(clean, "ORDER BY", ["LIMIT", "OFFSET"]) : "";
+    const where = hasWhere ? extractClause(clean, "WHERE", ["GROUP BY", "ORDER BY", "LIMIT"]) : "";
+    const limit = hasLimit ? Number(clean.match(/\blimit\s+(\d+)/i)[1]) : null;
+    const isWide = mode === "hash" && /\b(?:URL|Title|SearchPhrase)\b/i.test(groupKeys);
+    return { mode, hasGroup, hasOrder, hasWhere, hasLimit, groupKeys, orderKeys, where, limit, isWide,
+      summary: mode === "hash" ? `HASH AGGREGATE / ${isWide ? "HIGH-CARDINALITY KEY" : "GROUP BY"}` : mode === "sort" ? "RANGE EXCHANGE / GLOBAL ORDER" : "DISTRIBUTED SCAN / PARTIALS" };
+  }
+
+  function stopPlayback() {
+    state.playing = false;
+    if (state.timer !== null) clearTimeout(state.timer);
+    state.timer = null;
+    els.playIcon.textContent = "▶";
+    els.playLabel.textContent = "Play";
+    document.body.classList.remove("is-playing");
+    els.svg.classList.remove("is-playing");
+  }
+
+  function startPlayback() {
+    if (state.phase === 5) state.phase = 0;
+    state.playing = true;
+    els.playIcon.textContent = "Ⅱ";
+    els.playLabel.textContent = "Pause";
+    document.body.classList.add("is-playing");
+    els.svg.classList.add("is-playing");
+    renderStage();
+    scheduleTick();
+  }
+
+  function scheduleTick() {
+    if (!state.playing) return;
+    if (state.timer !== null) clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      if (state.phase >= 5) { stopPlayback(); renderStage(); return; }
+      state.phase += 1;
+      renderStage();
+      if (state.phase === 5) {
+        state.timer = setTimeout(() => { stopPlayback(); renderStage(); }, 2200 / state.speed);
+      } else {
+        scheduleTick();
+      }
+    }, 2200 / state.speed);
+  }
+
+  function updateEditorGutter() {
+    const count = Math.max(6, els.editor.value.split("\n").length);
+    els.lines.innerHTML = Array.from({ length: count }, (_, i) => i + 1).join("<br>");
+    els.lines.scrollTop = els.editor.scrollTop;
+  }
+
+  function setExample(key) {
+    if (!EXAMPLES[key]) return;
+    state.example = key;
+    state.sql = EXAMPLES[key].sql;
+    els.editor.value = state.sql;
+    document.querySelectorAll("[data-preset]").forEach(button => {
+      const active = button.dataset.preset === key;
+      button.classList.toggle("is-selected", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    updateEditorGutter();
+    compile();
+  }
+
+  function compile() {
+    const plan = derivePlan(els.editor.value);
+    if (plan.error) {
+      els.validation.textContent = plan.error;
+      els.validation.classList.add("has-error");
+      return false;
+    }
+    stopPlayback();
+    state.plan = plan;
+    state.sql = els.editor.value;
+    state.phase = 0;
+    state.selectedNode = "scan-0";
+    els.validation.textContent = "Illustrative placement inferred from query shape — no SQL is executed.";
+    els.validation.classList.remove("has-error");
+    render();
+    return true;
+  }
+
+  const NODE_LAYOUT = {
+    storage: { x: 53, width: 129, y: 256, height: 51 },
+    scan: { x: 228, width: 146 },
+    reduce: { x: 643, width: 168 },
+    finalizer: { x: 896, width: 148, y: 256, height: 51 },
+    output: { x: 1093, width: 129, y: 256, height: 51 },
+    spill: { x: 646, width: 162, y: 492, height: 41 },
+  };
+
+  function centers(count) {
+    if (count === 1) return [278];
+    return Array.from({ length: count }, (_, i) => 126 + i * (306 / (count - 1)));
+  }
+
+  function makeNode(id, kind, label, subtitle, x, centerY, width, height, index) {
+    return { id, kind, label, subtitle, x, y: centerY - height / 2, width, height, centerY, index };
+  }
+
+  function makeNodes() {
+    const plan = state.plan;
+    const sort = plan.mode === "sort";
+    const scans = centers(state.scanners);
+    const reducers = centers(state.reducers);
+    const scanHeight = state.scanners > 6 ? 36 : 49;
+    const reducerHeight = state.reducers > 6 ? 36 : 49;
+    const nodes = [makeNode("storage", "storage", "R2 / PARQUET", "columnar input", 53, 281.5, 129, 51, null)];
+    scans.forEach((centerY, i) => nodes.push(makeNode(`scan-${i}`, "scan", `SCAN ${String(i + 1).padStart(2, "0")}`, state.plan.hasWhere ? "filter / project" : "decode / project", 228, centerY, 146, scanHeight, i)));
+    reducers.forEach((centerY, i) => nodes.push(makeNode(`compute-${i}`, sort ? "sort" : "reduce", `${sort ? "SORT" : plan.mode === "hash" ? "REDUCE" : "MERGE"} ${String(i + 1).padStart(2, "0")}`, sort ? "sort / encode" : plan.mode === "hash" ? "group / spill" : "partials", 643, centerY, 168, reducerHeight, i)));
+    nodes.push(makeNode("finalizer", "finalizer", sort ? "PARQUET ASSEMBLE" : "FINALISER", sort ? "row groups / footer" : "order / limit / output", 896, 281.5, 148, 51, null));
+    nodes.push(makeNode("output", "output", sort ? "RESULT.PARQUET" : "QUERY RESULT", sort ? "single file / R2" : "published result", 1093, 281.5, 129, 51, null));
+    if (plan.mode === "hash") nodes.push(makeNode("spill", "spill", "R2 SPILL RUNS", "sorted run storage", 646, 512.5, 162, 41, null));
+    return nodes;
+  }
+
+  function pathCurve(x1, y1, x2, y2) {
+    const b = (x2 - x1) * .48;
+    return `M${x1.toFixed(1)},${y1.toFixed(1)} C${(x1 + b).toFixed(1)},${y1.toFixed(1)} ${(x2 - b).toFixed(1)},${y2.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+  }
+
+  function graphPath(a, b, type, id, label, startAt = "right", endAt = "left") {
+    const x1 = startAt === "bottom" ? a.x + a.width / 2 : a.x + a.width;
+    const y1 = startAt === "bottom" ? a.y + a.height : a.centerY;
+    const x2 = endAt === "top" ? b.x + b.width / 2 : b.x;
+    const y2 = endAt === "top" ? b.y : b.centerY;
+    const d = pathCurve(x1, y1, x2, y2);
+    const stage = STAGES[state.plan.mode][state.phase];
+    const active = stage.edges.includes(type);
+    const selected = state.selectedNode && (a.id === state.selectedNode || b.id === state.selectedNode || state.selectedNode === "exchange" && type === "shuffle");
+    const mute = state.selectedNode && !selected && state.selectedNode !== "planner";
+    return `<path id="${id}" class="edge edge-${type}${active ? " is-active" : ""}${selected ? " is-highlighted" : ""}${mute && !active ? " is-muted" : ""}" d="${d}" data-from="${a.id}" data-to="${b.id}"><title>${htmlEscape(label)}</title></path>`;
+  }
+
+  function nodeMarkup(n) {
+    const stage = STAGES[state.plan.mode][state.phase];
+    const isSelected = n.id === state.selectedNode;
+    const isActive = stage.nodes.includes(n.kind);
+    const compact = n.height < 40;
+    const topTextY = compact ? n.y + 15 : n.y + 21;
+    const subTextY = compact ? n.y + 27 : n.y + 36;
+    const rx = 5;
+    return `<g class="graph-node${isSelected ? " is-selected" : ""}${isActive ? " is-active" : ""}" data-node="${htmlEscape(n.id)}" data-kind="${n.kind}" tabindex="0" role="button" aria-label="Inspect ${htmlEscape(n.label)}">
+      <rect class="node-body" x="${n.x}" y="${n.y.toFixed(1)}" width="${n.width}" height="${n.height}" rx="${rx}"/>
+      <rect class="node-accent" x="${n.x}" y="${(n.y + 9).toFixed(1)}" height="${Math.max(12,n.height-18)}" width="3" rx="1"/>
+      <text class="node-type" x="${n.x + 14}" y="${topTextY.toFixed(1)}">${htmlEscape(n.label)}</text>
+      <text class="node-subtitle" x="${n.x + 14}" y="${subTextY.toFixed(1)}">${htmlEscape(n.subtitle)}</text>
+      ${n.index !== null && !compact ? `<text class="node-index" x="${n.x + n.width - 10}" y="${topTextY.toFixed(1)}" text-anchor="end">${(n.index + 1).toString(16).padStart(2,"0")}</text>` : ""}
+    </g>`;
+  }
+
+  function renderGraph() {
+    state.nodes = makeNodes();
+    const nodes = state.nodes;
+    const storage = nodes.find(n => n.id === "storage");
+    const scans = nodes.filter(n => n.kind === "scan");
+    const computes = nodes.filter(n => n.kind === "reduce" || n.kind === "sort");
+    const finalizer = nodes.find(n => n.id === "finalizer");
+    const output = nodes.find(n => n.id === "output");
+    const spill = nodes.find(n => n.id === "spill");
+    const sort = state.plan.mode === "sort";
+    const hash = state.plan.mode === "hash";
+    const stage = STAGES[state.plan.mode][state.phase];
+    const edges = [];
+    scans.forEach((scan, i) => edges.push(graphPath(storage, scan, "read", `read-${i}`, `R2 → ${scan.label}: Parquet ranges`)));
+    scans.forEach((scan,i) => computes.forEach((reduce,j) => edges.push(graphPath(scan,reduce,"shuffle",`shuffle-${i}-${j}`, `${scan.label} → ${reduce.label}: 64 KiB bounded WCS frames`))));
+    computes.forEach((reduce,j) => edges.push(graphPath(reduce,finalizer,"final",`final-${j}`,`${reduce.label} → ${finalizer.label}: output stream`)));
+    edges.push(graphPath(finalizer,output,"publish","publish-result","Finaliser → result"));
+    if (spill) computes.forEach((reduce,j) => {
+      if (j % Math.max(1, Math.floor(computes.length / 3)) === 0) {
+        edges.push(graphPath(reduce,spill,"spill",`spill-${j}`,`${reduce.label} → R2: sorted spill runs`,`bottom`,`top`));
+      }
+    });
+
+    const lanes = [
+      { x:30, w:171, name:"OBJECT STORE", count:"source" },
+      { x:210, w:184, name:"SCANNERS", count:`${state.scanners} nodes` },
+      { x:621, w:212, name: sort ? "SORT SHARDS" : hash ? "HASH REDUCERS" : "MERGE TASKS", count:`${state.reducers} nodes` },
+      { x:870, w:190, name:"FINALISER", count:"coordinator" },
+      { x:1075, w:161, name:"OUTPUT", count: sort ? "Parquet" : "result" },
+    ];
+    const laneMarkup = lanes.map(l => `<rect class="lane" x="${l.x}" y="79" width="${l.w}" height="391" rx="8"/><text class="lane-label" x="${l.x + 13}" y="39">${l.name}</text><text class="lane-count" x="${l.x + 13}" y="57">${l.count}</text>`).join("");
+    const badgeText = `${sort ? "RANGE" : "HASH"} EXCHANGE / ${scans.length * computes.length} STREAMS`;
+    const badgeX = 407;
+    const badge = `<rect class="graph-badge-bg" x="${badgeX}" y="91" width="205" height="29" rx="4"/><text class="graph-badge-text" x="${badgeX + 12}" y="109">${badgeText}</text><text class="edge-caption-secondary" x="${badgeX + 11}" y="137">64 KiB max payload / WCS frame</text>`;
+    const spillLabel = spill ? `<text class="spilling-label" x="${spill.x + 4}" y="477">OPTIONAL UNDER PRESSURE</text>` : "";
+    const modeNote = sort ? "Range boundaries enforce partition ordering" : hash ? "All equal grouping keys route to the same reducer" : "Bounded streams carry partial results";
+    els.svg.innerHTML = `<defs>
+      <pattern id="canvas-dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#2e4150" opacity=".52"/></pattern>
+    </defs>
+    <rect x="0" y="0" width="1240" height="570" fill="#0a121a"/>
+    <rect class="canvas-grid" x="0" y="0" width="1240" height="570" fill="url(#canvas-dots)"/>
+    ${laneMarkup}
+    <g class="graph-edges">${edges.join("")}</g>
+    <g class="graph-nodes">${nodes.map(nodeMarkup).join("")}</g>
+    ${badge}${spillLabel}
+    <line class="dashed-rule" x1="36" y1="548" x2="1205" y2="548"/>
+    <text class="graph-note" x="42" y="564">ILLUSTRATIVE EXECUTION GRAPH  /  ${htmlEscape(modeNote)}</text>
+    <text class="graph-note" x="1205" y="564" text-anchor="end">STAGE ${String(state.phase + 1).padStart(2,"0")} / 06</text>`;
+    els.svg.classList.toggle("is-playing", state.playing);
+    els.nodeCount.textContent = `${nodes.length} NODES`;
+    els.planDescription.textContent = state.plan.summary;
+    els.edgeCount.textContent = String(state.scanners * state.reducers);
+    els.scannerValue.textContent = String(state.scanners);
+    els.reducerValue.textContent = String(state.reducers);
+    els.status.textContent = stage.status;
+  }
+
+  function renderLogical() {
+    const p = state.plan;
+    const ops = [];
+    if (p.hasLimit) ops.push({ title:`LIMIT ${p.limit}`, info:"Top-N result cap", kind:"finalizer" });
+    if (p.mode === "hash") {
+      if (p.hasOrder) ops.push({ title:"Sort / Top-K", info: p.orderKeys || "Result ordering", kind:"finalizer" });
+      ops.push({ title:"HashAggregate", info:p.groupKeys || "Group keys", kind:"reduce" });
+      ops.push({ title:"Exchange (hash)", info:"Repartition rows by grouping keys", kind:"exchange" });
+    } else if (p.mode === "sort") {
+      ops.push({ title:"Parquet output", info:"Ordered row-group assembly", kind:"finalizer" });
+      ops.push({ title:"Sort", info:p.orderKeys || "Global ordering", kind:"sort" });
+      ops.push({ title:"Exchange (range)", info:"Route to ordered key ranges", kind:"exchange" });
+    } else {
+      ops.push({ title:"Merge partial outputs", info:"Coordinator result", kind:"finalizer" });
+    }
+    ops.push({ title:"Projection", info:"Keep required columns", kind:"scan" });
+    if (p.hasWhere) ops.push({ title:"Filter", info:p.where.slice(0,70), kind:"scan" });
+    ops.push({ title:"ParquetScan", info:"Row groups, columns, ranges", kind:"storage" });
+    els.logicalTree.innerHTML = ops.map((op,i) => `${i ? `<div class="logical-connector" aria-hidden="true"></div>` : ""}<button type="button" class="logical-item" data-logical-kind="${op.kind}"><strong>${htmlEscape(op.title)}</strong><span>${htmlEscape(op.info)}</span></button>`).join("");
+  }
+
+  function renderStage() {
+    const stages = STAGES[state.plan.mode];
+    const stage = stages[state.phase];
+    els.phaseTrack.innerHTML = stages.map((s,i) => `<button type="button" class="phase-chip${i === state.phase ? " is-current" : i < state.phase ? " is-completed" : ""}" data-phase="${i}" aria-pressed="${i === state.phase}"><span class="chip-number">${String(i + 1).padStart(2,"0")}</span><span class="chip-title">${htmlEscape(s.chip)}</span></button>`).join("");
+    els.phaseCounter.textContent = `${String(state.phase + 1).padStart(2,"0")} — 06`;
+    els.phaseNumber.textContent = String(state.phase + 1).padStart(2,"0");
+    els.phaseTitle.textContent = stage.title;
+    els.phaseExplanation.textContent = stage.text;
+    els.phaseState.textContent = stage.status;
+    renderGraph();
+  }
+
+  function inspectionData(id) {
+    const p = state.plan;
+    const sort = p.mode === "sort";
+    const n = state.nodes.find(node => node.id === id);
+    const index = n?.index;
+    const base = { id: id.toUpperCase().replaceAll("-","_"), icon:"⬡" };
+    if (id === "planner") return { ...base, type:"PLANNER / PLACEMENT", title:"Physical plan", icon:"◇", description:"WCOL turns logical operations into fragments and places those fragments on execution nodes.", properties:[["INPUT","Logical SQL operations"],["OUTPUT","Fragments and stream edges"],["PLACEMENT","Scanners + reducer/sort tasks"]], note:"The placement plan is distinct from its transport. The same logical operators can be executed together or distributed across nodes.", source:"rust/wcol-plan/src/plan/physical_plan.rs" };
+    if (id === "exchange") return { ...base, type: sort ? "RANGE EXCHANGE" : "HASH EXCHANGE", title:sort ? "Range partitioning" : "Hash partitioning", icon:"⇢", description:sort ? "Rows are routed to sort partitions by the composite ORDER BY keys. Each partition owns a non-overlapping key range." : "Rows are routed by group key. Every row with the same grouping key reaches the same reducer.", properties:[["EDGE COUNT",`${state.scanners * state.reducers} streams`],["FRAME CONTRACT","64 KiB WCS payload cap"],["BACKPRESSURE","Bounded per-port mailboxes"]], note:"Exchange is a streaming edge between execution fragments, not a dedicated intermediate machine. The host owns stream backpressure.", source: sort ? "rust/wcol-engine/src/ops/exchange/range_partition.rs" : "rust/wcol-engine/src/ops/exchange/hash_partition.rs" };
+    if (!n) return inspectionData("planner");
+    if (n.kind === "storage") return { ...base, type:"PERSISTENT STORAGE", title:"R2 / Parquet source", icon:"▥", description:"Columnar source objects live in R2. The execution graph reads row groups and column pages by byte range instead of downloading entire files.", properties:[["DATA FORMAT","Parquet"],["READ MODE","Range requests"],["FAN-OUT",`${state.scanners} scan tasks`]], note:"Object storage is a durable data layer, not an execution-node memory cache. Scanners operate on bounded batches.", source:"rust/wcol-engine/src/formats/parquet/" };
+    if (n.kind === "scan") return { ...base, type:"EXECUTION / SCAN", title:`Scanner ${String(index + 1).padStart(2,"0")}`, icon:"⌗", description:"A Rust/Wasm graph host reads its assigned Parquet row groups, decodes required columns, and produces bounded batches.", properties:[["SOURCE","R2 byte ranges"],["OPERATORS",p.hasWhere ? "Decode → Filter → Project" : "Decode → Project"],["OUTPUT",`${state.reducers} WCS streams`]], note:"Projections and filters happen before shuffle, so unnecessary columns and rows need not travel to downstream nodes.", source:"rust/wcol-engine/src/exec/graph_host.rs" };
+    if (n.kind === "reduce") return { ...base, type:p.mode === "hash" ? "EXECUTION / AGGREGATE" : "EXECUTION / MERGE", title:p.mode === "hash" ? `Hash reducer ${String(index + 1).padStart(2,"0")}` : `Merge task ${String(index + 1).padStart(2,"0")}`, icon:"∑", description:p.mode === "hash" ? "Consumes WCS input from scanners, groups by the query keys, and maintains aggregate state in a memory-bounded table." : "Merges partial results from the distributed scan fragments.", properties:[["INPUT",`${state.scanners} scanner streams`],["SHUFFLE","WCS / group-key partitioning"],["HASH TARGET","16 MiB flush · 32 MiB ceiling"]], note:"For high-cardinality groups, pressure flushes create sorted spill runs and reclaim oversized table capacity before processing more rows.", source:"rust/wcol-engine/src/ops/query/batch/" };
+    if (n.kind === "sort") return { ...base, type:"EXECUTION / RANGE SORT", title:`Sort shard ${String(index + 1).padStart(2,"0")}`, icon:"≡", description:"Consumes rows from an ordered key range, sorts them locally and emits a Parquet shard with row groups in sort order.", properties:[["INPUT",`${state.scanners} scanner streams`],["PARTITION",`${index + 1} / ${state.reducers}`],["OUTPUT","Ordered Parquet shard"]], note:"A range-partitioned sort is globally ordered only when shard key ranges do not overlap and the finaliser preserves partition order.", source:"rust/wcol-engine/src/ops/sort.rs" };
+    if (n.kind === "spill") return { ...base, type:"EXTERNAL MEMORY", title:"R2 spill runs", icon:"⇣", description:"When hash aggregation approaches its working-memory target, live groups are encoded as sorted runs in R2 and merged later.", properties:[["FLUSH TARGET","16 MiB"],["HARD GROUP CEILING","32 MiB"],["POST-FLUSH RECLAIM","8 MiB retained low-water"]], note:"The final number of runs depends on key cardinality and data shape. This diagram is not reporting measured run counts.", source:"rust/wcol-engine/src/spill/" };
+    if (n.kind === "finalizer") return { ...base, type:"OUTPUT / FINALISATION", title:sort ? "Parquet finaliser" : "Query finaliser", icon:"⇥", description:sort ? "Assembles committed, ordered Parquet shards into one logical output by copying row groups and updating footer metadata." : "Consumes reducer results as they arrive, applies the final ordering and limit where needed, and creates the query output.", properties:[["INPUT",sort ? `${state.reducers} committed shard outputs` : `${state.reducers} reducer streams`],["MODE",sort ? "Ordered row-group concat" : p.hasOrder ? "Final sort / limit" : "Merge / output"],["OUTPUT",sort ? "Single Parquet file" : "Query result"]], note:sort ? "Parquet files cannot be concatenated byte-for-byte; metadata offsets and the final footer need rebuilding." : "The finaliser must start consuming before producers finish, otherwise a bounded pipe can deadlock.", source:sort ? "rust/wcol-engine/src/formats/parquet/page_compact.rs" : "src/runtime/coordinator/run-hash-job.ts" };
+    if (n.kind === "output") return { ...base, type:"DURABLE RESULT", title:sort ? "result.parquet" : "Query output", icon:"▤", description:sort ? "The finished Parquet object is published only after all required shards have committed and the finaliser succeeds." : "The output contains the final query result. Final ordering and LIMIT are applied as required by the query.", properties:[["FORMAT",sort ? "Parquet" : "Query result"],["INPUT","Finaliser"],["PUBLICATION","After successful completion"]], note:"This is an illustrative topology. No Parquet or query result is generated by this browser demo.", source:"src/runtime/host/ports/r2-write.ts" };
+    return inspectionData("planner");
+  }
+
+  function renderInspector() {
+    const info = inspectionData(state.selectedNode);
+    els.inspectType.textContent = info.type;
+    els.inspectId.textContent = info.id;
+    els.inspectIcon.textContent = info.icon;
+    els.inspectTitle.textContent = info.title;
+    els.inspectDescription.textContent = info.description;
+    els.inspectProperties.innerHTML = info.properties.map(([label,value]) => `<div class="property-item"><span class="property-label">${htmlEscape(label)}</span><span class="property-value">${htmlEscape(value)}</span></div>`).join("");
+    els.inspectNote.textContent = info.note;
+    els.inspectSource.textContent = info.source;
+    els.copySource.dataset.path = info.source;
+  }
+
+  function setView(view) {
+    state.view = view;
+    const logical = view === "logical";
+    els.logicalView.hidden = !logical;
+    els.physicalView.hidden = logical;
+    els.logicalButton.classList.toggle("is-active",logical);
+    els.physicalButton.classList.toggle("is-active",!logical);
+    els.logicalButton.setAttribute("aria-selected",String(logical));
+    els.physicalButton.setAttribute("aria-selected",String(!logical));
+  }
+
+  function render() {
+    renderLogical();
+    renderStage();
+    renderInspector();
+    setView(state.view);
+  }
+
+  function selectNode(id) {
+    state.selectedNode = id;
+    renderInspector();
+    renderGraph();
+  }
+
+  function initialize() {
+    document.querySelectorAll("[data-preset]").forEach(button => button.addEventListener("click", () => setExample(button.dataset.preset)));
+    els.editor.addEventListener("input", () => {
+      state.example = null;
+      document.querySelectorAll("[data-preset]").forEach(b => { b.classList.remove("is-selected"); b.setAttribute("aria-pressed","false"); });
+      updateEditorGutter();
+      els.validation.textContent = "Edited. Select Build execution graph to update the plan.";
+      els.validation.classList.remove("has-error");
+    });
+    els.editor.addEventListener("scroll", updateEditorGutter);
+    els.editor.addEventListener("keydown", event => {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const start = els.editor.selectionStart;
+        const end = els.editor.selectionEnd;
+        els.editor.setRangeText("  ",start,end,"end");
+        updateEditorGutter();
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); compile(); }
+    });
+    els.build.addEventListener("click",compile);
+    els.scanner.addEventListener("input", event => { state.scanners = Number(event.target.value); renderStage(); renderInspector(); });
+    document.querySelectorAll("[data-reducers]").forEach(button => button.addEventListener("click", () => {
+      state.reducers = Number(button.dataset.reducers);
+      document.querySelectorAll("[data-reducers]").forEach(b => {
+        const active = Number(b.dataset.reducers) === state.reducers;
+        b.classList.toggle("is-active",active);
+        b.setAttribute("aria-pressed",String(active));
+      });
+      renderStage(); renderInspector();
+    }));
+    els.logicalButton.addEventListener("click",()=>setView("logical"));
+    els.physicalButton.addEventListener("click",()=>setView("physical"));
+    els.svg.addEventListener("click", event => {
+      const node = event.target.closest?.("[data-node]");
+      if (node) selectNode(node.getAttribute("data-node"));
+      else if (event.target.closest?.(".edge-shuffle")) selectNode("exchange");
+    });
+    els.svg.addEventListener("keydown", event => {
+      const node = event.target.closest?.("[data-node]");
+      if (node && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); selectNode(node.getAttribute("data-node")); }
+    });
+    els.logicalTree.addEventListener("click",event => {
+      const node = event.target.closest?.("[data-logical-kind]");
+      if (!node) return;
+      const kind = node.dataset.logicalKind;
+      const id = kind === "scan" ? "scan-0" : kind === "reduce" || kind === "sort" ? "compute-0" : kind === "exchange" ? "exchange" : kind === "storage" ? "storage" : "finalizer";
+      selectNode(id);
+    });
+    els.phaseTrack.addEventListener("click",event => {
+      const chip = event.target.closest?.("[data-phase]");
+      if (!chip) return;
+      stopPlayback();
+      state.phase = Number(chip.dataset.phase);
+      renderStage();
+    });
+    els.togglePlayback.addEventListener("click",()=> state.playing ? stopPlayback() : startPlayback());
+    els.step.addEventListener("click",()=> { stopPlayback(); state.phase = (state.phase + 1) % 6; renderStage(); });
+    els.reset.addEventListener("click",()=> { stopPlayback(); state.phase = 0; renderStage(); });
+    els.speed.addEventListener("change",event => { state.speed = Number(event.target.value); if (state.playing) scheduleTick(); });
+    els.copySource.addEventListener("click", async () => {
+      const path = els.copySource.dataset.path;
+      if (!path) return;
+      try {
+        if (!navigator.clipboard) throw new Error("Clipboard not supported");
+        await navigator.clipboard.writeText(path);
+        const previous = els.copySource.innerHTML;
+        els.copySource.textContent = "Copied";
+        setTimeout(()=>{els.copySource.innerHTML=previous;},1250);
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(els.inspectSource);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        els.copySource.textContent = "Select the path above to copy";
+      }
+    });
+    els.editor.value = state.sql;
+    updateEditorGutter();
+    compile();
+  }
+
+  initialize();
+})();
+
+    </script>
+  </body>
+</html>

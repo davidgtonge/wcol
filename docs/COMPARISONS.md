@@ -98,7 +98,7 @@ Native DuckDB CLI binary (~100 MB on disk) is a different deployment shape â€” f
 npm run compare
 
 # or step by step:
-cargo build -p wcol-cli --release --manifest-path rust/Cargo.toml
+cargo build -p wcol-cli --release --manifest-path archive/rust/Cargo.toml
 node scripts/compare-report.mjs
 ```
 
@@ -106,7 +106,7 @@ DuckDB timings use `@duckdb/node-api` (devDependency) with one held connection â
 
 # wasm size profile only
 npm run build:wasm:size
-gzip -c rust/wcol-wasm/pkg/wasm/wcol_wasm.simd.wasm | wc -c
+gzip -c archive/rust/wcol-wasm/pkg/wasm/wcol_wasm.simd.wasm | wc -c
 ```
 
 Datasets are gitignored. Generate with `wcol-cli convert` from Parquet sources (ClickBench hits subset, crates.io dumps, etc.).

@@ -1,0 +1,1994 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#071018" />
+  <meta name="description" content="An interactive WCOL systems explainer: trace hash exchange, range exchange, top-K, group-by, and joins through a distributed execution graph." />
+  <title>WCOL / 02 — Where rows go changes the query</title>
+  <link rel="stylesheet" href="_site.css" />
+  <style>
+:root {
+  color-scheme:dark;
+  --bg:#070f16;
+  --bg-2:#0a141d;
+  --panel:#0c1721;
+  --panel-2:#0f1c27;
+  --panel-3:#0b151e;
+  --border:#213541;
+  --border-soft:#172a35;
+  --white:#edf5f7;
+  --text:#b2c4cb;
+  --muted:#7b929d;
+  --faint:#52707c;
+  --teal:#51d5c3;
+  --teal-dark:#164c4b;
+  --blue:#79a9ff;
+  --amber:#e5b46c;
+  --red:#f09586;
+  --shadow:rgba(0,0,0,.23);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
+  --sans:Inter,'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,sans-serif;
+}
+* {
+  box-sizing:border-box;
+}
+html {
+  scroll-behavior:smooth;
+}
+body {
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:14px;
+  line-height:1.5;
+  min-width:320px;
+  -webkit-font-smoothing:antialiased;
+}
+button,input {
+  font:inherit;
+}
+button {
+  cursor:pointer;
+}
+button:focus-visible,a:focus-visible,input:focus-visible {
+  outline:2px solid var(--teal);
+  outline-offset:3px;
+}
+a {
+  color:inherit;
+  text-decoration:none;
+}
+code,pre {
+  font-family:var(--mono);
+}
+[hidden] {
+  display:none!important;
+}
+.shell {
+  max-width:1660px;
+  margin:auto;
+  padding:0 34px;
+}
+.ambient {
+  position:absolute;
+  pointer-events:none;
+  left:0;
+  right:0;
+  top:50px;
+  height:620px;
+  background:radial-gradient(ellipse at 67% 0%,rgba(20,126,122,.1),transparent 50%),radial-gradient(ellipse at 0% 20%,rgba(32,76,108,.05),transparent 45%);
+  z-index:-1;
+}
+.site-header {
+  border-bottom:1px solid #1b2a34;
+  height:65px;
+  background:rgba(7,15,22,.93);
+}
+.header-inner {
+  height:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+.brand {
+  display:flex;
+  gap:10px;
+  align-items:center;
+  font-weight:700;
+  letter-spacing:-.07em;
+  color:var(--white);
+  font-size:19px;
+}
+.brand-mark {
+  display:grid;
+  grid-template-columns:repeat(2,6px);
+  gap:3px;
+  margin-right:2px;
+}
+.brand-mark i {
+  display:block;
+  width:6px;
+  height:6px;
+  background:#4dc8b8;
+  border-radius:1px;
+}
+.brand-mark i:nth-child(2),.brand-mark i:nth-child(3) {
+  background:#397f88;
+}
+.accent {
+  color:var(--teal);
+}
+.brand-divider {
+  width:1px;
+  height:19px;
+  background:var(--border);
+  margin:0 4px;
+}
+.brand-context,.header-note,.header-right a {
+  font-family:var(--mono);
+  font-size:10px;
+  font-weight:600;
+  letter-spacing:.12em;
+  color:#96aeb7;
+}
+.brand-context {
+  letter-spacing:.13em;
+}
+.header-right {
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+.header-right a {
+  border:1px solid var(--border);
+  padding:9px 13px;
+  border-radius:5px;
+  transition:.15s;
+}
+.header-right a:hover {
+  border-color:var(--teal);
+  color:var(--white);
+}
+.header-note {
+  font-size:10px;
+}
+.muted {
+  color:var(--faint);
+}
+.online-dot,.mini-signal {
+  display:inline-block;
+  flex:none;
+  width:6px;
+  height:6px;
+  border-radius:1px;
+  background:var(--teal);
+  box-shadow:0 0 15px rgba(81,213,195,.3);
+}
+.hero {
+  display:flex;
+  justify-content:space-between;
+  align-items:end;
+  gap:35px;
+  padding:42px 0 32px;
+}
+.eyebrow,.control-label,.panel-tag,.concept-number,.hero-aside-label,.code-head,.control-foot,.diagram-summary,.diagram-foot,.playback-heading,.processed-count,.metric>span,.trace-subhead,.trace-table th,.trace-foot,.inspect-kicker,.load-heading,.inspect-details,.principle-index,.footer-inner {
+  font-family:var(--mono);
+  font-size:10px;
+  font-weight:600;
+  letter-spacing:.09em;
+}
+.eyebrow {
+  color:var(--teal);
+  letter-spacing:.16em;
+}
+.eyebrow-dash {
+  color:#3c6873;
+  margin:0 7px;
+}
+.eyebrow-muted {
+  color:#61818e;
+}
+.hero h1 {
+  font-weight:740;
+  color:var(--white);
+  line-height:1.04;
+  font-size:clamp(34px,3.8vw,58px);
+  letter-spacing:-.055em;
+  margin:15px 0 15px;
+}
+.hero h1 span {
+  color:var(--teal);
+}
+.hero p {
+  max-width:735px;
+  color:#9bb0bb;
+  font-size:15px;
+  line-height:1.75;
+  margin:0;
+}
+.hero p em {
+  color:#d8e5e8;
+  font-style:normal;
+}
+.hero-aside {
+  min-width:258px;
+  padding:14px 0 11px 18px;
+  border-left:1px solid var(--border);
+  margin-bottom:7px;
+}
+.hero-aside-value {
+  font-family:var(--mono);
+  font-size:27px;
+  color:var(--white);
+  font-weight:700;
+  letter-spacing:-.07em;
+}
+.hero-aside-value span {
+  color:var(--teal);
+}
+.hero-aside-rule {
+  width:100%;
+  height:1px;
+  background:linear-gradient(90deg,#2c5a59,transparent);
+  margin:9px 0;
+}
+.hero-aside-label {
+  color:var(--faint);
+  font-size:9px;
+  letter-spacing:.09em;
+}
+.concepts {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+  margin-bottom:15px;
+}
+.concept {
+  display:flex;
+  align-items:center;
+  position:relative;
+  gap:19px;
+  background:linear-gradient(135deg,#10202a,#0b1821);
+  border:1px solid var(--border);
+  border-radius:7px;
+  min-height:106px;
+  padding:22px 19px 16px;
+}
+.concept-number {
+  position:absolute;
+  left:18px;
+  top:10px;
+  color:#57998f;
+  font-size:9px;
+}
+.concept-icon {
+  font-family:var(--mono);
+  font-size:33px;
+  min-width:35px;
+  line-height:1;
+  margin-top:15px;
+  color:var(--teal);
+}
+.range-icon {
+  color:var(--blue);
+}
+.gather-icon {
+  color:var(--amber);
+}
+.concept h2 {
+  font-size:14px;
+  font-weight:650;
+  color:var(--white);
+  margin:14px 0 3px;
+  letter-spacing:-.025em;
+}
+.concept p {
+  font-size:11px;
+  line-height:1.5;
+  margin:0;
+  color:#94aab4;
+}
+.concept code {
+  font-size:10px;
+  color:#c2e9e0;
+}
+.workbench {
+  display:grid;
+  grid-template-columns:minmax(260px,320px) minmax(0,1fr);
+  gap:10px;
+  align-items:start;
+}
+.panel {
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:7px;
+  overflow:hidden;
+  min-width:0;
+}
+.panel-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:14px 17px;
+  min-height:52px;
+  border-bottom:1px solid var(--border-soft);
+  background:#0e1923;
+}
+.panel-heading {
+  display:flex;
+  gap:12px;
+  align-items:center;
+}
+.panel-heading h2 {
+  font-size:13px;
+  line-height:1.2;
+  letter-spacing:-.01em;
+  color:var(--white);
+  font-weight:650;
+  margin:0;
+}
+.panel-count {
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.07em;
+  color:var(--teal);
+  font-weight:700;
+}
+.panel-tag {
+  font-size:9px;
+  white-space:nowrap;
+  color:var(--faint);
+}
+.control-content {
+  padding:18px 16px;
+}
+.control-label {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:6px;
+  color:#94aab5;
+  margin:1px 0 11px;
+}
+.control-label span {
+  color:var(--faint);
+  font-size:9px;
+}
+.recipe-list {
+  display:grid;
+  gap:6px;
+}
+.recipe {
+  width:100%;
+  background:#0c1822;
+  border:1px solid #1e3540;
+  border-radius:5px;
+  display:flex;
+  align-items:center;
+  text-align:left;
+  gap:11px;
+  padding:11px 10px;
+  color:#a1b5c0;
+  transition:background .2s,border-color .2s;
+}
+.recipe:hover {
+  border-color:#3a6a71;
+  background:#10212a;
+}
+.recipe.is-active {
+  border-color:#338a85;
+  background:#153330;
+  box-shadow:inset 3px 0 0 var(--teal);
+}
+.recipe-icon {
+  display:grid;
+  place-items:center;
+  width:32px;
+  height:32px;
+  flex:none;
+  color:var(--teal);
+  background:#172b32;
+  border:1px solid #28464c;
+  border-radius:5px;
+  font-family:var(--mono);
+  font-size:22px;
+}
+.recipe-text {
+  display:grid;
+  gap:1px;
+  flex:1;
+}
+.recipe-text strong {
+  color:#e0edef;
+  font-size:12px;
+  font-weight:650;
+}
+.recipe-text small {
+  font-size:10px;
+  color:#869eaa;
+}
+.recipe-arrow {
+  font-family:var(--mono);
+  font-size:12px;
+  opacity:.55;
+}
+.recipe.is-active .recipe-arrow {
+  color:var(--teal);
+  opacity:1;
+}
+.control-divider {
+  height:1px;
+  background:var(--border-soft);
+  margin:21px 0 19px;
+}
+.code-box {
+  border:1px solid var(--border);
+  border-radius:5px;
+  overflow:hidden;
+  background:#080f16;
+}
+.code-head {
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:8px 10px;
+  border-bottom:1px solid #172b35;
+  color:#839daa;
+  font-size:10px;
+  letter-spacing:.02em;
+}
+.code-square {
+  display:grid;
+  place-items:center;
+  width:16px;
+  height:16px;
+  background:#3d3a24;
+  color:#e6c384;
+  border-radius:2px;
+  font-size:9px;
+}
+.code-head-right {
+  margin-left:auto;
+  color:#52707c;
+  font-size:9px;
+}
+#sql-example {
+  font-size:10px;
+  line-height:1.75;
+  color:#c4e6e5;
+  overflow:auto;
+  padding:13px 10px 15px;
+  min-height:113px;
+  max-height:168px;
+  white-space:pre;
+  margin:0;
+  tab-size:2;
+}
+.slider-block {
+  padding:2px 0 14px;
+}
+.slider-caption {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-size:12px;
+  color:#b8c8d0;
+  margin-bottom:7px;
+}
+.slider-caption output {
+  font:700 14px var(--mono);
+  color:var(--teal);
+}
+input[type=range] {
+  display:block;
+  width:100%;
+  height:17px;
+  accent-color:var(--teal);
+  cursor:pointer;
+}
+.slider-range {
+  display:flex;
+  justify-content:space-between;
+  color:var(--faint);
+  font:10px var(--mono);
+}
+.segment-block {
+  margin:7px 0 16px;
+}
+.segment {
+  display:flex;
+  background:#08131b;
+  border:1px solid var(--border);
+  border-radius:5px;
+  overflow:hidden;
+  height:36px;
+}
+.segment button {
+  flex:1;
+  border:0;
+  border-right:1px solid var(--border);
+  font:600 11px var(--mono);
+  background:transparent;
+  color:#89a2ad;
+  transition:background .15s;
+}
+.segment button:last-child {
+  border-right:0;
+}
+.segment button:hover {
+  color:var(--white);
+  background:#192f36;
+}
+.segment button.is-selected {
+  background:#1b4241;
+  color:var(--teal);
+  box-shadow:inset 0 0 0 1px #2b6864;
+}
+.control-foot {
+  margin-top:21px;
+  border:1px solid #23423f;
+  background:#0d2223;
+  border-radius:5px;
+  padding:12px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  color:#a1c1b9;
+  letter-spacing:0;
+  font-size:9px;
+  line-height:1.5;
+}
+.control-foot .online-dot {
+  width:5px;
+  height:5px;
+}
+.control-foot span:not(.online-dot) {
+  color:#457773;
+}
+.right-column {
+  display:grid;
+  gap:10px;
+  min-width:0;
+}
+.diagram-head {
+  min-height:54px;
+}
+.mode-tag {
+  border:1px solid #2d675f;
+  background:#18352f;
+  color:var(--teal);
+  font:700 10px var(--mono);
+  letter-spacing:.08em;
+  padding:6px 9px;
+  border-radius:4px;
+  white-space:nowrap;
+}
+.mode-tag.range {
+  border-color:#3a5585;
+  background:#1b2a45;
+  color:#a6c3ff;
+}
+.mode-tag.gather {
+  border-color:#685338;
+  background:#342a1c;
+  color:#ebbb7b;
+}
+.diagram-summary {
+  padding:11px 16px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:15px;
+  color:#a4b8c2;
+  border-bottom:1px solid var(--border-soft);
+  font-size:10px;
+}
+.summary-left,.summary-right {
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.summary-right {
+  font-size:9px;
+  color:#688590;
+}
+.mini-signal {
+  width:5px;
+  height:5px;
+}
+.slash {
+  color:#3c606b;
+}
+.diagram-viewport {
+  position:relative;
+  min-height:380px;
+  overflow:hidden;
+  background:linear-gradient(to bottom,rgba(4,13,20,.2),transparent 35%),#09131d;
+}
+.diagram-scroll {
+  width:100%;
+  overflow:hidden;
+  position:relative;
+}
+#network-svg {
+  display:block;
+  width:100%;
+  height:auto;
+  min-height:360px;
+  max-height:530px;
+}
+.diagram-foot {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  border-top:1px dashed #1c3440;
+  border-bottom:1px solid var(--border);
+  padding:9px 15px;
+  color:#71939d;
+  font-size:9px;
+  letter-spacing:.06em;
+}
+.diagram-foot .tiny-corner {
+  color:var(--teal);
+  margin-right:5px;
+}
+.diagram-foot span:last-child {
+  color:#567782;
+  text-align:right;
+}
+.playback-bar {
+  padding:12px 15px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  border-bottom:1px solid var(--border-soft);
+  background:#0d1a24;
+}
+.playback-left {
+  display:flex;
+  align-items:center;
+  gap:13px;
+  flex:1;
+  min-width:0;
+}
+.playback-heading {
+  color:var(--teal);
+  font-size:9px;
+}
+.processed-count {
+  color:#9bb4bc;
+  font-size:10px;
+  white-space:nowrap;
+}
+.tiny-progress {
+  background:#223541;
+  border-radius:5px;
+  height:4px;
+  flex:1;
+  max-width:180px;
+  min-width:45px;
+  overflow:hidden;
+}
+.tiny-progress div {
+  height:100%;
+  width:0%;
+  background:var(--teal);
+  transition:width .18s;
+}
+.playback-actions {
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.icon-action {
+  background:#0b1821;
+  border:1px solid #27404b;
+  color:#b6cbd0;
+  width:33px;
+  height:32px;
+  border-radius:4px;
+  font-family:var(--mono);
+  font-size:19px;
+}
+.icon-action:hover {
+  border-color:var(--teal);
+  color:var(--teal);
+}
+.play-action {
+  min-width:111px;
+  border:1px solid #337c72;
+  border-radius:4px;
+  background:#173f3c;
+  color:#93eee1;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  justify-content:center;
+  height:32px;
+  font:650 11px var(--sans);
+}
+.play-action:hover {
+  background:#20544f;
+}
+.play-action #play-icon {
+  font-size:11px;
+}
+.metrics {
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  padding:0 5px;
+  background:#0d1822;
+}
+.metric {
+  padding:15px 17px 16px;
+  border-right:1px solid var(--border-soft);
+  display:grid;
+  gap:5px;
+}
+.metric:last-child {
+  border-right:0;
+}
+.metric>span {
+  color:#7894a0;
+  font-size:9px;
+}
+.metric strong {
+  font-family:var(--mono);
+  font-size:21px;
+  line-height:1.1;
+  font-weight:650;
+  color:#e6f4f2;
+  letter-spacing:-.04em;
+}
+.metric small {
+  font-size:11px;
+  color:#92aaa9;
+}
+.metric:nth-child(3) strong {
+  color:var(--teal);
+}
+.below-grid {
+  display:grid;
+  grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);
+  gap:10px;
+}
+.trace-subhead {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin:0;
+  padding:11px 13px;
+  border-bottom:1px solid var(--border-soft);
+  font-size:9px;
+  letter-spacing:0;
+  color:#8da7af;
+}
+.quiet-button {
+  background:transparent;
+  border:0;
+  color:var(--teal);
+  font:650 9px var(--mono);
+  letter-spacing:.03em;
+  white-space:nowrap;
+}
+.quiet-button:hover {
+  text-decoration:underline;
+}
+.trace-table-scroll {
+  max-height:263px;
+  overflow:auto;
+  scrollbar-color:#254350 transparent;
+  scrollbar-width:thin;
+}
+.trace-table {
+  border-collapse:collapse;
+  width:100%;
+  table-layout:fixed;
+  font-family:var(--mono);
+}
+.trace-table th {
+  text-align:left;
+  padding:10px 12px;
+  border-bottom:1px solid var(--border-soft);
+  font-size:9px;
+  color:#627f8b;
+  background:#0a1821;
+  position:sticky;
+  top:0;
+}
+.trace-table th:nth-child(1) {
+  width:19%;
+}
+.trace-table th:nth-child(2) {
+  width:31%;
+}
+.trace-table th:nth-child(3) {
+  width:23%;
+}
+.trace-table th:nth-child(4) {
+  width:27%;
+}
+.trace-table td {
+  border-bottom:1px solid #182b34;
+  color:#bbcbd0;
+  font-size:10px;
+  padding:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.trace-table tr {
+  cursor:pointer;
+  transition:background .15s;
+}
+.trace-table tr:hover {
+  background:#142630;
+}
+.trace-table tr.selected {
+  background:#19403b;
+}
+.trace-table td .cell {
+  display:block;
+  padding:10px 12px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.trace-table td:last-child {
+  color:var(--teal);
+}
+.trace-table tr.selected td {
+  color:#c7f2ea;
+}
+.cell-source {
+  color:#708f9e;
+}
+.trace-foot {
+  padding:13px 15px;
+  font-size:9px;
+  line-height:1.6;
+  letter-spacing:.01em;
+  color:#86a3ad;
+  border-top:1px solid var(--border-soft);
+  background:#0d1b25;
+  min-height:52px;
+}
+.inspect-body {
+  padding:20px 20px 18px;
+}
+.inspect-kicker {
+  font-size:10px;
+  color:var(--teal);
+  margin-bottom:8px;
+}
+.inspect-body h3 {
+  color:#e2eff0;
+  font-weight:650;
+  letter-spacing:-.02em;
+  font-size:19px;
+  line-height:1.3;
+  margin:0 0 10px;
+}
+.inspect-body p {
+  color:#9eb3bc;
+  font-size:12px;
+  line-height:1.65;
+  margin:0;
+  min-height:80px;
+}
+.inspect-rule {
+  height:1px;
+  background:var(--border-soft);
+  margin:18px 0 15px;
+}
+.load-heading {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  color:#98afb9;
+  font-size:10px;
+  margin-bottom:15px;
+}
+.load-heading span:last-child {
+  color:var(--faint);
+  font-size:9px;
+}
+.load-bars {
+  display:grid;
+  gap:9px;
+  min-height:79px;
+}
+.load-item {
+  display:grid;
+  grid-template-columns:27px 1fr 30px;
+  gap:10px;
+  align-items:center;
+  font:10px var(--mono);
+}
+.load-id {
+  color:#95aab5;
+}
+.load-track {
+  height:8px;
+  background:#172d35;
+  border-radius:2px;
+  overflow:hidden;
+}
+.load-track>div {
+  height:100%;
+  background:#3a9d95;
+  transition:width .3s;
+  min-width:2px;
+}
+.load-item.hot .load-track>div {
+  background:#d7a460;
+}
+.load-value {
+  color:#bbcbd0;
+  text-align:right;
+}
+.inspect-details {
+  line-height:1.75;
+  letter-spacing:0;
+  color:#7f9aa5;
+  font-size:10px;
+}
+.inspect-details strong {
+  color:#c5d8db;
+  font-weight:650;
+}
+.inspect-details code {
+  color:#97ddce;
+  font-size:10px;
+}
+.principles {
+  margin:75px 0 93px;
+}
+.principles-heading {
+  margin-bottom:25px;
+}
+.principles-heading h2 {
+  color:#ebf3f5;
+  font-size:31px;
+  letter-spacing:-.045em;
+  line-height:1.2;
+  margin:11px 0 9px;
+  font-weight:700;
+}
+.principles-heading p {
+  color:#8da5b0;
+  margin:0;
+  font-size:13px;
+}
+.principles-grid {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:10px;
+}
+.principles-grid article {
+  border:1px solid var(--border);
+  background:#0b151f;
+  border-radius:6px;
+  padding:21px;
+  min-height:225px;
+}
+.principle-index {
+  color:var(--teal);
+  font-size:10px;
+}
+.principle-symbol {
+  color:#84cabe;
+  font-family:var(--mono);
+  font-size:36px;
+  margin:16px 0 6px;
+}
+.principles-grid h3 {
+  color:#e6f0f1;
+  font-size:16px;
+  letter-spacing:-.025em;
+  margin:0 0 8px;
+}
+.principles-grid p {
+  font-size:12px;
+  line-height:1.7;
+  color:#94acb6;
+  margin:0;
+}
+.principles-grid strong {
+  color:#cadfe2;
+  font-weight:600;
+}
+.principles-grid code {
+  color:#b0dcce;
+  font-size:11px;
+}
+footer {
+  border-top:1px solid var(--border);
+  padding:21px 0 26px;
+}
+.footer-inner {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  color:#cde1e3;
+  font-size:11px;
+  letter-spacing:.02em;
+}
+.footer-inner>span:first-child {
+  font-size:16px;
+  font-family:var(--sans);
+  font-weight:800;
+  letter-spacing:-.05em;
+}
+.footer-muted,.footer-inner>span:nth-child(2) {
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:.04em;
+  color:#74909b;
+  font-weight:600;
+}
+.footer-sep {
+  color:#3e626f;
+  margin:0 5px;
+}
+.footer-inner a {
+  color:#b4dace;
+}
+/* SVG graph, hover targets, and motion */
+.graph-lane {
+  fill:#0f1e29;
+  stroke:#1a3540;
+  stroke-width:1;
+  stroke-dasharray:4 5;
+}
+.graph-label {
+  font-family:var(--mono);
+  font-size:11px;
+  font-weight:650;
+  letter-spacing:1px;
+  fill:#7194a0;
+}
+.graph-sub {
+  font-family:var(--mono);
+  font-size:9px;
+  fill:#466979;
+}
+.graph-edge {
+  fill:none;
+  stroke:#3d7778;
+  stroke-width:1.35;
+  stroke-opacity:.24;
+  transition:stroke-opacity .18s,stroke-width .18s,stroke .18s;
+}
+.graph-edge.join-edge {
+  stroke:#718ac3;
+}
+.graph-edge.active {
+  stroke:var(--teal);
+  stroke-width:2.5;
+  stroke-opacity:.93;
+  filter:drop-shadow(0 0 3px rgba(86,226,200,.18));
+}
+.graph-edge.join-edge.active {
+  stroke:#96bcff;
+}
+.graph-edge.muted {
+  stroke-opacity:.09;
+}
+.graph-node {
+  cursor:pointer;
+}
+.graph-node rect.node-bg {
+  fill:#142530;
+  stroke:#2c4b58;
+  stroke-width:1.4;
+  transition:stroke .18s,fill .18s;
+}
+.graph-node:hover rect.node-bg {
+  stroke:#78c8b9;
+}
+.graph-node.selected rect.node-bg {
+  stroke:#6fe9d1;
+  stroke-width:2;
+  fill:#18413f;
+}
+.graph-node rect.node-accent {
+  fill:#499f9a;
+}
+.graph-node.node-sort rect.node-accent {
+  fill:#84a7e9;
+}
+.graph-node.node-final rect.node-accent {
+  fill:#ddb16d;
+}
+.graph-node.node-source rect.node-accent {
+  fill:#618595;
+}
+.node-title {
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.4px;
+  fill:#e6f2f3;
+  font-weight:700;
+}
+.node-subtitle {
+  font-family:var(--mono);
+  font-size:9px;
+  fill:#8aa5b1;
+}
+.node-number {
+  font:700 10px var(--mono);
+  fill:#639ca4;
+}
+.graph-chip {
+  fill:#173d3d;
+  stroke:#2d7371;
+}
+.graph-chip-text {
+  font:700 10px var(--mono);
+  fill:#a4e9d7;
+}
+.packet-dot {
+  pointer-events:none;
+}
+.graph-box-tag {
+  font:600 10px var(--mono);
+  fill:#8babaf;
+  letter-spacing:.6px;
+}
+.graph-note {
+  font:10px var(--mono);
+  fill:#73929c;
+}
+.graph-bad-note {
+  font:700 10px var(--mono);
+  fill:#f1a393;
+}
+.graph-stage-note {
+  font:700 10px var(--mono);
+  fill:#92cabb;
+}
+@media (min-width:1400px) {
+  .workbench {
+    grid-template-columns:320px minmax(0,1fr);
+  }
+  .diagram-viewport {
+    max-height:535px;
+  }
+  #network-svg {
+    max-height:535px;
+  }
+}
+@media (max-width:1140px) {
+  .shell {
+    padding:0 22px;
+  }
+  .workbench {
+    grid-template-columns:275px minmax(0,1fr);
+  }
+  .below-grid {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .inspect-body p {
+    min-height:unset;
+  }
+  .hero-aside {
+    min-width:215px;
+  }
+  .hero-aside-value {
+    font-size:21px;
+  }
+  .diagram-foot span:last-child {
+    max-width:50%;
+  }
+  .metric {
+    padding:13px 10px;
+  }
+  .metric strong {
+    font-size:18px;
+  }
+}
+@media (max-width:850px) {
+  .shell {
+    padding:0 17px;
+  }
+  .hero {
+    padding-top:32px;
+    display:block;
+  }
+  .hero-aside {
+    display:none;
+  }
+  .concepts {
+    grid-template-columns:1fr 1fr;
+  }
+  .concept:last-child {
+    grid-column:span 2;
+  }
+  .workbench {
+    grid-template-columns:1fr;
+  }
+  .control-content {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    column-gap:22px;
+    align-items:start;
+  }
+  .control-content>.control-label:nth-of-type(1),.recipe-list {
+    grid-column:1;
+  }
+  .recipe-list {
+    grid-row:2 / span 3;
+  }
+  .control-content>.control-divider:first-of-type {
+    display:none;
+  }
+  .code-box {
+    grid-column:2;
+  }
+  .control-content>.control-label:nth-of-type(2) {
+    grid-column:2;
+    grid-row:1;
+  }
+  .control-content>.control-label:nth-of-type(3) {
+    grid-column:2;
+  }
+  .control-content>.control-divider:nth-of-type(2) {
+    grid-column:2;
+  }
+  .control-foot {
+    grid-column:1/-1;
+  }
+  .slider-block,.segment-block {
+    grid-column:2;
+  }
+  .control-content>.control-divider {
+    margin:12px 0;
+  }
+  .header-note {
+    display:none;
+  }
+}
+@media (max-width:590px) {
+  .shell {
+    padding:0 12px;
+  }
+  .site-header {
+    height:58px;
+  }
+  .brand-context {
+    font-size:9px;
+  }
+  .header-right {
+    gap:8px;
+  }
+  .header-right a {
+    padding:6px 8px;
+    font-size:9px;
+  }
+  .hero {
+    padding:27px 2px 24px;
+  }
+  .hero h1 {
+    font-size:36px;
+  }
+  .hero p {
+    font-size:13px;
+  }
+  .concepts {
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+  .concept:last-child {
+    grid-column:span 1;
+  }
+  .concept {
+    min-height:93px;
+    padding:18px 16px 12px;
+    gap:13px;
+  }
+  .concept-icon {
+    font-size:27px;
+  }
+  .concept h2 {
+    font-size:13px;
+  }
+  .concept p {
+    font-size:10px;
+  }
+  .control-content {
+    display:block;
+  }
+  .recipe-list {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:6px;
+  }
+  .recipe {
+    padding:8px;
+    min-height:55px;
+    gap:7px;
+  }
+  .recipe-icon {
+    height:26px;
+    width:26px;
+    font-size:17px;
+  }
+  .recipe-arrow {
+    display:none;
+  }
+  .recipe-text strong {
+    font-size:11px;
+  }
+  .recipe-text small {
+    font-size:9px;
+  }
+  .control-content>.control-divider:first-of-type {
+    display:block;
+  }
+  .diagram-summary {
+    flex-direction:column;
+    align-items:start;
+    gap:4px;
+  }
+  .diagram-viewport {
+    overflow-x:auto;
+  }
+  .diagram-scroll {
+    width:680px;
+  }
+  .diagram-foot {
+    align-items:flex-start;
+  }
+  .diagram-foot span:last-child {
+    display:none;
+  }
+  .playback-bar {
+    padding:12px;
+    gap:10px;
+  }
+  .playback-heading {
+    display:none;
+  }
+  .processed-count {
+    font-size:9px;
+  }
+  .play-action {
+    min-width:90px;
+    padding:0 8px;
+    font-size:10px;
+  }
+  .metrics {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .metric:nth-child(2) {
+    border-right:0;
+  }
+  .metric:nth-child(-n+2) {
+    border-bottom:1px solid var(--border-soft);
+  }
+  .below-grid {
+    grid-template-columns:1fr;
+  }
+  .trace-table th {
+    padding:9px 8px;
+    font-size:8px;
+  }
+  .trace-table td .cell {
+    padding:9px 8px;
+    font-size:9px;
+  }
+  .trace-table th:nth-child(1) {
+    width:17%;
+  }
+  .trace-table th:nth-child(2) {
+    width:33%;
+  }
+  .trace-table th:nth-child(3) {
+    width:21%;
+  }
+  .trace-table th:nth-child(4) {
+    width:29%;
+  }
+  .trace-subhead {
+    align-items:start;
+  }
+  .trace-subhead span {
+    max-width:65%;
+  }
+  .principles {
+    margin:48px 0 52px;
+  }
+  .principles-heading h2 {
+    font-size:26px;
+  }
+  .principles-grid {
+    grid-template-columns:1fr;
+  }
+  .principles-grid article {
+    min-height:unset;
+  }
+  .footer-inner {
+    align-items:start;
+    flex-direction:column;
+    gap:8px;
+  }
+  .footer-inner>span:nth-child(2) {
+    line-height:1.7;
+  }
+  .panel-head {
+    padding:13px;
+  }
+  .panel-tag {
+    font-size:8px;
+  }
+}
+@media (prefers-reduced-motion:reduce) {
+  *,*:before,*:after {
+    scroll-behavior:auto!important;
+    animation-duration:0.01ms!important;
+    transition-duration:0.01ms!important;
+  }
+}
+.segment button:disabled {
+  cursor:not-allowed;
+  opacity:.35;
+}
+.sort-toggle-wrap {
+  margin-top:15px;
+  display:grid;
+  gap:9px;
+}
+.sort-toggle {
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  background:#172b3a;
+  border:1px solid #3d6488;
+  border-radius:4px;
+  color:#aacaff;
+  padding:10px 12px;
+  font:650 10px var(--mono);
+}
+.sort-toggle.is-wrong {
+  background:#402421;
+  border-color:#ba7065;
+  color:#ffc1b4;
+}
+.sort-toggle:hover {
+  filter:brightness(1.15);
+}
+.sort-finding {
+  padding:10px 11px;
+  border-left:2px solid #5fa6a0;
+  background:#112b2c;
+  color:#a1c7c4;
+  font:10px/1.65 var(--mono);
+}
+.sort-finding.is-wrong {
+  background:#31211f;
+  border-color:#e58f76;
+  color:#e3aaa0;
+}
+.sort-finding strong {
+  color:inherit;
+}
+.winners {
+  margin-top:12px;
+  padding:10px;
+  background:#112b2a;
+  border:1px solid #31534f;
+  border-radius:4px;
+  display:grid;
+  gap:4px;
+  color:#a3c6c3;
+  font:10px/1.7 var(--mono);
+}
+.winners strong {
+  color:#d5eeeb;
+}
+
+</style>
+  
+</head>
+<body data-chapter="02">
+  <div class="ambient" aria-hidden="true"></div>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>wcol<span class="accent">/</span></span><span class="brand-divider"></span><span class="brand-context">CHAPTER 02</span></a>
+      <div class="header-right"><span class="online-dot"></span><span class="header-note">EXCHANGES</span><a href="#workbench">WORKBENCH</a><a href="#principles">RULES</a></div>
+    </div>
+  </header>
+
+  <main class="shell" id="top">
+    <section class="hero">
+      <div class="hero-left">
+        <div class="eyebrow">CHAPTER 02 <span class="eyebrow-dash">—</span> DATA MOVEMENT <span class="eyebrow-muted">/ EXCHANGES</span></div>
+        <h1>Where the rows go<br /><span>changes the query.</span></h1>
+        <p>Distributed analytics is a problem of <em>co-location</em>. A routing rule decides which rows meet, which operations can run in parallel, and whether the final answer is correct.</p>
+      </div>
+      <div class="hero-aside"><div class="hero-aside-value"><span>f</span>(key) <span>→</span> node</div><div class="hero-aside-rule"></div><div class="hero-aside-label">SAME GRAPH. DIFFERENT EXCHANGE RULES.</div></div>
+    </section>
+
+    <section class="concepts" aria-label="Exchange primitives">
+      <article class="concept"><span class="concept-number">01 / HASH</span><span class="concept-icon hash-icon" aria-hidden="true">⌗</span><div><h2>Equal keys meet.</h2><p><code>hash(key) % N</code> co-locates records for grouping and equi-joins.</p></div></article>
+      <article class="concept"><span class="concept-number">02 / RANGE</span><span class="concept-icon range-icon" aria-hidden="true">⇵</span><div><h2>Ordered keys meet.</h2><p>Sorted, non-overlapping ranges make global ordering possible.</p></div></article>
+      <article class="concept"><span class="concept-number">03 / GATHER</span><span class="concept-icon gather-icon" aria-hidden="true">↘</span><div><h2>Small results meet.</h2><p>Local Top K candidates converge at a final merge, without a shuffle.</p></div></article>
+    </section>
+
+    <section id="workbench" class="workbench" aria-label="Interactive exchange workbench">
+      <aside class="panel controls-panel">
+        <div class="panel-head"><div class="panel-heading"><span class="panel-count">01</span><h2>Choose an operation</h2></div><span class="panel-tag">QUERY SHAPE</span></div>
+        <div class="control-content">
+          <div class="control-label">QUERY RECIPES <span>SELECT ONE</span></div>
+          <div class="recipe-list" id="recipes" role="group" aria-label="Query operations">
+            <button type="button" data-recipe="group" class="recipe is-active" aria-pressed="true"><span class="recipe-icon">⌗</span><span class="recipe-text"><strong>Group by</strong><small>Hash exchange · aggregate</small></span><span class="recipe-arrow">↗</span></button>
+            <button type="button" data-recipe="join" class="recipe" aria-pressed="false"><span class="recipe-icon">⋈</span><span class="recipe-text"><strong>Hash join</strong><small>Same-key co-location</small></span><span class="recipe-arrow">↗</span></button>
+            <button type="button" data-recipe="sort" class="recipe" aria-pressed="false"><span class="recipe-icon">⇅</span><span class="recipe-text"><strong>Global sort</strong><small>Range exchange · concat</small></span><span class="recipe-arrow">↗</span></button>
+            <button type="button" data-recipe="topk" class="recipe" aria-pressed="false"><span class="recipe-icon">↑</span><span class="recipe-text"><strong>Global Top K</strong><small>Local selection · gather</small></span><span class="recipe-arrow">↗</span></button>
+            <button type="button" data-recipe="grouptopk" class="recipe" aria-pressed="false"><span class="recipe-icon">≋</span><span class="recipe-text"><strong>Group by + Top K</strong><small>Hash, then candidate merge</small></span><span class="recipe-arrow">↗</span></button>
+          </div>
+          <div class="control-divider"></div>
+          <div class="control-label">EXAMPLE SQL <span>READ-ONLY</span></div>
+          <div class="code-box"><div class="code-head"><span class="code-square">S</span><span>query.sql</span><span class="code-head-right">SQL</span></div><pre id="sql-example" aria-live="polite"></pre></div>
+          <div class="control-divider"></div>
+          <div class="control-label">CHANGE THE TOPOLOGY <span>LIVE</span></div>
+          <div class="slider-block"><div class="slider-caption"><label for="scan-count">Scan workers</label><output id="scan-count-label" for="scan-count">4</output></div><input type="range" id="scan-count" min="2" max="8" step="1" value="4" /><div class="slider-range"><span>2</span><span>8</span></div></div>
+          <div class="segment-block"><div class="slider-caption"><span>Destination partitions</span><output id="reducer-count-label">4</output></div><div class="segment" id="reducer-buttons" role="group" aria-label="Destination partitions"><button type="button" data-reducers="2">2</button><button type="button" data-reducers="4" class="is-selected">4</button><button type="button" data-reducers="8">8</button></div></div>
+          <div class="segment-block"><div class="slider-caption"><span>Key distribution</span></div><div class="segment" id="distribution-buttons" role="group" aria-label="Key distribution"><button type="button" data-distribution="balanced" class="is-selected">Balanced</button><button type="button" data-distribution="skewed">Hot key</button></div></div>
+          <div class="segment-block" id="k-control" hidden><div class="slider-caption"><span>Top K</span><output id="k-label">3</output></div><div class="segment" id="k-buttons" role="group" aria-label="Top K"><button type="button" data-k="2">2</button><button type="button" data-k="3" class="is-selected">3</button><button type="button" data-k="5">5</button></div></div>
+          <div class="control-foot"><span class="online-dot"></span> POWER-OF-TWO HASH PARTITIONS <span>·</span> MAX 100 STREAMS / PORT SIDE</div>
+        </div>
+      </aside>
+
+      <div class="right-column">
+        <section class="panel diagram-panel" aria-label="Interactive data routing diagram">
+          <div class="panel-head diagram-head"><div class="panel-heading"><span class="panel-count">02</span><h2>Follow the data</h2></div><span class="mode-tag" id="mode-tag">HASH EXCHANGE</span></div>
+          <div class="diagram-summary"><div class="summary-left"><span class="mini-signal"></span><span id="diagram-heading">Equal keys take the same route.</span></div><div class="summary-right"><span id="routing-contract">HASH(KEY) &amp; (N − 1)</span><span class="slash">/</span><span id="run-status">READY</span></div></div>
+          <div class="diagram-viewport"><div class="diagram-scroll"><svg id="network-svg" viewBox="0 0 1000 500" role="img" aria-label="Interactive distributed execution graph" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="grid-dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.75" fill="#28424c" opacity="0.36"/></pattern><linearGradient id="flow-gradient"><stop offset="0%" stop-color="#4dd8c8" stop-opacity="0.48"/><stop offset="100%" stop-color="#4dd8c8" stop-opacity="0.10"/></linearGradient></defs><rect x="0" y="0" width="1000" height="500" fill="url(#grid-dots)"/><g id="svg-background"></g><g id="svg-edges"></g><g id="svg-packets"></g><g id="svg-nodes"></g><g id="svg-overlays"></g></svg></div></div>
+          <div class="diagram-foot"><span><span class="tiny-corner">⌁</span> CLICK A ROW TO TRACE ITS ROUTE</span><span id="diagram-caption">Each key maps to exactly one partition.</span></div>
+          <div class="playback-bar"><div class="playback-left"><span class="playback-heading">SIMULATION</span><span class="processed-count" id="processed-count">00 / 32 ROWS</span><div class="tiny-progress"><div id="progress-fill"></div></div></div><div class="playback-actions"><button type="button" class="icon-action" id="reset-btn" aria-label="Reset simulation" title="Reset simulation">↺</button><button type="button" class="icon-action" id="step-btn" aria-label="Route next row" title="Route next row">↦</button><button type="button" class="play-action" id="play-btn"><span id="play-icon">▶</span><span id="play-label">Play routing</span></button></div></div>
+          <div class="metrics" aria-label="Simulation metrics"><div class="metric"><span>LOGICAL EDGES</span><strong id="metric-edges">16</strong></div><div class="metric"><span id="metric-rows-label">SHUFFLE ROWS</span><strong id="metric-shuffled">32</strong></div><div class="metric"><span>BUSIEST PARTITION</span><strong id="metric-peak">—</strong></div><div class="metric"><span>STREAM PAYLOAD CAP</span><strong>64 <small>KiB</small></strong></div></div>
+        </section>
+
+        <section class="below-grid">
+          <section class="panel trace-panel" aria-label="Trace sample rows"><div class="panel-head"><div class="panel-heading"><span class="panel-count">03</span><h2>Trace individual rows</h2></div><span class="panel-tag">SELECT TO FOLLOW</span></div><div class="trace-subhead"><span id="trace-description">Choose a key to see its hash and destination.</span><button type="button" id="clear-trace" class="quiet-button">CLEAR TRACE ×</button></div><div class="trace-table-scroll"><table class="trace-table"><thead><tr><th>SOURCE</th><th id="key-col-heading">GROUP KEY</th><th id="value-col-heading">VALUE</th><th id="destination-col-heading">ROUTES TO</th></tr></thead><tbody id="rows-table"></tbody></table></div><div class="trace-foot" id="trace-foot">Routing is deterministic: every occurrence of a key reaches the same reducer.</div></section>
+          <section class="panel inspect-panel" aria-label="Node inspector and load distribution"><div class="panel-head"><div class="panel-heading"><span class="panel-count">04</span><h2>Inspect the exchange</h2></div><span class="panel-tag">WHY IT WORKS</span></div><div class="inspect-body"><div class="inspect-kicker" id="inspect-kicker">HASH EXCHANGE / INVARIANT</div><h3 id="inspect-title">All records for one key meet.</h3><p id="inspect-body">Hash routing ensures records for a grouping key land at the same reducer, regardless of their scan source.</p><div class="inspect-rule"></div><div class="load-heading"><span>PARTITION LOAD</span><span id="load-caption">ALL ROWS</span></div><div id="load-bars" class="load-bars"></div><div class="inspect-rule"></div><div class="inspect-details" id="inspect-details"></div></div></section>
+        </section>
+      </div>
+    </section>
+
+    <section id="principles" class="principles" aria-label="Engineering invariants"><div class="principles-heading"><div class="eyebrow">THE DESIGN RULES</div><h2>The exchange is a correctness boundary.</h2><p>Identical source data. Different routing contracts. Different algorithms—and different guarantees.</p></div><div class="principles-grid"><article><div class="principle-index">01 / HASH</div><div class="principle-symbol">⌗</div><h3>Co-location, not ordering.</h3><p>Hash partitioning guarantees equal keys meet at one reducer. It does <strong>not</strong> make partitions globally ordered. Hashing a global sort and concatenating the output is incorrect.</p></article><article><div class="principle-index">02 / RANGE</div><div class="principle-symbol">↕</div><h3>Ordering is a partition invariant.</h3><p>Range partitioning sends adjacent sort keys to ordered, non-overlapping partitions. Local sorts can then be concatenated in partition order without another full sort.</p></article><article><div class="principle-index">03 / TOP K</div><div class="principle-symbol">↑</div><h3>Send candidates, not every row.</h3><p>For a plain <code>ORDER BY … LIMIT K</code>, each scanner can keep its best K. A final Top K over those candidates is exact, without all-to-all repartitioning.</p></article></div></section>
+  </main>
+  <footer><div class="shell footer-inner"><span>wcol<span class="accent">/</span> <span class="footer-muted">SYSTEMS EXPLAINER · 02</span></span><span>DETERMINISTIC MODEL · NOT LIVE WCOL EXECUTION <span class="footer-sep">·</span> <a href="https://github.com/davidgtonge/wcol" target="_blank" rel="noreferrer noopener">VIEW SOURCE ↗</a></span></div></footer>
+<script src="_site.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  // This is an illustrative, deterministic routing simulator, not a WCOL planner or runtime.
+  // In particular, FNV-1a below is a teaching hash, not a claim about WCOL's Rust hash function.
+  const NS = "http://www.w3.org/2000/svg";
+  const $ = (id) => document.getElementById(id);
+  const recipes = {
+    group: {
+      kind: "hash", label: "HASH EXCHANGE", mode: "HASH GROUP / REDUCE",
+      headline: "Equal keys take the same route.", contract: "HASH(KEY) & (N − 1)",
+      sql: "SELECT country, COUNT(*) AS visits\nFROM hits\nGROUP BY country;",
+      question: "Where should each group be computed?", answer: "All rows with the same country must reach the same reducer. Different countries can be aggregated independently.",
+      invariant: "All records for one key meet.", description: "A scanner projects raw grouping keys, hashes them, and streams each row to the matching reducer. Each reducer owns the complete aggregate for its assigned keys.",
+      why: "This is co-location, not ordering. Reducer output cannot be concatenated to obtain ORDER BY country.", phase: "HASH → AGGREGATE → OUTPUT", stage: "HASH AGGREGATE",
+      source: "rust/wcol-engine/src/ops/exchange/hash_partition.rs"
+    },
+    join: {
+      kind: "hash", label: "HASH EXCHANGE / TWO INPUTS", mode: "CO-PARTITIONED HASH JOIN",
+      headline: "Both sides hash the join key identically.", contract: "HASH(JOIN_KEY) & (N − 1)",
+      sql: "SELECT *\nFROM orders o\nJOIN users u\n  ON o.user_id = u.id;",
+      question: "How can matching rows meet?", answer: "Route both tables with the same function and partition count. Rows with equal join keys land at the same join worker.",
+      invariant: "A join key always has one owner.", description: "Orders and users independently hash their join keys. Matching keys are co-located, where a worker can build and probe a local hash table.",
+      why: "Hash exchange is one possible join strategy; broadcasting a small input can be cheaper. This join example is conceptual, not a claim of a deployed WCOL join operator.", phase: "HASH BOTH INPUTS → JOIN", stage: "HASH JOIN",
+      source: "Conceptual exchange plan (join execution not benchmarked)"
+    },
+    sort: {
+      kind: "range", label: "RANGE EXCHANGE", mode: "GLOBAL ORDER BY",
+      headline: "Global sort needs ordered partitions.", contract: "SPLIT_POINTS(KEY) → RANGE",
+      sql: "SELECT url, score\nFROM hits\nORDER BY score ASC;",
+      question: "Can locally sorted shards be concatenated?", answer: "Yes—only if every key in partition i is ordered before every key in partition i + 1.",
+      invariant: "Each partition owns a disjoint key range.", description: "Sample sort keys to choose ordered split points. Route each row into a range, sort locally, then concatenate the Parquet shards in range order.",
+      why: "Hash routing gives no global order. Local sorting plus hash-partition-order concat can produce inversions at shard boundaries.", phase: "RANGE → LOCAL SORT → CONCAT", stage: "SORT PARTITION",
+      source: "rust/wcol-engine/src/ops/exchange/range_partition.rs"
+    },
+    topk: {
+      kind: "gather", label: "CANDIDATE GATHER", mode: "GLOBAL TOP K",
+      headline: "No all-to-all shuffle is needed.", contract: "LOCAL TOP K → FINAL TOP K",
+      sql: "SELECT url, score\nFROM hits\nORDER BY score DESC\nLIMIT 3;",
+      question: "Do all rows need to cross the network?", answer: "No. Each scanner sends only its local K best rows. The global top K must be among those candidates.",
+      invariant: "A global winner cannot be ranked below K locally.", description: "Each scanner keeps a bounded heap of its K best rows. Only candidates travel to the final Top K. All other rows are dropped locally.",
+      why: "This is a gather of small candidate sets, not a hash exchange. Equal keys don't need to meet, and no ordered range split is necessary.", phase: "LOCAL TOP K → GATHER → FINAL TOP K", stage: "LOCAL TOP K",
+      source: "rust/wcol-engine/src/ops/topk.rs"
+    },
+    grouptopk: {
+      kind: "hash", label: "HASH THEN TOP K", mode: "GROUP BY / RANKING",
+      headline: "First co-locate groups. Then rank the results.", contract: "HASH(GROUP_KEY) → TOP K",
+      sql: "SELECT country, COUNT(*) AS n\nFROM hits\nGROUP BY country\nORDER BY n DESC\nLIMIT 3;",
+      question: "When is it safe to choose Top K?", answer: "Only after each group is complete. Hash first, aggregate each group, pick local reducer candidates, then final Top K.",
+      invariant: "One reducer must finish each group before ranking.", description: "Hash exchange makes each group's count complete. Each reducer selects its local best K finished groups; the coordinator merges at most K candidates per reducer.",
+      why: "Local Top K over raw scan rows would be incorrect for a ranked GROUP BY. The hash exchange is necessary before ranking.", phase: "HASH → AGGREGATE → LOCAL TOP K → FINAL K", stage: "AGGREGATE + TOP K",
+      source: "rust/wcol-engine/src/ops/query/batch/mod.rs"
+    }
+  };
+
+  const state = {
+    recipe: "group", scanners: 4, reducers: 4, distribution: "balanced", k: 3,
+    sortWrong: false, rows: [], selectedRow: null, inspectedNode: null,
+    processed: 0, playing: false, timer: null, packets: [], raf: null,
+    generation: 0, destinationCounts: [], sourceCounts: []
+  };
+
+  function hash32(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+  const fmt = (n) => Number(n).toLocaleString("en-US");
+  const pad = (n) => String(n).padStart(2, "0");
+  const escapeHTML = (s) => String(s).replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
+  const mode = () => state.recipe === "sort" && state.sortWrong ? "hash" : recipes[state.recipe].kind;
+  const isTopK = () => state.recipe === "topk";
+  const isHash = () => mode() === "hash";
+  const nodeCount = () => isTopK() ? state.scanners : state.reducers;
+
+  function sampleRows() {
+    const countries = ["US","DE","JP","FR","CA","GB","AU","IN","SE","NL","BR","KR","ZA","ES","NZ","SG"];
+    const list = [];
+    for (let i = 0; i < 32; i++) {
+      const source = i % state.scanners;
+      const hot = state.distribution === "skewed";
+      const key = hot && i % 5 !== 0 ? "US" : countries[(i * 7 + Math.floor(i / 4)) % countries.length];
+      const joinKey = hot && i % 5 !== 0 ? "u-10" : `u-${10 + ((i * 3 + Math.floor(i / 6)) % 12)}`;
+      const score = hot && i % 4 !== 0 ? 18 : ((i * 37 + 13) % 103) + 1;
+      list.push({index:i, source, key, joinKey, side:i % 2 === 0 ? "orders" : "users", amount:5 + ((i * 17) % 79), score, name:`page-${pad(i + 1)}`});
+    }
+    return list;
+  }
+
+  function computeSplits(rows, n) {
+    const unique = [...new Set(rows.map(r => r.score))].sort((a,b) => a-b);
+    const splits = [];
+    for(let i=1;i<n;i++) {
+      const at = Math.min(unique.length-1,Math.floor(i*unique.length/n));
+      splits.push(unique[at]);
+    }
+    return splits;
+  }
+  function partition(row) {
+    if(isTopK()) return row.source;
+    if(mode() === "range") {
+      const splits = computeSplits(state.rows,state.reducers);
+      let p = 0;
+      while(p < splits.length && row.score >= splits[p])p++;
+      return p;
+    }
+    return hash32(state.recipe === "join" ? row.joinKey : state.recipe === "sort" ? String(row.score) : row.key) & (state.reducers - 1);
+  }
+  function rankComparator(a,b) { return b.score - a.score || a.index-b.index; }
+  function topkCandidateIndexes() {
+    const candidates = new Set();
+    for(let s=0;s<state.scanners;s++) {
+      const subset = state.rows.filter(r=>r.source===s).sort(rankComparator).slice(0,state.k);
+      for(const r of subset)candidates.add(r.index);
+    }
+    return candidates;
+  }
+  function groupedCandidates() {
+    // Each complete group is owned by its hash reducer. Build a tiny exact sample.
+    const map = new Map();
+    for(const row of state.rows)map.set(row.key,(map.get(row.key)||0)+1);
+    const per = Array.from({length:state.reducers},()=>[]);
+    for(const [key,count] of map)per[hash32(key)&(state.reducers-1)].push({key,count});
+    return per.flatMap(bucket=>bucket.sort((a,b)=>b.count-a.count||a.key.localeCompare(b.key)).slice(0,state.k));
+  }
+  function routeRows() { return isTopK() ? state.rows.filter(r=>topkCandidateIndexes().has(r.index)) : state.rows; }
+  function actualCounts() {
+    const counts = Array(nodeCount()).fill(0);
+    for(const r of routeRows())counts[partition(r)]++;
+    return counts;
+  }
+  function wrongSortInversions() {
+    if(state.recipe!=="sort") return 0;
+    const buckets = Array.from({length:state.reducers},()=>[]);
+    for(const r of state.rows)buckets[partition(r)].push(r.score);
+    const output = buckets.flatMap(xs=>xs.sort((a,b)=>a-b));
+    let inversions=0, example=null;
+    for(let i=1;i<output.length;i++)if(output[i-1]>output[i]) {inversions++;if(!example)example=[output[i-1],output[i]];}
+    return {inversions,example,output};
+  }
+  function SVG(tag, attrs={}, text=null) {
+    const el=document.createElementNS(NS,tag);
+    for(const [k,v] of Object.entries(attrs))el.setAttribute(k,String(v));
+    if(text!==null)el.textContent=String(text);
+    return el;
+  }
+  function make(parent,tag,attrs={},text=null) { const e=SVG(tag,attrs,text);parent.appendChild(e);return e; }
+  function sourceY(i) { return 100+(i+.5)*310/state.scanners; }
+  function targetY(i) { return 100+(i+.5)*310/nodeCount(); }
+  function sourceBox(i) { return {x:48,y:sourceY(i)-20,w:176,h:40}; }
+  function targetBox(i) { return {x:620,y:targetY(i)-20,w:170,h:40}; }
+  const finalBox = {x:853,y:214,w:122,h:100};
+  const edgeIDs = {toTarget:(src,dst)=>`edge-${src}-${dst}`,toFinal:(dst)=>`finish-${dst}`};
+
+  function renderGraph() {
+    state.generation++;
+    state.packets.length=0;
+    const root=$('network-svg');
+    const background=$('svg-background'),edges=$('svg-edges'),packets=$('svg-packets'),nodes=$('svg-nodes'),overlays=$('svg-overlays');
+    [background,edges,packets,nodes,overlays].forEach(g=>g.replaceChildren());
+    const finalMode=mode();
+    const ranges=computeSplits(state.rows,state.reducers);
+    const trace=state.selectedRow === null ? null : state.rows[state.selectedRow];
+    const highlight=trace?{src:trace.source,dst:partition(trace)}:null;
+
+    const lanes=[{x:20,w:225,title:'01 / SCAN',sub:'PARQUET / SOURCE'},{x:595,w:220,title:`02 / ${isTopK()?'LOCAL SELECT':finalMode==='range'?'RANGE SORT':state.recipe==='join'?'HASH JOIN':'HASH REDUCE'}`,sub:`${nodeCount()} WORKERS`},{x:833,w:150,title:'03 / FINAL',sub:'RESULT / COORDINATE'}];
+    for(const lane of lanes){make(background,'rect',{x:lane.x,y:70,width:lane.w,height:365,rx:6,class:'graph-lane'});make(background,'text',{x:lane.x+10,y:47,class:'graph-label'},lane.title);make(background,'text',{x:lane.x+10,y:61,class:'graph-sub'},lane.sub);}
+    if(state.recipe === 'join'){
+      make(overlays,'text',{x:259,y:88,class:'graph-box-tag'},'BLUE = USERS / TEAL = ORDERS');
+    } else {
+      make(overlays,'text',{x:262,y:88,class:'graph-box-tag'},isTopK()?'ONLY LOCAL CANDIDATES ARE SENT':finalMode==='range'?'SAMPLED SPLIT POINTS / ORDERED RANGES':'SAME KEY → SAME DESTINATION');
+    }
+
+    for(let i=0;i<state.scanners;i++){
+      const r=sourceBox(i);
+      let title='SCAN '+pad(i+1),sub=`${state.rows.filter(x=>x.source===i).length} input rows`;
+      if(state.recipe==='join'){title=(i%2?'USERS':'ORDERS')+' '+pad(i+1);sub='scan / join key';}
+      if(isTopK())sub=`local top ${state.k}`;
+      drawNode(nodes,`source-${i}`,r,title,sub,'node-source','SCAN',i);
+    }
+    for(let p=0;p<nodeCount();p++){
+      const r=targetBox(p);
+      let title=isTopK()?`LOCAL TOP ${state.k}`:mode()==='range'?'SORT '+pad(p+1):state.recipe==='join'?'JOIN '+pad(p+1):'REDUCE '+pad(p+1);
+      let sub=isTopK()?`worker ${pad(p+1)}`:mode()==='range'?rangeLabel(p,ranges):state.recipe==='join'?'build / probe':state.recipe==='grouptopk'?'group / local top k':'group / spill';
+      drawNode(nodes,`target-${p}`,r,title,sub,mode()==='range'?'node-sort':'', 'PARTITION',p);
+    }
+    drawNode(nodes,'final-0',finalBox,isTopK()?'FINAL TOP K':state.recipe==='sort'?'PARQUET':state.recipe==='grouptopk'?'FINAL TOP K':state.recipe==='join'?'JOIN RESULT':'RESULT',isTopK()?`merge ${state.k} rows`:state.recipe==='sort'?'ordered concat':state.recipe==='grouptopk'?`merge ${state.k} groups`:state.recipe==='join'?'emit matches':'emit groups','node-final','FINAL',0);
+
+    if(isTopK()) {
+      for(let i=0;i<state.scanners;i++){
+        const sy=sourceY(i),ty=targetY(i);
+        const d=`M 224 ${sy} C 365 ${sy} 480 ${ty} 620 ${ty}`;
+        make(edges,'path',{d,id:edgeIDs.toTarget(i,i),class:`graph-edge ${highlight&&(highlight.src!==i)?'muted':highlight?'active':''}`});
+      }
+    } else {
+      for(let s=0;s<state.scanners;s++){
+        for(let p=0;p<state.reducers;p++){
+          const sy=sourceY(s),ty=targetY(p),isTrace=highlight&&highlight.src===s&&highlight.dst===p;
+          const deEmphasize=highlight&&!isTrace;
+          const d=`M 224 ${sy} C 375 ${sy} 468 ${ty} 620 ${ty}`;
+          make(edges,'path',{d,id:edgeIDs.toTarget(s,p),class:`graph-edge ${state.recipe==='join'&&s%2?'join-edge ':''}${isTrace?'active':deEmphasize?'muted':''}`});
+        }
+      }
+    }
+    for(let p=0;p<nodeCount();p++){
+      const sy=targetY(p);
+      const d=`M 790 ${sy} C 832 ${sy} 823 264 853 264`;
+      const isTrace=highlight&&highlight.dst===p;
+      make(edges,'path',{d,id:edgeIDs.toFinal(p),class:`graph-edge ${isTrace?'active':highlight?'muted':''}`});
+    }
+    // Move edges behind node rectangles (SVG layer order is independent of source ordering).
+    edges.parentNode.insertBefore(edges,nodes);
+
+    const count=state.scanners*(isTopK()?1:state.reducers);
+    const label=isTopK()?`${state.scanners} GATHER STREAMS`:`${count} ${finalMode==='range'?'RANGE':'HASH'} EXCHANGE STREAMS`;
+    make(overlays,'rect',{x:300,y:13,width:370,height:30,rx:4,class:'graph-chip'});
+    make(overlays,'text',{x:485,y:32,'text-anchor':'middle',class:'graph-chip-text'},label);
+    if(state.recipe==='sort') {
+      const result=wrongSortInversions();
+      const line = state.sortWrong ? `BROKEN ORDER / ${result.inversions} ADJACENT INVERSIONS`:'ORDERED OUTPUT / 0 ADJACENT INVERSIONS';
+      make(overlays,'text',{x:850,y:462,'text-anchor':'end',class:state.sortWrong?'graph-bad-note':'graph-stage-note'},line);
+    } else if(state.recipe==='grouptopk'){
+      make(overlays,'text',{x:848,y:461,'text-anchor':'end',class:'graph-note'},`UP TO ${state.k} CANDIDATES / REDUCER`);
+    } else if(isTopK()){
+      make(overlays,'text',{x:848,y:461,'text-anchor':'end',class:'graph-note'},`UP TO ${state.k} CANDIDATES / SCANNER`);
+    } else {
+      make(overlays,'text',{x:848,y:461,'text-anchor':'end',class:'graph-note'},'64 KiB WCS PAYLOADS / BACKPRESSURE');
+    }
+    make(overlays,'text',{x:33,y:480,class:'graph-note'},'ILLUSTRATIVE ROUTING · SELECT A ROW OR WORKER');
+    root.setAttribute('aria-label',`Distributed ${recipes[state.recipe].mode} graph: ${state.scanners} scan workers, ${nodeCount()} destination workers`);
+  }
+
+  function rangeLabel(p,splits) {
+    const low=p===0?'−∞':splits[p-1];
+    const high=p===state.reducers-1?'+∞':splits[p];
+    return `[${low}, ${high})`;
+  }
+  function drawNode(group,id,box,title,subtitle,cls,role,index) {
+    const g=make(group,'g',{class:`graph-node ${cls}${state.inspectedNode===id?' selected':''}`,role:'button',tabindex:0,'aria-label':`${title}, select for details`, 'data-node-id':id});
+    make(g,'rect',{x:box.x,y:box.y,width:box.w,height:box.h,rx:5,class:'node-bg'});
+    make(g,'rect',{x:box.x,y:box.y,width:3,height:box.h,rx:1,class:'node-accent'});
+    make(g,'text',{x:box.x+12,y:box.y+(box.h===100?39:16),class:'node-title'},title);
+    make(g,'text',{x:box.x+12,y:box.y+(box.h===100?60:30),class:'node-subtitle'},subtitle);
+    if(box.h===40)make(g,'text',{x:box.x+box.w-10,y:box.y+16,'text-anchor':'end',class:'node-number'},pad(index+1));
+    g.addEventListener('click',()=>selectNode(id));
+    g.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();selectNode(id);}});
+  }
+
+  function renderTable() {
+    const body=$('rows-table');
+    const rows=state.rows.slice(0,16);
+    $('key-col-heading').textContent=state.recipe==='join'?'JOIN KEY':state.recipe==='sort'?'SORT KEY':isTopK()?'ROW':'GROUP KEY';
+    $('value-col-heading').textContent=state.recipe==='join'?'TABLE':state.recipe==='sort'||isTopK()?'SCORE':'AMOUNT';
+    $('destination-col-heading').textContent=isTopK()?'NETWORK':'ROUTES TO';
+    const candidate=isTopK()?topkCandidateIndexes():null;
+    body.innerHTML=rows.map(r=>{
+      let key=state.recipe==='join'?r.joinKey:state.recipe==='sort'?r.score:isTopK()?r.name:r.key;
+      let value=state.recipe==='join'?r.side:state.recipe==='sort'||isTopK()?r.score:r.amount;
+      let route=isTopK()?(candidate.has(r.index)?'→ FINAL':'LOCAL DROP'):`→ ${pad(partition(r)+1)}`;
+      return `<tr data-row="${r.index}" class="${r.index===state.selectedRow?'selected':''}" tabindex="0" aria-label="Trace row ${r.index+1}, key ${escapeHTML(key)}"><td><span class="cell cell-source">SCAN ${pad(r.source+1)}</span></td><td><span class="cell">${escapeHTML(key)}</span></td><td><span class="cell">${escapeHTML(value)}</span></td><td><span class="cell">${route}</span></td></tr>`;
+    }).join('');
+    for(const row of body.querySelectorAll('tr')){
+      const select=()=>{const id=Number(row.dataset.row);pause();state.selectedRow=id;state.inspectedNode=null;renderGraph();renderTable();renderInspector();};
+      row.addEventListener('click',select);
+      row.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}});
+    }
+    $('trace-description').textContent=state.recipe==='join'?'Pick a join key: matching rows on either side route together.':isTopK()?'See which rows survive local Top K before the network.':state.recipe==='sort'?'Follow a score into its ordered range partition.':'Pick a grouping key to inspect its deterministic destination.';
+  }
+
+  function selectNode(id) {pause();state.inspectedNode=id;renderGraph();renderInspector();}
+  function inspectorText() {
+    const r=recipes[state.recipe];
+    if(state.inspectedNode) {
+      if(state.inspectedNode.startsWith('source-')) return {
+        kicker:'SCANNER / PROJECTION', title:'Produce bounded input batches.',
+        body:isTopK()?'This scanner evaluates the score and keeps only its best K rows. The discarded rows never need to cross the network.':'Parquet row groups are read and decoded, then columns are projected before entering the exchange. WCS keeps each wire frame within a 64 KiB payload limit.',
+        details:'<strong>Execution:</strong> scan → filter/project → '+(isTopK()?'local Top K':'exchange routing')
+      };
+      if(state.inspectedNode.startsWith('target-'))return {
+        kicker:`${r.mode} / WORKER`, title:isTopK()?'Only K local candidates survive.':state.recipe==='sort'?'Sort one bounded key range.':state.recipe==='join'?'Build and probe locally.':'Own all rows for assigned keys.',
+        body:isTopK()?`This worker reduces its local input to ${state.k} candidate rows. These are gathered by the final Top K.`:state.recipe==='sort'?`This worker sorts its assigned range locally. Ranges must be non-overlapping and concatenated in split-point order.`:state.recipe==='join'?'Rows with matching keys from both inputs meet here, so the join can be performed locally.':`Hash routing assigns each grouping key to exactly one reducer. Its group hash table can flush sorted runs under memory pressure.`,
+        details:`<strong>Workers:</strong> ${nodeCount()} destinations · <strong>Selected:</strong> ${state.inspectedNode.replace('target-','')}`
+      };
+      return {kicker:'FINAL STAGE / RESULT',title:state.recipe==='sort'?'Concatenate sorted Parquet ranges.':isTopK()||state.recipe==='grouptopk'?'Merge globally ranked candidates.':'Collect complete result partitions.',body:state.recipe==='sort'?'Parquet row groups can be assembled in partition-range order. Hash partitions cannot be concatenated to obtain a global sort.':isTopK()?'The final Top K selects winners from local scanner candidates. No global all-to-all shuffle is required.':state.recipe==='grouptopk'?'Reducers send their highest ranked finished groups. The final node selects the global K groups.':r.description,details:`<strong>Stage:</strong> ${escapeHTML(r.phase)}`};
+    }
+    if(state.selectedRow!==null) {
+      const row=state.rows[state.selectedRow], key=state.recipe==='join'?row.joinKey:state.recipe==='sort'?String(row.score):isTopK()?row.name:row.key;
+      const p=partition(row);
+      const h=hash32(key);
+      const drop=isTopK()&&!topkCandidateIndexes().has(row.index);
+      return {kicker:'ROW TRACE / '+pad(row.index+1),title:drop?'Discarded before the network.':`SCAN ${pad(row.source+1)} → ${isTopK()?'FINAL':'PARTITION '+pad(p+1)}`,
+        body:drop?`The row (${row.name}, score ${row.score}) was not in this scanner's top ${state.k}, so it can never belong to the global top ${state.k}.`:state.recipe==='sort'&&!state.sortWrong?`Score ${row.score} lands in ${rangeLabel(p,computeSplits(state.rows,state.reducers))}. Every score in an earlier partition is smaller.`:isTopK()?`Score ${row.score} is in this scanner's local top ${state.k}, so it becomes a final-merge candidate.`:`Key ${key} is routed deterministically to reducer ${pad(p+1)}. Any other row with the same key takes this exact destination.`,
+        details:isTopK()?`<strong>Candidate:</strong> ${drop?'no':'yes'} · <strong>Scanner:</strong> ${pad(row.source+1)}`:`<strong>Key:</strong> ${escapeHTML(key)}<br/><strong>${mode()==='range'?'Range index':'Teaching hash'}:</strong> ${mode()==='range'?String(p):'0x'+h.toString(16).padStart(8,'0')}<br/><strong>Destination:</strong> ${pad(p+1)}`};
+    }
+    return {kicker:`${r.mode} / INVARIANT`,title:r.invariant,body:r.description,details:`<strong>Contract:</strong> ${escapeHTML(r.contract)}<br/><strong>Source:</strong> <code>${escapeHTML(r.source)}</code>`};
+  }
+  function renderInspector() {
+    const r=recipes[state.recipe];
+    const copy=inspectorText();
+    $('inspect-kicker').textContent=copy.kicker;
+    $('inspect-title').textContent=copy.title;
+    $('inspect-body').textContent=copy.body;
+    const extra=[];
+    if(state.recipe==='sort') {
+      const res=wrongSortInversions();
+      extra.push(`<div class="sort-toggle-wrap"><button type="button" id="sort-routing-toggle" class="sort-toggle ${state.sortWrong?'is-wrong':''}">${state.sortWrong?'↺ Restore range routing':'⚠ Try hash routing instead'}</button><div class="sort-finding ${state.sortWrong?'is-wrong':''}">${state.sortWrong?`Hash-partition concat produces <strong>${res.inversions} ordering inversions</strong>${res.example?' (e.g. '+res.example[0]+' → '+res.example[1]+')':''}. Local sorting is not enough.`:'Range-partition concat has <strong>zero ordering inversions</strong> on this sample.'}</div></div>`);
+    }
+    if(state.recipe==='grouptopk') {
+      const winners=groupedCandidates().sort((a,b)=>b.count-a.count||a.key.localeCompare(b.key)).slice(0,state.k);
+      extra.push(`<div class="winners"><strong>Final sample winners</strong><span>${winners.map(w=>escapeHTML(w.key)+' ('+w.count+')').join(' · ')}</span></div>`);
+    }
+    $('inspect-details').innerHTML=copy.details+extra.join('');
+    $('sort-routing-toggle')?.addEventListener('click',()=>{pause();state.sortWrong=!state.sortWrong;resetSimulation(false);});
+    const counts=actualCounts();const max=Math.max(...counts,1);
+    $('load-caption').textContent=state.distribution==='skewed'?'SKEWED INPUT':'SAMPLE / ALL ROWS';
+    $('load-bars').innerHTML=counts.map((count,i)=>`<div class="load-item ${count===max&&max>state.rows.length/nodeCount()*1.5?'hot':''}"><span class="load-id">${pad(i+1)}</span><div class="load-track"><div style="width:${Math.max(0,100*count/max)}%"></div></div><span class="load-value">${count}</span></div>`).join('');
+    $('trace-foot').textContent=state.recipe==='sort'?(state.sortWrong?'Incorrect: hash partition order does not preserve numerical sort order.':'Correct: each range precedes the next range in the output.'):state.recipe==='join'?'Using one hash function on both sides co-locates equal join keys.':isTopK()?`Only ${routeRows().length} of 32 local candidate rows need to reach the final merge.`:state.recipe==='grouptopk'?'Hash the raw rows first; never rank incomplete grouped counts.':'The teaching hash here is FNV-1a; the real WCOL hash algorithm is implementation-specific.';
+  }
+
+  function renderControls() {
+    const r=recipes[state.recipe];
+    for(const b of document.querySelectorAll('.recipe')){const selected=b.dataset.recipe===state.recipe;b.classList.toggle('is-active',selected);b.setAttribute('aria-pressed',String(selected));}
+    $('sql-example').textContent=['topk','grouptopk'].includes(state.recipe) ? r.sql.replace(/LIMIT \d+;/,`LIMIT ${state.k};`) : r.sql;
+    $('scan-count').value=state.scanners;
+    $('scan-count-label').textContent=state.scanners;
+    $('reducer-count-label').textContent=state.reducers;
+    $('k-label').textContent=state.k;
+    $('k-control').hidden=!['topk','grouptopk'].includes(state.recipe);
+    for(const b of $('reducer-buttons').querySelectorAll('button')){
+      b.classList.toggle('is-selected',+b.dataset.reducers===state.reducers);
+      b.disabled=isTopK();
+      b.title=isTopK()?'Global Top K uses local workers and a gather, not reducer partitions':'';
+    }
+    for(const b of $('distribution-buttons').querySelectorAll('button'))b.classList.toggle('is-selected',b.dataset.distribution===state.distribution);
+    for(const b of $('k-buttons').querySelectorAll('button'))b.classList.toggle('is-selected',+b.dataset.k===state.k);
+    const tag=$('mode-tag');tag.textContent=state.sortWrong?'HASH EXCHANGE (WRONG)':r.label;tag.className='mode-tag '+(r.kind==='range'&&!state.sortWrong?'range':r.kind==='gather'?'gather':'');
+    $('diagram-heading').textContent=state.sortWrong?'Hash partitioning does not preserve global order.':r.headline;
+    $('routing-contract').textContent=state.sortWrong?'HASH(SCORE) & (N − 1)':r.contract;
+    $('diagram-caption').textContent=state.sortWrong?'Sorting each hash partition is not sufficient.':r.question;
+  }
+  function renderMetrics() {
+    const edges=isTopK()?state.scanners:state.scanners*state.reducers;
+    const counts=actualCounts();
+    $('metric-edges').textContent=fmt(edges);
+    $('metric-shuffled').textContent=fmt(routeRows().length);
+    $('metric-rows-label').textContent=isTopK()?'CANDIDATE ROWS':'SHUFFLE ROWS';
+    $('metric-peak').textContent=fmt(Math.max(...counts,0))+' / '+fmt(state.rows.length);
+    $('processed-count').textContent=`${pad(state.processed)} / ${pad(state.rows.length)} ROWS`;
+    $('progress-fill').style.width=`${Math.floor(state.processed/state.rows.length*100)}%`;
+    $('run-status').textContent=state.playing?'RUNNING':state.processed===state.rows.length?'COMPLETE':state.processed===0?'READY':'PAUSED';
+    $('play-label').textContent=state.playing?'Pause':'Play routing';
+    $('play-icon').textContent=state.playing?'Ⅱ':'▶';
+  }
+  function refresh() {renderControls();renderGraph();renderTable();renderInspector();renderMetrics();}
+  function resetSimulation(rebuildRows=true) {
+    pause(); state.generation++;state.processed=0;state.selectedRow=null;state.inspectedNode=null;
+    if(rebuildRows)state.rows=sampleRows();
+    state.packets.length=0;refresh();
+  }
+  function reset() {resetSimulation(true);}
+  function pause(){state.playing=false;if(state.timer){clearInterval(state.timer);state.timer=null;}renderMetrics();}
+  function play(){if(state.playing){pause();return;}if(state.processed>=state.rows.length)resetSimulation(false);state.playing=true;renderMetrics();state.timer=setInterval(()=>{step();if(state.processed>=state.rows.length)pause();},350);step();}
+
+  function step() {
+    if(state.processed>=state.rows.length){pause();return;}
+    const row=state.rows[state.processed];state.processed++;
+    const isCandidate=!isTopK()||topkCandidateIndexes().has(row.index);
+    const p=partition(row);
+    const id=edgeIDs.toTarget(row.source,p);
+    const path=$(id);
+    if(path) emitPacket(path,row, isCandidate ? (state.recipe==='join' && row.side==='users'?'#96bcff':'#66e6ce'):'#768b98');
+    if(isCandidate) {
+      const final=$(edgeIDs.toFinal(p));
+      if(final) {const generation=state.generation;setTimeout(()=>{if(generation===state.generation)emitPacket(final,row,'#e9bb79',0);},340);}
+    }
+    renderMetrics();
+  }
+  function emitPacket(path,row,color,delay=0){
+    if(!path)return;
+    const g=$('svg-packets');
+    const c=SVG('circle',{r:4,fill:color,class:'packet-dot',opacity:0});g.appendChild(c);
+    const length=path.getTotalLength();
+    const obj={path,c,length,started:performance.now()+delay,duration:900,color,generation:state.generation};
+    state.packets.push(obj);
+    if(!state.raf)state.raf=requestAnimationFrame(paintPackets);
+  }
+  function paintPackets(now){
+    const alive=[];
+    for(const p of state.packets) {
+      if(p.generation!==state.generation){p.c.remove();continue;}
+      const t=(now-p.started)/p.duration;
+      if(t>=1){p.c.remove();continue;}
+      const clamped=Math.max(0,Math.min(1,t));
+      const pos=p.path.getPointAtLength(p.length*clamped);
+      p.c.setAttribute('cx',pos.x);p.c.setAttribute('cy',pos.y);
+      p.c.setAttribute('opacity',t<0?0:Math.min(1,Math.max(0,(1-clamped)*3)));
+      alive.push(p);
+    }
+    state.packets=alive;
+    state.raf=alive.length?requestAnimationFrame(paintPackets):null;
+  }
+  function bind() {
+    $('recipes').addEventListener('click',(e)=>{const b=e.target.closest('[data-recipe]');if(!b)return;state.recipe=b.dataset.recipe;state.sortWrong=false;reset();});
+    $('scan-count').addEventListener('input',e=>{state.scanners=+e.target.value;reset();});
+    $('reducer-buttons').addEventListener('click',e=>{const b=e.target.closest('[data-reducers]');if(!b||b.disabled)return;state.reducers=+b.dataset.reducers;reset();});
+    $('distribution-buttons').addEventListener('click',e=>{const b=e.target.closest('[data-distribution]');if(!b)return;state.distribution=b.dataset.distribution;reset();});
+    $('k-buttons').addEventListener('click',e=>{const b=e.target.closest('[data-k]');if(!b)return;state.k=+b.dataset.k;reset();});
+    $('reset-btn').addEventListener('click',reset);
+    $('step-btn').addEventListener('click',()=>{pause();step();});
+    $('play-btn').addEventListener('click',play);
+    $('clear-trace').addEventListener('click',()=>{pause();state.selectedRow=null;state.inspectedNode=null;renderGraph();renderTable();renderInspector();});
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();});
+  }
+  state.rows=sampleRows();
+  bind();refresh();
+})();
+
+</script>
+</body>
+</html>

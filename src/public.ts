@@ -1,14 +1,8 @@
 export {
-  WcolFile,
-  FilterOp,
-  CombineOp,
-  buildPlan,
-  EXAMPLE_PLAN,
-  executePlanFromPlan,
-  type FilterSpec,
-  type AggregateSpec,
-  type GroupBySpec,
-  type QueryOptions,
-  type QueryResult,
-} from "./runtime/core/wcol.ts";
-export { ByteSource, LocalFileSource, HttpRangeSource } from "./runtime/io/byte-source.ts";
+  runWcolEngine,
+  readSpillBoundaries,
+  type WcolHost,
+  type RunWcolEngineOptions,
+  type SpillBoundary,
+} from "./runtime/host/run-wcol-engine.ts";
+export { HttpRangeSource } from "./runtime/host/ports/http-range.ts";

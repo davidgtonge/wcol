@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#071018" />
+  <meta name="description" content="An interactive, source-grounded explanation of streaming and backpressure in WCOL: fixed Wasm mailboxes, RPC streams, BYOB ingress, live finalization and R2 spill." />
+  <title>WCOL / 04 — A query in motion</title>
+  <link rel="stylesheet" href="_site.css" />
+  <style>
+:root{color-scheme:dark;--bg:#070f16;--bg2:#0a141d;--panel:#0c1721;--panel2:#0e1a25;--panel3:#111f2a;--line:#213541;--line2:#182b35;--white:#eef6f7;--text:#b4c5cb;--muted:#7e939e;--faint:#56717d;--teal:#51d5c3;--teal2:#2a958d;--blue:#79a9ff;--amber:#e9b575;--red:#f09586;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;--sans:Inter,'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,sans-serif}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;min-width:320px;color:var(--text);background:var(--bg);font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased}button,input,select{font:inherit}button{cursor:pointer}a{color:inherit;text-decoration:none}code,pre{font-family:var(--mono)}[hidden]{display:none!important}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--teal);outline-offset:3px}.shell{max-width:1580px;margin:0 auto;padding:0 34px}.accent{color:var(--teal)}.ambient{position:absolute;z-index:-1;pointer-events:none;inset:60px 0 auto;height:800px;background:radial-gradient(ellipse at 73% 5%,rgba(14,137,127,.10),transparent 47%),radial-gradient(ellipse at 7% 18%,rgba(38,94,134,.06),transparent 52%)}
+/* Navigation */
+.topbar{height:64px;border-bottom:1px solid #1b2b35;background:rgba(7,15,22,.97)}.topbar-inner{height:100%;display:flex;align-items:center;justify-content:space-between;gap:20px}.brand{display:flex;align-items:center;gap:11px;color:var(--white);font-size:20px;font-weight:750;letter-spacing:-.07em}.brand-mark{display:grid;grid-template-columns:repeat(2,6px);gap:3px}.brand-mark i{width:6px;height:6px;background:#4bcab9;border-radius:1px}.brand-mark i:nth-child(2),.brand-mark i:nth-child(3){background:#3d8790}.brand-divider{width:1px;height:20px;background:var(--line);margin:0 4px}.brand-context{font:600 10px var(--mono);color:#a0b3bb;letter-spacing:.1em;white-space:nowrap}.brand-context b{color:var(--teal);font-weight:600}.topnav{display:flex;align-items:center;gap:26px}.topnav a{color:#9caeb7;font:600 10px var(--mono);letter-spacing:.09em}.topnav a:hover{color:var(--white)}.topnav .source-link{border:1px solid var(--line);padding:9px 13px;border-radius:5px}
+/* Hero */
+.hero{padding-top:79px}.eyebrow{display:flex;align-items:center;gap:12px;color:var(--teal);font:700 11px var(--mono);letter-spacing:.16em}.eyebrow-line{width:23px;height:1px;background:var(--teal)}.eyebrow-slash{color:#536b77}.hero-grid{display:grid;grid-template-columns:1fr minmax(370px,.79fr);align-items:center;gap:70px;margin:25px 0 47px}.hero-copy{max-width:760px}.hero h1{font-size:clamp(56px,6.3vw,99px);line-height:1.02;letter-spacing:-.087em;color:var(--white);font-weight:670;margin:0 0 24px}.hero h1 em{font-weight:620;font-style:normal;color:var(--teal)}.lead{font-size:17px;line-height:1.75;max-width:610px;margin:0;color:#9db4be}.lead strong{color:var(--white);font-weight:600}.hero-actions{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:30px}.primary-link,.secondary-link,.secondary-btn,.play-btn{border-radius:6px;display:inline-flex;align-items:center;gap:19px;justify-content:center;font:700 11px var(--mono);letter-spacing:.065em;transition:background .16s,transform .16s,border-color .16s}.primary-link:hover,.secondary-link:hover,.play-btn:hover{transform:translateY(-1px)}.primary-link{background:var(--teal);color:#062120;padding:15px 18px}.primary-link span{font-size:15px}.secondary-link{border:1px solid var(--line);padding:14px 17px;color:var(--white)}.secondary-link:hover{border-color:#43817d}.hero-visual{border:1px solid #29454d;border-radius:8px;background:#09141d;box-shadow:0 17px 70px rgba(0,0,0,.15);overflow:hidden}.terminal-top{padding:14px 18px;border-bottom:1px solid #20343e;display:flex;align-items:center;gap:15px;font:650 10px var(--mono);color:#a2b4bc;letter-spacing:.075em}.terminal-dots{display:flex;gap:5px}.terminal-dots i{display:block;width:6px;height:6px;border-radius:50%;background:#556e78}.terminal-dots i:first-child{background:#bd786d}.terminal-dots i:nth-child(2){background:#c3a471}.terminal-dots i:last-child{background:#62b7a6}.terminal-light{margin-left:auto;color:#75d7b4;font-size:9px}.terminal-body{padding:25px 25px 20px}.terminal-row{display:grid;grid-template-columns:26px 1fr 22px 1fr;gap:13px;align-items:center;font:500 12px var(--mono)}.terminal-num{color:#526c77}.terminal-step{color:#cedbdf;white-space:nowrap}.terminal-arrow{color:var(--teal);font-size:20px}.terminal-dots-line{height:26px;display:flex;align-items:center;margin-left:36px;gap:7px}.terminal-dots-line span{height:2px;width:13px;background:#305659}.terminal-dots-line span:first-child{background:#55aa9e}.terminal-footer{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;border-top:1px solid #1e323d;margin-top:27px;padding-top:15px;font:600 9px var(--mono);letter-spacing:.05em;color:#668793}.hero-stats{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid #26343c;border-bottom:1px solid #26343c}.hero-stat{display:flex;align-items:baseline;gap:13px;padding:24px 0}.hero-stat:not(:first-child){border-left:1px solid #1b2c36;padding-left:27px}.hero-stat strong{color:#e9f5f4;font-size:29px;letter-spacing:-.075em;font-weight:600;white-space:nowrap}.hero-stat small{font-size:13px;letter-spacing:-.02em;color:var(--teal)}.hero-stat span{color:#718a97;font:600 9px var(--mono);letter-spacing:.075em}.hero-fine{font:11px/1.6 var(--mono);color:#65808b;margin:11px 0 0}
+/* Reusable panels / section */
+.lab-section,.journey-section,.lifecycle-section,.principles-section{padding-top:111px}.section-intro{margin-bottom:34px;max-width:940px}.section-intro h2{font-weight:620;color:var(--white);font-size:clamp(35px,4vw,57px);letter-spacing:-.066em;line-height:1.15;margin:15px 0 12px}.section-intro p{font-size:15px;line-height:1.75;color:#94aab4;max-width:790px;margin:0}.panel{border:1px solid var(--line);border-radius:7px;background:var(--panel);min-width:0;overflow:hidden}.panel-head{height:56px;padding:0 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line2)}.panel-heading{display:flex;align-items:center;gap:13px;min-width:0}.panel-heading h3{margin:0;color:var(--white);font-size:13px;font-weight:650;letter-spacing:-.005em;white-space:nowrap}.section-index{font:700 10px var(--mono);color:var(--teal)}.panel-tag{font:600 9px var(--mono);color:#86a3ad;letter-spacing:.08em;border:1px solid #263e46;padding:5px 8px;white-space:nowrap;border-radius:3px}
+.lab-layout{display:grid;grid-template-columns:305px minmax(0,1fr);gap:17px;align-items:start}.controls{position:relative}.control-content{padding:20px}.field-caption{display:flex;justify-content:space-between;align-items:center;color:#8ca7b2;font:700 10px var(--mono);letter-spacing:.065em;margin:0 0 12px}.field-caption span{color:#54717d;font-size:9px}.scenario-list{display:grid;gap:6px}.scenario{display:grid;grid-template-columns:29px 1fr 20px;align-items:center;gap:7px;text-align:left;border:1px solid #223842;border-radius:5px;padding:10px;background:#0a151e;color:var(--text);transition:background .18s,border-color .18s}.scenario:hover{border-color:#44636a}.scenario.is-active{border-color:#38867e;background:#102a2e}.scenario-glyph{font:500 22px var(--mono);color:#7299a5;text-align:center}.scenario.is-active .scenario-glyph{color:var(--teal)}.scenario strong,.scenario small{display:block}.scenario strong{font-size:12px;color:var(--white);font-weight:600}.scenario small{font-size:10px;color:var(--muted);margin-top:1px}.scenario-end{color:#536c76;font:600 10px var(--mono)}.control-divider{height:1px;background:var(--line2);margin:23px 0}.slider-block{margin:0 0 20px}.input-caption{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px;font-size:12px}.input-caption label{color:#c1cdd2}.input-caption output{color:var(--teal);font:700 11px var(--mono)}input[type=range]{width:100%;accent-color:var(--teal);cursor:pointer;display:block;margin:12px 0 4px}.range-ends{display:flex;justify-content:space-between;color:#5c7783;font:10px var(--mono)}.segments{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}.segments button{background:#101f29;border:1px solid #263d48;color:#91acb7;border-radius:4px;height:34px;font:650 11px var(--mono)}.segments button:hover{border-color:#5d9693}.segments button.is-selected{color:#06201e;background:var(--teal);border-color:var(--teal)}.toggle-button{width:100%;background:#10202b;border:1px solid #35515e;border-radius:5px;display:flex;gap:9px;align-items:center;justify-content:space-between;padding:12px;color:var(--white);font-size:12px;font-weight:600;text-align:left}.toggle-button.is-paused{border-color:#916a44;background:#2c251f}.toggle-dot{width:9px;height:9px;border-radius:50%;background:#438b89;flex-shrink:0}.toggle-button.is-paused .toggle-dot{background:var(--amber)}#pause-hint{font:600 9px var(--mono);color:#77929c}.control-note{margin:15px 0 0;font:11px/1.6 var(--mono);color:#77919b}
+/* Live graph */
+.lab-main{display:grid;gap:17px;min-width:0}.graph-panel{overflow:hidden}.status-pill{display:flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid #315359;border-radius:30px;color:var(--teal);font:700 10px var(--mono);letter-spacing:.07em}.status-dot{width:6px;height:6px;background:currentColor;border-radius:50%;box-shadow:0 0 11px rgba(81,213,195,.35)}.status-pill.is-paused{color:var(--amber);border-color:#5c4e35}.status-pill.is-done{color:var(--blue);border-color:#43587a}.graph-subhead{padding:13px 20px;display:flex;gap:8px;justify-content:space-between;align-items:center;border-bottom:1px solid #162934;font-size:12px;color:#b6cbd0}.graph-sub-right{font:600 10px var(--mono);letter-spacing:.04em;color:#6d8f9a;white-space:nowrap}.svg-viewport{width:100%;background:#09141d;overflow:hidden}#stream-svg{width:100%;height:auto;min-height:350px;display:block}#stream-svg [data-node]{cursor:pointer}#stream-svg [data-node]:hover .node-shell{stroke:#78ddd0;stroke-width:1.6}#stream-svg .graph-label{font:600 11px var(--mono);fill:#7c99a6;letter-spacing:1.2px}#stream-svg .node-title{font:600 13px var(--mono);fill:#e0eeee}#stream-svg .node-sub{font:500 10px var(--mono);fill:#819eaa}#stream-svg .node-shell{fill:#102530;stroke:#385661;stroke-width:1}#stream-svg .selected .node-shell{stroke:#64d5c6;stroke-width:2}#stream-svg .paused .node-shell{fill:#302820;stroke:#d8a96d}#stream-svg .backed .node-shell{stroke:#c18b58}#stream-svg .spill .node-shell{stroke:#8fb7f1}#stream-svg .packet{filter:drop-shadow(0 0 5px currentColor)}#stream-svg .edge-curve{fill:none}#stream-svg .packet-animated{animation:packet-pop .4s ease-out}@keyframes packet-pop{from{opacity:.3}to{opacity:1}}.graph-legend{display:flex;align-items:center;gap:17px;padding:12px 20px;border-top:1px solid #1b2e37;border-bottom:1px solid #1b2e37;flex-wrap:wrap;font:650 9px var(--mono);letter-spacing:.04em;color:#849aa4}.graph-legend>span{display:inline-flex;align-items:center;gap:6px}.legend-dot{width:7px;height:7px;border-radius:50%;background:var(--teal)}.legend-dot.amber{background:var(--amber)}.legend-dot.blue{background:var(--blue)}.legend-dot.dim{background:#49616a}.graph-legend .legend-right{margin-left:auto;color:#5a7782}.transport-bar{padding:13px 20px;border-bottom:1px solid #1b2e37}.transport-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.transport-head>div{display:grid;gap:1px}.transport-head strong{color:#c7d8dc;font-size:11px;font-weight:650}.transport-head span{font:10px var(--mono);color:#72919b}.transport-head>span{color:var(--teal);font:650 11px var(--mono);white-space:nowrap}.progress-track{height:6px;background:#172d39;overflow:hidden;border-radius:20px}.progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#2c9f95,#62d9c6);transition:width .18s}.progress-fill.is-high{background:var(--amber)}.playback{display:flex;justify-content:space-between;align-items:center;padding:13px 20px;gap:8px;flex-wrap:wrap}.playback-left,.playback-controls{display:flex;align-items:center;gap:10px}.small-mono{font:650 10px var(--mono);color:#79939f;white-space:nowrap}.small-mono strong{color:var(--white)}.playback-divider{width:1px;height:17px;background:#334953}#playback-summary{font-size:11px;color:#a2bdc2}.playback-controls{gap:6px}.mini-btn,.subtle-btn,.danger-btn,.text-reset{background:#12222d;border:1px solid #29424d;color:#bbd0d5;border-radius:5px}.mini-btn{width:35px;height:34px;font-size:18px}.mini-btn:hover,.subtle-btn:hover{border-color:#67a4a0}.playback select{background:#10212b;color:#c4d9de;border:1px solid #2c4852;padding:7px 8px;height:34px;border-radius:5px;font:700 11px var(--mono)}.play-btn{background:var(--teal);border:1px solid var(--teal);color:#09201d;padding:9px 12px;min-height:34px;font-size:10px;gap:8px}#play-glyph{font-size:13px}.live-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));border-top:1px solid #263c46}.live-metric{display:grid;gap:4px;padding:17px 14px}.live-metric:not(:first-child){border-left:1px solid #243943}.live-metric span{font:600 9px var(--mono);color:#78949f;letter-spacing:.035em}.live-metric strong{font-size:24px;font-weight:580;letter-spacing:-.055em;color:#ecf6f6;font-variant-numeric:tabular-nums}.lab-bottom{display:grid;grid-template-columns:1fr 1fr;gap:17px}.node-inspector{padding:20px}.inspector-kicker{font:700 10px var(--mono);color:var(--teal);letter-spacing:.07em}.node-inspector h4{font-size:22px;color:var(--white);letter-spacing:-.04em;font-weight:600;margin:10px 0 7px}.node-inspector p{font-size:12px;line-height:1.65;margin:0;color:#9bb3bd;min-height:60px}.inspector-counters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--line2);margin:18px 0;border-radius:4px}.inspector-counter{padding:10px}.inspector-counter:not(:first-child){border-left:1px solid var(--line2)}.inspector-counter span{display:block;font:650 9px var(--mono);color:#73909a}.inspector-counter strong{color:var(--white);font:600 17px var(--mono);display:block;margin-top:6px}.source-hint{display:flex;align-items:center;gap:10px;padding-top:11px;border-top:1px solid var(--line2)}.source-hint span{font:650 9px var(--mono);color:#63818b}.source-hint code{font-size:10px;color:#93b6bc;overflow-wrap:anywhere}.event-log{padding:11px 18px;display:grid;align-content:start;min-height:242px;max-height:260px;overflow:auto}.event-entry{display:grid;grid-template-columns:44px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid #172b35;font:11px/1.5 var(--mono);color:#a7bec7}.event-entry:last-child{border-bottom:0}.event-time{color:#5e838e}.event-entry strong{font-weight:650;color:var(--teal)}.event-entry.is-warning strong{color:var(--amber)}
+/* Byte journey */
+.journey-panel{padding:0}.journey-head{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line2);padding:15px 23px}.journey-caption{font:650 10px var(--mono);color:#7e9ca5;letter-spacing:.08em}.journey-steps{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));padding:18px 22px;gap:7px;background:#0a161e;border-bottom:1px solid var(--line2)}.journey-step{background:#10212c;border:1px solid #2c4650;border-radius:5px;color:#93acb5;min-height:66px;text-align:left;padding:10px 10px 8px;display:flex;flex-direction:column;justify-content:space-between;gap:8px}.journey-step span{font:700 10px var(--mono);color:#527986}.journey-step strong{font:600 11px/1.2 var(--sans)}.journey-step.is-selected{background:#133530;border-color:#479990}.journey-step.is-selected span{color:var(--teal)}.journey-step.is-selected strong{color:#e2fbf6}.journey-step:hover{border-color:#5b8f8f}.journey-body{display:grid;grid-template-columns:minmax(285px,.87fr) 1.13fr;gap:0}.journey-illustration{border-right:1px solid var(--line2);min-height:475px;padding:53px 38px;display:flex;flex-direction:column;justify-content:center;align-items:center;background:radial-gradient(ellipse at 50% 47%,rgba(42,169,154,.06),transparent 67%)}.journey-shape{position:relative;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:7px;padding:25px;border:1px solid #477e81;background:#0f292c;border-radius:8px;min-height:100px;max-width:340px;box-shadow:0 0 0 12px rgba(24,71,72,.18)}.journey-shape:before{content:"";position:absolute;inset:-24px;border:1px dashed #2d5c60;border-radius:13px;pointer-events:none}.journey-byte{background:#1f514f;color:#baf6e8;border:1px solid #366967;border-radius:4px;padding:10px 9px;font:650 15px var(--mono)}.journey-stage-label{margin-top:41px;color:var(--teal);font:700 13px var(--mono);letter-spacing:.08em;text-align:center}.journey-illustration-caption{color:#879fa9;margin-top:10px;font:11px var(--mono);max-width:340px;text-align:center}.journey-progress{display:flex;gap:14px;align-items:center;width:80%;margin-top:38px;font:650 10px var(--mono);color:#7895a0}.journey-line{height:3px;border-radius:10px;flex:1;background:#28414b;overflow:hidden}.journey-line div{height:100%;background:var(--teal);width:0;transition:width .24s}.journey-explainer{padding:36px 39px 28px}.journey-explainer h3{font-size:31px;color:var(--white);line-height:1.18;letter-spacing:-.047em;margin:11px 0}.journey-explainer p{font-size:14px;line-height:1.75;color:#a1b9c1;max-width:665px;margin:0 0 15px}.journey-fact{border-left:2px solid var(--teal);padding:9px 12px;background:#10252a;color:#b8d8d5;font:11px/1.65 var(--mono);margin-bottom:20px}.code-box{border:1px solid #2b444e;border-radius:5px;background:#09151e;overflow:hidden}.code-title{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid #203642;font:650 10px var(--mono);color:#a1b7c1}.code-title span:last-child{margin-left:auto;font-size:9px;color:#62818e}.code-indicator{width:7px;height:7px;border-radius:2px;background:var(--teal)}.code-box pre{margin:0;padding:17px 18px;min-height:117px;overflow:auto;tab-size:2;color:#9ed6cf;font:12px/1.7 var(--mono)}.journey-nav{display:flex;justify-content:space-between;margin-top:18px;gap:12px}.subtle-btn,.secondary-btn,.danger-btn{padding:9px 13px;font:650 11px var(--mono)}.secondary-btn{background:#173a37;color:#bdf4e8;border:1px solid #326b65}.secondary-btn:hover{background:#1b4843}.subtle-btn:disabled,.secondary-btn:disabled{opacity:.37;cursor:not-allowed}.danger-btn{color:#e8aaa0;border-color:#69423b;background:#271c1c}.danger-btn:hover{border-color:#c3776e}
+/* Lifecycle */
+.lifecycle-grid{display:grid;grid-template-columns:minmax(400px,1fr) minmax(300px,.9fr);gap:17px;align-items:stretch}.lifecycle-content{padding:24px}.port-tabs{display:flex;gap:7px;margin-bottom:18px}.port-tabs button{flex:1;border:1px solid #304853;border-radius:5px;background:#12222d;color:#789ca8;padding:10px;font:650 11px var(--mono)}.port-tabs button.is-selected{color:#102421;border-color:var(--teal);background:var(--teal)}.port-card{border:1px solid #35515c;border-radius:6px;padding:19px 20px;background:#0c1b24;min-height:225px}.port-card-top{display:flex;justify-content:space-between;font:650 10px var(--mono);color:#81a1ab;letter-spacing:.06em}.port-index{color:var(--teal)}.port-state-label{font:650 21px var(--mono);color:var(--white);margin:20px 0 15px;letter-spacing:-.04em}.port-states{display:flex;gap:6px;align-items:center}.port-state{flex:1;min-height:8px;border-radius:3px;background:#24414b}.port-state.is-current{background:var(--teal)}.port-state.is-ended{background:var(--blue)}.port-state.is-absent{background:var(--amber)}.port-explanation{margin:17px 0 0;color:#98b2b9;font-size:12px;line-height:1.65}.port-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:16px}.port-actions button{white-space:nowrap;padding:10px 5px;font:600 10px var(--mono)}.text-reset{margin-top:15px;border:0;background:transparent;font:600 10px var(--mono);color:#7195a0;padding:3px 0}.text-reset:hover{color:var(--teal)}.lifecycle-notes{display:grid;gap:12px}.note-card{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:20px 22px}.note-number,.principle-n{font:700 10px var(--mono);color:var(--teal);letter-spacing:.09em}.note-card h3{font-size:18px;color:var(--white);margin:7px 0;font-weight:610;letter-spacing:-.025em}.note-card p{font-size:12px;color:#9db3bc;margin:0;line-height:1.65}.note-card code,.principle code{font-size:.92em;color:#b3e4db;background:#173238;padding:1px 3px;border-radius:2px}
+/* Summary */
+.principles-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.principle{border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:26px}.principle-symbol{margin-top:16px;color:var(--teal);font:500 45px var(--mono);line-height:1}.principle h3{font-size:20px;color:var(--white);font-weight:620;letter-spacing:-.03em;margin:19px 0 10px}.principle p{color:#9ab0ba;font-size:13px;line-height:1.75;margin:0}.source-footnote{border-top:1px solid #2b414b;display:grid;grid-template-columns:1fr 1fr;gap:25px;margin-top:35px;padding:25px 0 0}.source-footnote>div{max-width:600px}.source-label{display:block;font:700 10px var(--mono);color:var(--teal);letter-spacing:.08em;margin-bottom:9px}.source-footnote strong{font-size:12px;color:var(--white);font-weight:550}.source-footnote p{font:11px/1.75 var(--mono);color:#829ba5;margin:7px 0 0}.source-footnote code{color:#a7c9ce}.footer{margin-top:115px;border-top:1px solid #1f303a}.footer-inner{display:flex;justify-content:space-between;align-items:center;gap:20px;padding-top:28px;padding-bottom:31px;font:650 10px var(--mono);color:#738c98;letter-spacing:.06em}.footer-brand{font:750 18px var(--sans);letter-spacing:-.06em;color:var(--white)}.footer-brand span:not(.accent){font:600 10px var(--mono);color:#7d97a0;letter-spacing:.05em;margin-left:11px}.footer a:hover{color:var(--teal)}.footer-separator{margin:0 10px;color:#45636e}
+@media(max-width:1220px){.hero-grid{gap:32px;grid-template-columns:1fr .95fr}.hero-stat{flex-direction:column;gap:0}.hero-stat:not(:first-child){padding-left:20px}.lab-layout{grid-template-columns:275px minmax(0,1fr)}.graph-sub-right{display:none}.graph-legend{gap:9px}.journey-explainer{padding:30px}.journey-steps{gap:4px;padding:14px}.journey-step{padding:8px}.live-metric{padding:13px 10px}.live-metric strong{font-size:20px}}
+@media(max-width:960px){.hero{padding-top:52px}.hero-grid{grid-template-columns:1fr;gap:28px}.hero-copy{max-width:820px}.hero-visual{max-width:710px}.lab-layout{grid-template-columns:1fr}.controls{position:static}.scenario-list{grid-template-columns:repeat(2,1fr)}.lab-bottom{grid-template-columns:1fr 1fr}.journey-body{grid-template-columns:1fr}.journey-illustration{min-height:290px;padding:34px;border-right:0;border-bottom:1px solid var(--line2)}.journey-explainer{padding:30px}.lifecycle-grid{grid-template-columns:1fr}.lifecycle-notes{grid-template-columns:repeat(3,minmax(0,1fr))}.note-card{padding:18px}.principles-grid{grid-template-columns:1fr 1fr}.principle:last-child{grid-column:span 2}.topnav{gap:13px}}
+@media(max-width:680px){.shell{padding:0 17px}.topbar{height:59px}.brand{gap:7px;font-size:18px}.brand-context{font-size:9px}.topnav a:not(.source-link){display:none}.topnav .source-link{padding:7px 9px}.hero{padding-top:47px}.hero h1{font-size:clamp(49px,11vw,70px)}.lead{font-size:15px}.hero-grid{margin-bottom:29px}.hero-visual{width:100%}.terminal-body{padding:20px 15px}.terminal-row{font-size:10px;gap:5px;grid-template-columns:19px 1fr 16px 1fr}.terminal-arrow{font-size:15px}.terminal-footer{font-size:8px}.hero-stats{grid-template-columns:1fr 1fr}.hero-stat{padding:15px 0;flex-direction:column}.hero-stat:not(:first-child){padding-left:13px}.hero-stat:nth-child(3){border-left:0;border-top:1px solid var(--line2)}.hero-stat:nth-child(4){border-top:1px solid var(--line2)}.hero-stat strong{font-size:28px}.hero-fine{font-size:10px}.lab-section,.journey-section,.lifecycle-section,.principles-section{padding-top:75px}.section-intro h2{font-size:39px}.section-intro p{font-size:13px}.scenario-list{grid-template-columns:1fr}.control-content{padding:16px}.panel-head{padding:0 14px}.svg-viewport{overflow-x:auto}#stream-svg{min-width:690px;min-height:300px}.graph-subhead{padding:12px 14px;font-size:11px}.graph-legend,.transport-bar,.playback{padding-left:14px;padding-right:14px}.graph-legend .legend-right{margin-left:0}.live-metrics{grid-template-columns:repeat(3,1fr)}.live-metric:nth-child(4){border-left:0;border-top:1px solid var(--line2)}.live-metric:nth-child(5){border-top:1px solid var(--line2)}.lab-bottom{grid-template-columns:1fr}.node-inspector p{min-height:0}.playback-left{width:100%}.playback-controls{width:100%;justify-content:flex-end}.journey-head{padding:12px 14px}.journey-caption{font-size:9px}.journey-steps{display:flex;overflow-x:auto;scroll-snap-type:x mandatory}.journey-step{min-width:100px;scroll-snap-align:start}.journey-illustration{min-height:285px}.journey-explainer{padding:23px 17px}.journey-explainer h3{font-size:25px}.journey-explainer p{font-size:13px}.code-box pre{font-size:11px}.lifecycle-content{padding:16px}.port-card{padding:16px}.port-state-label{font-size:17px}.port-actions{grid-template-columns:repeat(2,1fr)}.lifecycle-notes{grid-template-columns:1fr}.principles-grid{grid-template-columns:1fr}.principle:last-child{grid-column:auto}.principle{padding:22px}.source-footnote{grid-template-columns:1fr}.footer-inner{flex-direction:column;align-items:flex-start}.footer-inner>span:last-child{font-size:9px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation:none!important;transition:none!important}}
+
+</style>
+</head>
+<body data-chapter="04">
+  <div class="ambient" aria-hidden="true"></div>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="index.html" aria-label="WCOL systems explainers home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>wcol<span class="accent">/</span></span><span class="brand-divider"></span><span class="brand-context">CHAPTER <b>04</b></span></a>
+      <nav class="topnav" aria-label="On this page"><a href="#lab">STREAM LAB</a><a href="#journey">BYTE JOURNEY</a><a href="#lifecycle">PORT LIFECYCLE</a></nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero shell">
+      <div class="eyebrow"><span class="eyebrow-line"></span> CHAPTER 04 <span class="eyebrow-slash">/</span> STREAMING</div>
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <h1>A query in <em>motion.</em></h1>
+          <p class="lead">Parquet bytes are fetched on demand. Wasm processes bounded chunks. Streams connect scanners to reducers while the query is still running. When a consumer slows down, <strong>backpressure travels all the way upstream.</strong></p>
+          <div class="hero-actions"><a href="#lab" class="primary-link">RUN THE SIMULATION <span>↗</span></a><a href="#journey" class="secondary-link">FOLLOW ONE CHUNK <span>↓</span></a></div>
+        </div>
+        <div class="hero-visual" aria-label="Streaming pipeline summary">
+          <div class="terminal-top"><span class="terminal-dots"><i></i><i></i><i></i></span><span>HOST / STREAM POOL</span><span class="terminal-light">● ACTIVE</span></div>
+          <div class="terminal-body">
+            <div class="terminal-row"><span class="terminal-num">01</span><span class="terminal-step">R2 Range GET</span><span class="terminal-arrow">→</span><span class="terminal-step">Rust / Wasm scan</span></div>
+            <div class="terminal-dots-line"><span></span><span></span><span></span><span></span><span></span></div>
+            <div class="terminal-row"><span class="terminal-num">02</span><span class="terminal-step">128 KiB egress</span><span class="terminal-arrow">→</span><span class="terminal-step">RPC ReadableStream</span></div>
+            <div class="terminal-dots-line"><span></span><span></span><span></span><span></span><span></span></div>
+            <div class="terminal-row"><span class="terminal-num">03</span><span class="terminal-step">BYOB pump</span><span class="terminal-arrow">→</span><span class="terminal-step">64 KiB ingress</span></div>
+            <div class="terminal-dots-line"><span></span><span></span><span></span><span></span><span></span></div>
+            <div class="terminal-row"><span class="terminal-num">04</span><span class="terminal-step">GraphHost poll</span><span class="terminal-arrow">→</span><span class="terminal-step">Reducer / finalizer</span></div>
+            <div class="terminal-footer"><span>ONE FIXED SLOT PER PORT</span><span>NO FULL REDUCER EGRESS ARRAY</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="hero-stats">
+        <div class="hero-stat"><strong>64 <small>KiB</small></strong><span>WCS PAYLOAD CAP</span></div>
+        <div class="hero-stat"><strong>64 <small>KiB</small></strong><span>DEFAULT INPUT SLOT</span></div>
+        <div class="hero-stat"><strong>128 <small>KiB</small></strong><span>DEFAULT OUTPUT SLOT</span></div>
+        <div class="hero-stat"><strong>100 <small>/ SIDE</small></strong><span>PORT LIMIT PER NODE</span></div>
+      </div>
+      <p class="hero-fine">A WCS frame is a logical unit; it can cross mailbox chunk boundaries. The slot sizes above are default host settings, not a requirement that a frame fit one slot.</p>
+    </section>
+
+    <section id="lab" class="lab-section shell">
+      <div class="section-intro"><div class="eyebrow">01 / THE LIVE SYSTEM</div><h2>Make the system <span class="accent">push back.</span></h2><p>Choose a failure mode, press play, and watch bounded buffers fill. The routing and capacity model is deterministic and illustrative—not a live WCOL query or a performance benchmark.</p></div>
+      <div class="lab-layout">
+        <aside class="panel controls" aria-label="Simulation controls">
+          <div class="panel-head"><div class="panel-heading"><span class="section-index">01A</span><h3>Change the conditions</h3></div><span class="panel-tag">LIVE</span></div>
+          <div class="control-content">
+            <div class="field-caption">PICK A SCENARIO</div>
+            <div class="scenario-list" role="group" aria-label="Streaming scenario">
+              <button class="scenario is-active" type="button" data-scenario="steady" aria-pressed="true"><span class="scenario-glyph">↗</span><span><strong>Steady flow</strong><small>Producer and consumer make progress</small></span><span class="scenario-end">01</span></button>
+              <button class="scenario" type="button" data-scenario="slow-reducer" aria-pressed="false"><span class="scenario-glyph">Ⅱ</span><span><strong>Paused reducer</strong><small>Hot keys make buffers fill upstream</small></span><span class="scenario-end">02</span></button>
+              <button class="scenario" type="button" data-scenario="late-attach" aria-pressed="false"><span class="scenario-glyph">⏱</span><span><strong>Late attachment</strong><small>Input ports appear while work runs</small></span><span class="scenario-end">03</span></button>
+              <button class="scenario" type="button" data-scenario="slow-finalizer" aria-pressed="false"><span class="scenario-glyph">⇥</span><span><strong>Slow finalizer</strong><small>Backpressure crosses a second stage</small></span><span class="scenario-end">04</span></button>
+              <button class="scenario" type="button" data-scenario="spill" aria-pressed="false"><span class="scenario-glyph">⇣</span><span><strong>R2 spill</strong><small>Reducer suspends on host I/O</small></span><span class="scenario-end">05</span></button>
+            </div>
+            <div class="control-divider"></div>
+            <div class="field-caption">TOPOLOGY <span>ILLUSTRATIVE SCALE</span></div>
+            <div class="slider-block"><div class="input-caption"><label for="scanner-count">Scan workers</label><output id="scanner-count-out" for="scanner-count">4</output></div><input type="range" id="scanner-count" min="2" max="8" step="1" value="4" /><div class="range-ends"><span>2</span><span>8</span></div></div>
+            <div class="slider-block"><div class="input-caption"><label>Reducers</label><output id="reducers-out">4</output></div><div class="segments" id="reducer-options" role="group" aria-label="Number of reducers"><button type="button" data-reducers="2">2</button><button type="button" data-reducers="4" class="is-selected">4</button><button type="button" data-reducers="8">8</button></div></div>
+            <div class="slider-block"><div class="input-caption"><label for="chunk-count">Chunks per scanner</label><output id="chunk-count-out" for="chunk-count">12</output></div><input type="range" id="chunk-count" min="4" max="24" step="2" value="12" /><div class="range-ends"><span>4</span><span>24</span></div></div>
+            <div class="slider-block"><div class="input-caption"><label>Illustrative RPC pipe capacity</label><output id="pipe-cap-out">2 chunks / edge</output></div><div class="segments" id="pipe-options" role="group" aria-label="RPC chunks per edge"><button type="button" data-pipe="1">1</button><button type="button" data-pipe="2" class="is-selected">2</button><button type="button" data-pipe="4">4</button></div></div>
+            <button class="toggle-button" type="button" id="pause-reducer"><span class="toggle-dot"></span><span id="pause-label">Pause reducer 01</span><span id="pause-hint">CLICK TO BLOCK</span></button>
+            <p class="control-note">The lab models 32 KiB illustrative chunks moving through one-slot egress, a bounded transport queue, and one-slot ingress. Production uses 64 KiB WCS payload limits and configurable pipe budgets.</p>
+          </div>
+        </aside>
+
+        <div class="lab-main">
+          <section class="panel graph-panel" aria-label="Interactive streaming graph">
+            <div class="panel-head"><div class="panel-heading"><span class="section-index">01B</span><h3>Streams under pressure</h3></div><div class="status-pill"><span class="status-dot"></span><span id="run-status">READY</span></div></div>
+            <div class="graph-subhead"><span id="scenario-heading">Every producer advances as its consumer frees space.</span><span class="graph-sub-right">SCAN → RPC → REDUCE → FINALIZE</span></div>
+            <div class="svg-viewport"><svg id="stream-svg" viewBox="0 0 1070 475" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Scanners stream chunks to reducers and an active finalizer"><defs><pattern id="network-grid" width="25" height="25" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#243d48" opacity="0.54" /></pattern></defs><rect x="0" y="0" width="1070" height="475" fill="url(#network-grid)"/><g id="svg-links"></g><g id="svg-packets"></g><g id="svg-nodes"></g></svg></div>
+            <div class="graph-legend"><span><i class="legend-dot teal"></i> IN FLIGHT</span><span><i class="legend-dot amber"></i> BUFFERED / BLOCKED</span><span><i class="legend-dot blue"></i> INGRESS SLOT</span><span><i class="legend-dot dim"></i> IDLE EDGE</span><span class="legend-right">CLICK A NODE TO INSPECT</span></div>
+            <div class="transport-bar"><div class="transport-head"><div><strong>Shared transport budget</strong><span>Illustrative global cap: 512 KiB of queued chunks</span></div><span id="transport-label">0 / 512 KiB</span></div><div class="progress-track"><div id="transport-fill" class="progress-fill"></div></div></div>
+            <div class="playback"><div class="playback-left"><span class="small-mono">TICK <strong id="tick-count">000</strong></span><span class="playback-divider"></span><span id="playback-summary">Ready to stream</span></div><div class="playback-controls"><button type="button" class="mini-btn" id="reset-sim" aria-label="Reset simulation" title="Reset">↺</button><button type="button" class="mini-btn" id="step-sim" aria-label="Advance one tick" title="Step">↦</button><select id="play-speed" aria-label="Playback speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select><button type="button" class="play-btn" id="play-sim"><span id="play-glyph">▶</span><span id="play-text">Play simulation</span></button></div></div>
+            <div class="live-metrics"><div class="live-metric"><span>CHUNKS PRODUCED</span><strong id="metric-produced">0</strong></div><div class="live-metric"><span>CHUNKS CONSUMED</span><strong id="metric-consumed">0</strong></div><div class="live-metric"><span>BUFFERED CHUNKS</span><strong id="metric-buffered">0</strong></div><div class="live-metric"><span>BLOCKED PRODUCERS</span><strong id="metric-blocked">0</strong></div><div class="live-metric"><span>R2 SPILL RUNS</span><strong id="metric-spills">0</strong></div></div>
+          </section>
+          <div class="lab-bottom">
+            <section class="panel node-panel" aria-label="Selected node inspector"><div class="panel-head"><div class="panel-heading"><span class="section-index">01C</span><h3>Inspect a node</h3></div><span class="panel-tag">CLICK GRAPH</span></div><div class="node-inspector"><span class="inspector-kicker" id="inspect-kicker">REDUCER / PORTS</span><h4 id="inspect-title">Reducer 01</h4><p id="inspect-description">Incoming WCS streams occupy independent 64 KiB Rust mailboxes. Slow consumption propagates to scanner outputs.</p><div class="inspector-counters" id="inspect-counters"></div><div class="source-hint"><span>CODE</span><code id="inspect-code">host/stream-pool.ts</code></div></div></section>
+            <section class="panel event-panel" aria-label="Streaming event log"><div class="panel-head"><div class="panel-heading"><span class="section-index">01D</span><h3>Execution trace</h3></div><span class="panel-tag">DETERMINISTIC</span></div><div class="event-log" id="event-log" role="log" aria-live="off"></div></section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="journey-section shell" id="journey"><div class="section-intro"><div class="eyebrow">02 / FOLLOW A CHUNK</div><h2>Who owns the bytes <span class="accent">now?</span></h2><p>There is no magic shared queue. At each boundary, ownership passes explicitly: from object storage to Wasm, out to a JS stream, across RPC, then back into a Wasm input slot.</p></div>
+      <div class="panel journey-panel"><div class="journey-head"><div class="journey-caption">SELECT A STAGE</div><span class="journey-caption">SOURCE-GROUNDED HOST PATH</span></div><div id="journey-steps" class="journey-steps" role="group" aria-label="Streaming pipeline stages"></div><div class="journey-body"><div class="journey-illustration"><div class="journey-shape" id="journey-shape"><span class="journey-byte">00</span><span class="journey-byte">1f</span><span class="journey-byte">a4</span><span class="journey-byte">7c</span><span class="journey-byte">…</span></div><div class="journey-stage-label" id="journey-stage-label">READ AT</div><div class="journey-illustration-caption" id="journey-illustration-caption">A bounded byte range enters the engine.</div><div class="journey-progress"><span>R2</span><div class="journey-line"><div id="journey-progress-fill"></div></div><span>GRAPH</span></div></div><div class="journey-explainer"><div class="inspector-kicker" id="journey-kicker">01 / OBJECT STORAGE</div><h3 id="journey-title">Fetch only the bytes a scan needs.</h3><p id="journey-description"></p><div class="journey-fact" id="journey-fact"></div><div class="code-box"><div class="code-title"><span class="code-indicator"></span><span id="journey-file">host/stream-pool.ts</span><span>RUST / TYPESCRIPT</span></div><pre><code id="journey-code"></code></pre></div><div class="journey-nav"><button type="button" id="journey-prev" class="subtle-btn">← Previous</button><button type="button" id="journey-next" class="secondary-btn">Next stage →</button></div></div></div></div>
+    </section>
+
+    <section class="lifecycle-section shell" id="lifecycle"><div class="section-intro"><div class="eyebrow">03 / LATE ARRIVALS & ENDING INPUT</div><h2>Not attached is <span class="accent">not EOF.</span></h2><p>Distributed inputs arrive at different times. The stream pool must distinguish a port that may still attach, a stream that has reached EOF, and a producer that will never open an edge.</p></div><div class="lifecycle-grid"><div class="panel lifecycle-lab"><div class="panel-head"><div class="panel-heading"><span class="section-index">03A</span><h3>Input-port state machine</h3></div><span class="panel-tag">TRY TRANSITIONS</span></div><div class="lifecycle-content"><div class="port-tabs" id="port-tabs" role="group" aria-label="Select an input port"><button type="button" data-port="0" class="is-selected">PORT 00</button><button type="button" data-port="1">PORT 01</button><button type="button" data-port="2">PORT 02</button></div><div class="port-card"><div class="port-card-top"><span>SELECTED INPUT SLOT</span><span class="port-index" id="port-index">00</span></div><div class="port-state-label" id="port-state-label">EXPECTED / NOT ATTACHED</div><div class="port-states" id="port-states"></div><p class="port-explanation" id="port-explanation"></p></div><div class="port-actions"><button id="port-attach" type="button" class="secondary-btn">attachInput()</button><button id="port-eof" type="button" class="subtle-btn">EOF</button><button id="port-absent" type="button" class="subtle-btn">sealInput()</button><button id="port-abort" type="button" class="danger-btn">Abort</button></div><button id="port-reset" class="text-reset" type="button">↺ Reset all ports</button></div></div><div class="lifecycle-notes"><div class="note-card"><span class="note-number">01 / ATTACH</span><h3>It can arrive late.</h3><p><code>createPoolInputLatch()</code> stores pending attach/seal requests until the Wasm stream pool exists. There is no need to invent another fan-in buffer.</p></div><div class="note-card"><span class="note-number">02 / EOF</span><h3>A real stream has ended.</h3><p>An attached input finishes via <code>writer.close()</code>, which triggers <code>wcs_sp_in_end</code>. The reducer can distinguish this from a missing producer.</p></div><div class="note-card"><span class="note-number">03 / ABSENT</span><h3>No stream was produced.</h3><p><code>sealInput(port)</code> calls <code>wcs_sp_in_absent</code> only for a port that never attached. The graph can finish without waiting forever.</p></div></div></div></section>
+
+    <section class="principles-section shell"><div class="section-intro"><div class="eyebrow">04 / WHY THIS DESIGN WORKS</div><h2>Bounded by construction.</h2><p>The engineering constraints are part of the host API, not only comments in the query planner.</p></div><div class="principles-grid"><article class="principle"><span class="principle-n">01 / BACKPRESSURE</span><div class="principle-symbol">⇄</div><h3>A full slot stops the writer.</h3><p>Input writes wait for <code>wcs_sp_in_free</code>; output reads release with <code>wcs_sp_out_release</code>. A slow consumer eventually stops the producer without an unbounded queue.</p></article><article class="principle"><span class="principle-n">02 / NO BUSY POLL</span><div class="principle-symbol">◴</div><h3>Work wakes on events.</h3><p>Advancement is requested when slots change, reads complete, or host spill operations finish. The scheduler yields between batches rather than constantly spinning on a blocked graph.</p></article><article class="principle"><span class="principle-n">03 / CONCURRENT PIPELINES</span><div class="principle-symbol">↝</div><h3>Attach consumers early.</h3><p>Reducer outputs can be connected to a running finalizer before all scans end. Consumption can start as soon as bytes are emitted, instead of filling a pipe with no reader.</p></article></div><div class="source-footnote"><div><span class="source-label">IMPLEMENTATION BASIS</span><strong>Uploaded <code>host(4).zip</code></strong><p>Source paths include <code>stream-pool.ts</code>, <code>run-scan-stream-pool.ts</code>, <code>scan-edge-session.ts</code>, <code>shared-byte-pool.ts</code>, and <code>ports/rpc.ts</code>.</p></div><div><span class="source-label">SCOPE OF THIS DEMO</span><p>Scheduling, 32 KiB illustrative chunks, and per-tick rates are a teaching simulation. No Wasm module is executed here. The frame sizes, port caps, ownership transitions, and host API names reflect the supplied code.</p></div></div></section>
+  </main>
+  <footer class="footer"><div class="shell footer-inner"><span class="footer-brand">wcol<span class="accent">/</span> <span>SYSTEMS EXPLAINER · 04</span></span><span>STREAMS · WASM MAILBOXES · BACKPRESSURE <span class="footer-separator">·</span> <a href="https://github.com/davidgtonge/wcol" target="_blank" rel="noreferrer noopener">GITHUB ↗</a></span></div></footer>
+<script>
+/* WCOL Streaming — deterministic education model.
+ * 32 KiB simulated chunks, one-slot ingress/egress, bounded transport queue.
+ * This does NOT execute WCOL/Wasm or claim production performance measurements.
+ */
+(() => {
+  "use strict";
+
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => [...document.querySelectorAll(sel)];
+  const svgNS = "http://www.w3.org/2000/svg";
+  const CHUNK_KIB = 32;
+  const SHARED_KIB = 512;
+  const EMIT_EVERY = 3;  // illustrative downstream production cadence
+  const COLORS = { teal: "#53d7c4", blue: "#7cafff", amber: "#e9b575", red: "#f09586", dim: "#36525e" };
+  const DESCRIPTIONS = {
+    steady: "Every producer advances as its consumer frees space.",
+    "slow-reducer": "Reducer 01 is paused while hot-key chunks target it. Its ingress, RPC queue and scanner output slots fill.",
+    "late-attach": "Scanner streams attach at different times. A not-yet-attached port is not EOF.",
+    "slow-finalizer": "Reducer outputs are consumed slowly. Backpressure can cross the reducer → finalizer boundary.",
+    spill: "A reducer temporarily waits for an illustrative R2 run commit before resuming its input.",
+  };
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const pad = (num, digits = 2) => String(num).padStart(digits, "0");
+  const fmt = (num) => Number(num).toLocaleString("en-US");
+  const esc = (str) => String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const conf = { scenario: "steady", scans: 4, reducers: 4, chunks: 12, pipeCap: 2, speed: 1 };
+  let sim;
+  let timer = null;
+  let playing = false;
+  let selected = { type: "reducer", id: 1 };
+  let pausedReducer = -1;
+
+  function appendLog(kind, message) {
+    sim.events.push({ tick: sim.tick, kind, message });
+    if (sim.events.length > 90) sim.events.shift();
+  }
+
+  function makeModel() {
+    sim = {
+      tick: 0, produced: 0, consumed: 0, finishedChunks: 0,
+      spillRuns: 0, done: false, events: [], scans: [], edges: [], reducers: [],
+      lastProgressTick: 0,
+    };
+    for (let s = 0; s < conf.scans; s++) {
+      const delay = conf.scenario === "late-attach" ? s * 7 : 0;
+      sim.scans.push({ remaining: conf.chunks, emitted: 0, delay, attached: false, blocked: false });
+      sim.edges.push(Array.from({ length: conf.reducers }, () => ({ out: null, pipe: [], input: null, opened: false })));
+    }
+    for (let r = 0; r < conf.reducers; r++) {
+      sim.reducers.push({ processed: 0, outputs: 0, out: null, pipe: [], input: null, rr: 0, groupMiB: 0,
+        spillUntil: 0, spillPending: false, closed: false, finalEmitted: false });
+    }
+    pausedReducer = conf.scenario === "slow-reducer" ? Math.min(1, conf.reducers - 1) : -1;
+    if (selected.type === "reducer" && selected.id >= conf.reducers) selected.id = 0;
+    if (selected.type === "scan" && selected.id >= conf.scans) selected = { type: "reducer", id: 0 };
+    appendLog("info", "Stream pool opened · one fixed mailbox per port.");
+    if (conf.scenario === "slow-reducer") appendLog("warn", "Reducer 01 paused · backpressure will build.");
+    if (conf.scenario === "late-attach") appendLog("info", "Inputs are expected but some scanners have not attached yet.");
+    if (conf.scenario === "slow-finalizer") appendLog("warn", "Finalizer consumes once per eight simulation ticks.");
+    if (conf.scenario === "spill") appendLog("info", "Illustrative 16 MiB reducer pressure-flush threshold enabled.");
+  }
+
+  function stopPlayback() {
+    if (timer !== null) window.clearInterval(timer);
+    timer = null;
+    playing = false;
+  }
+  function restartPlaybackTimer() {
+    if (!playing) return;
+    if (timer !== null) window.clearInterval(timer);
+    timer = window.setInterval(() => tick(), Math.round(315 / conf.speed));
+  }
+  function reset() {
+    stopPlayback();
+    makeModel();
+    render();
+  }
+  function setScenario(scenario) {
+    if (!Object.prototype.hasOwnProperty.call(DESCRIPTIONS, scenario)) return;
+    conf.scenario = scenario;
+    $$("[data-scenario]").forEach((el) => {
+      const on = el.dataset.scenario === scenario;
+      el.classList.toggle("is-active", on);
+      el.setAttribute("aria-pressed", String(on));
+    });
+    reset();
+  }
+  function sumPipeChunks() {
+    let total = 0;
+    for (const edgeRow of sim.edges) for (const edge of edgeRow) total += edge.pipe.length;
+    for (const reducer of sim.reducers) total += reducer.pipe.length;
+    return total;
+  }
+  function hasPipeRoom() {
+    return (sumPipeChunks() + 1) * CHUNK_KIB <= SHARED_KIB;
+  }
+  function queuesEmpty() {
+    for (const erow of sim.edges) for (const edge of erow) {
+      if (edge.out !== null || edge.pipe.length || edge.input !== null) return false;
+    }
+    return true;
+  }
+  function downstreamEmpty() {
+    return sim.reducers.every((r) => r.out === null && r.pipe.length === 0 && r.input === null && !r.spillPending);
+  }
+  function nextReducerForScanner(s, emitted) {
+    // Model hot-key skew: most chunks hash to the paused reducer.
+    if (conf.scenario === "slow-reducer" && emitted % 4 !== 3) return Math.min(1, conf.reducers - 1);
+    return (emitted * 7 + s * 3) % conf.reducers;
+  }
+  function noteProgress() {
+    sim.lastProgressTick = sim.tick;
+  }
+
+  function tick() {
+    if (sim.done) {
+      stopPlayback();
+      render();
+      return;
+    }
+    sim.tick++;
+    let moved = false;
+    // 1. Late stream attachment: the input latch can be bound before these appear.
+    sim.scans.forEach((scan, s) => {
+      if (!scan.attached && sim.tick > scan.delay) {
+        scan.attached = true;
+        moved = true;
+        appendLog("ok", `Scanner ${pad(s)} attached · its RPC edges may now open on first bytes.`);
+      }
+    });
+
+    // 2. Finalizer drains independently of scanner completion.
+    const finalizerCanDrain = conf.scenario !== "slow-finalizer" || sim.tick % 8 === 0;
+    if (finalizerCanDrain) {
+      let drained = 0;
+      for (let turn = 0; turn < conf.reducers && drained < 2; turn++) {
+        const idx = (sim.tick + turn) % conf.reducers;
+        const reducer = sim.reducers[idx];
+        if (reducer.input) {
+          reducer.input = null;
+          sim.finishedChunks++;
+          drained++;
+          moved = true;
+        }
+      }
+    }
+
+    // 3. Reducer outputs move into bounded RPC queues, then finalizer mailboxes.
+    for (const reducer of sim.reducers) {
+      if (reducer.input === null && reducer.pipe.length) {
+        reducer.input = reducer.pipe.shift();
+        moved = true;
+      }
+      if (reducer.out !== null && reducer.pipe.length < conf.pipeCap && hasPipeRoom()) {
+        reducer.pipe.push(reducer.out);
+        reducer.out = null;
+        moved = true;
+      }
+    }
+
+    // 4. A host spill commit wakes reducers that were waiting on R2.
+    for (let r = 0; r < conf.reducers; r++) {
+      const reducer = sim.reducers[r];
+      if (reducer.spillPending && sim.tick >= reducer.spillUntil) {
+        reducer.spillPending = false;
+        reducer.groupMiB = 1.1;
+        sim.spillRuns++;
+        moved = true;
+        appendLog("ok", `Reducer ${pad(r)} R2 run committed; host wake resumes GraphHost.`);
+      }
+    }
+
+    // 5. Process one ingress chunk per reducer, but never grow output unboundedly.
+    for (let r = 0; r < conf.reducers; r++) {
+      const reducer = sim.reducers[r];
+      if (r === pausedReducer || reducer.spillPending || reducer.out !== null) continue;
+      let idx = -1;
+      for (let look = 0; look < conf.scans; look++) {
+        const candidate = (reducer.rr + look) % conf.scans;
+        if (sim.edges[candidate][r].input !== null) { idx = candidate; break; }
+      }
+      if (idx < 0) continue;
+      const edge = sim.edges[idx][r];
+      edge.input = null;
+      reducer.rr = (idx + 1) % conf.scans;
+      reducer.processed++;
+      sim.consumed++;
+      reducer.groupMiB += conf.scenario === "spill" ? 2.0 : 0.16;
+      moved = true;
+      if (reducer.processed % EMIT_EVERY === 0) {
+        reducer.out = { kind: "partial", id: reducer.processed, size: CHUNK_KIB };
+        reducer.outputs++;
+      }
+      if (conf.scenario === "spill" && reducer.groupMiB >= 16) {
+        reducer.spillPending = true;
+        reducer.spillUntil = sim.tick + 5;
+        appendLog("warn", `Reducer ${pad(r)} reached simulated 16 MiB; waiting for R2 spill commit.`);
+      }
+    }
+
+    // 6. Ingress 64 KiB slot can be reused only after Rust consumes/release.
+    for (let s = 0; s < conf.scans; s++) for (let r = 0; r < conf.reducers; r++) {
+      const edge = sim.edges[s][r];
+      if (edge.input === null && edge.pipe.length) {
+        edge.input = edge.pipe.shift();
+        moved = true;
+      }
+      // 7. RPC body drains scanner output slot only if bounded transport has space.
+      if (edge.out !== null && edge.pipe.length < conf.pipeCap && hasPipeRoom()) {
+        edge.pipe.push(edge.out);
+        edge.out = null;
+        moved = true;
+      }
+    }
+
+    // 8. Scanner emits to its partition-specific output slot if free.
+    for (let s = 0; s < conf.scans; s++) {
+      const scan = sim.scans[s];
+      scan.blocked = false;
+      if (!scan.attached || scan.remaining <= 0) continue;
+      const r = nextReducerForScanner(s, scan.emitted);
+      const edge = sim.edges[s][r];
+      if (edge.out !== null) {
+        scan.blocked = true;
+        continue;
+      }
+      edge.out = { kind: "wcs", s, r, n: scan.emitted + 1, size: CHUNK_KIB };
+      scan.emitted++;
+      scan.remaining--;
+      sim.produced++;
+      moved = true;
+      if (!edge.opened) {
+        edge.opened = true;
+        if (sim.events.filter((x) => x.message.includes("first byte")).length < 3) {
+          appendLog("ok", `S${pad(s)} → R${pad(r)} first byte opens an RPC body stream.`);
+        }
+      }
+    }
+
+    // 9. Seal logical reducer output once every scan has finished and all ingress is drained.
+    const allScannersDone = sim.scans.every((scan) => scan.remaining === 0 && scan.attached);
+    const allIngressConsumed = allScannersDone && queuesEmpty();
+    if (allIngressConsumed) {
+      for (let r = 0; r < conf.reducers; r++) {
+        const reducer = sim.reducers[r];
+        if (!reducer.finalEmitted && !reducer.spillPending && reducer.out === null) {
+          reducer.finalEmitted = true;
+          if (reducer.processed % EMIT_EVERY !== 0 && reducer.processed > 0) {
+            reducer.out = { kind: "last-partial", id: reducer.processed, size: CHUNK_KIB };
+            reducer.outputs++;
+          }
+          moved = true;
+          appendLog("ok", `Reducer ${pad(r)} saw all inputs end; finishing its output port.`);
+        }
+      }
+    }
+    if (allIngressConsumed && sim.reducers.every((r) => r.finalEmitted) && downstreamEmpty()) {
+      sim.done = true;
+      stopPlayback();
+      appendLog("ok", "All output streams drained. Graph finished; pool can close safely.");
+    }
+
+    if (moved) noteProgress();
+    else if (sim.tick - sim.lastProgressTick === 5) appendLog("warn", "No progress: backpressure or a delayed attachment is holding work.");
+    render();
+  }
+
+  function bufferedCount() {
+    let count = 0;
+    for (const erow of sim.edges) for (const edge of erow) {
+      count += (edge.out !== null ? 1 : 0) + edge.pipe.length + (edge.input !== null ? 1 : 0);
+    }
+    for (const reducer of sim.reducers) count += (reducer.out !== null ? 1 : 0) + reducer.pipe.length + (reducer.input !== null ? 1 : 0);
+    return count;
+  }
+  function blockedScans() {
+    return sim.scans.filter((scan) => scan.blocked).length;
+  }
+  function simulatedStatus() {
+    if (sim.done) return "COMPLETE";
+    if (playing && sim.tick - sim.lastProgressTick >= 4) return "BACKPRESSURE";
+    if (playing) return "STREAMING";
+    if (sim.tick > 0) return "PAUSED";
+    return "READY";
+  }
+  function render() {
+    $$("[data-scenario]").forEach((el) => el.classList.toggle("is-active", el.dataset.scenario === conf.scenario));
+    $("#scanner-count-out").textContent = conf.scans;
+    $("#reducers-out").textContent = conf.reducers;
+    $("#chunk-count-out").textContent = conf.chunks;
+    $("#pipe-cap-out").textContent = `${conf.pipeCap} chunk${conf.pipeCap > 1 ? "s" : ""} / edge`;
+    $("#scenario-heading").textContent = DESCRIPTIONS[conf.scenario];
+    $("#tick-count").textContent = pad(sim.tick, 3);
+    const status = simulatedStatus();
+    $("#run-status").textContent = status;
+    const pill = $(".status-pill");
+    pill.classList.toggle("is-paused", status === "BACKPRESSURE" || status === "PAUSED");
+    pill.classList.toggle("is-done", status === "COMPLETE");
+    $("#metric-produced").textContent = fmt(sim.produced);
+    $("#metric-consumed").textContent = fmt(sim.consumed);
+    $("#metric-buffered").textContent = fmt(bufferedCount());
+    $("#metric-blocked").textContent = fmt(blockedScans());
+    $("#metric-spills").textContent = fmt(sim.spillRuns);
+    const used = sumPipeChunks() * CHUNK_KIB;
+    const pct = clamp(used / SHARED_KIB * 100, 0, 100);
+    $("#transport-label").textContent = `${used} / ${SHARED_KIB} KiB`;
+    $("#transport-fill").style.width = `${pct}%`;
+    $("#transport-fill").classList.toggle("is-high", pct >= 80);
+    $("#play-glyph").textContent = playing ? "Ⅱ" : "▶";
+    $("#play-text").textContent = sim.done ? "Replay from start" : playing ? "Pause" : "Play simulation";
+    $("#playback-summary").textContent = sim.done ? "All streams drained" : blockedScans() > 0 ? `${blockedScans()} scanner(s) waiting for free slots` : `${fmt(sim.consumed)} chunks processed by reducers`;
+    const target = selected.type === "reducer" ? selected.id : pausedReducer >= 0 ? pausedReducer : Math.min(1, conf.reducers - 1);
+    $("#pause-label").textContent = pausedReducer === target ? `Resume reducer ${pad(target)}` : `Pause reducer ${pad(target)}`;
+    $("#pause-hint").textContent = pausedReducer === target ? "CURRENTLY BLOCKED" : "CLICK TO BLOCK";
+    $("#pause-reducer").classList.toggle("is-paused", pausedReducer === target);
+    renderGraph();
+    renderInspector();
+    renderEvents();
+  }
+
+  function bezierPoint(p0, p1, p2, p3, t) {
+    const q = 1 - t;
+    return { x: q*q*q*p0.x + 3*q*q*t*p1.x + 3*q*t*t*p2.x + t*t*t*p3.x,
+      y: q*q*q*p0.y + 3*q*q*t*p1.y + 3*q*t*t*p2.y + t*t*t*p3.y };
+  }
+  function linkGeometry(x0, y0, x1, y1) {
+    const bend = (x1-x0) * .42;
+    return { p0:{x:x0,y:y0},p1:{x:x0+bend,y:y0},p2:{x:x1-bend,y:y1},p3:{x:x1,y:y1},
+      path:`M ${x0} ${y0} C ${x0+bend} ${y0}, ${x1-bend} ${y1}, ${x1} ${y1}`};
+  }
+  function ys(n) {
+    return Array.from({length:n}, (_,i) => n===1 ? 231 : 71 + i * (325/(n-1)));
+  }
+  function nodeBox(x,y,w,h,title,sub,options={}) {
+    const isSelected = selected.type === options.type && selected.id === options.id;
+    const cls = `${isSelected ? "selected" : ""} ${options.paused ? "paused" : ""} ${options.backed ? "backed" : ""} ${options.spill ? "spill" : ""}`;
+    const label = `${title}, ${sub}`;
+    return `<g class="${cls}" data-node="${options.type}" data-index="${options.id}" tabindex="0" role="button" aria-label="Inspect ${esc(label)}">
+      <rect class="node-shell" x="${x}" y="${y-h/2}" width="${w}" height="${h}" rx="5"/>
+      <rect x="${x+2}" y="${y-h/2+2}" width="3" height="${h-4}" rx="1.5" fill="${options.paused ? COLORS.amber : options.spill ? COLORS.blue : COLORS.teal}" opacity=".9"/>
+      <text class="node-title" x="${x+13}" y="${y-3}">${esc(title)}</text>
+      <text class="node-sub" x="${x+13}" y="${y+13}">${esc(sub)}</text>
+    </g>`;
+  }
+  function packetAt(link, t, color, radius=5) {
+    const p = bezierPoint(link.p0,link.p1,link.p2,link.p3,t);
+    return `<circle class="packet packet-animated" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${radius}" fill="${color}" stroke="#0b1820" stroke-width="1.6" />`;
+  }
+  function renderGraph() {
+    const scanY = ys(conf.scans);
+    const reduceY = ys(conf.reducers);
+    let links = `<text class="graph-label" x="57" y="28">SCANNERS</text><text class="graph-label" x="346" y="28">RPC STREAMS</text><text class="graph-label" x="527" y="28">REDUCERS</text><text class="graph-label" x="859" y="28">FINALIZER</text>`;
+    let packets = "";
+    let nodes = "";
+    for (let s = 0; s < conf.scans; s++) for (let r = 0; r < conf.reducers; r++) {
+      const edge = sim.edges[s][r];
+      const geo = linkGeometry(179, scanY[s], 520, reduceY[r]);
+      const occ = edge.out !== null || edge.pipe.length || edge.input !== null;
+      const highlighted = (selected.type === "scan" && selected.id === s) || (selected.type === "reducer" && selected.id === r);
+      links += `<path class="edge-curve" d="${geo.path}" stroke="${occ ? COLORS.teal : COLORS.dim}" stroke-opacity="${occ ? .36 : highlighted ? .27 : .11}" stroke-width="${occ ? 1.7 : 1}" />`;
+      if (edge.out !== null) packets += packetAt(geo,.09,COLORS.amber,5);
+      edge.pipe.forEach((_, i) => {packets += packetAt(geo,.37 + .105*i, COLORS.teal,4.1);});
+      if (edge.input !== null) packets += packetAt(geo,.89,COLORS.blue,5.1);
+    }
+    for (let r = 0; r < conf.reducers; r++) {
+      const reducer = sim.reducers[r];
+      const geo = linkGeometry(665,reduceY[r],854,231);
+      const occ = reducer.out !== null || reducer.pipe.length || reducer.input !== null;
+      links += `<path class="edge-curve" d="${geo.path}" stroke="${occ ? COLORS.blue : COLORS.dim}" stroke-width="${occ?2:1}" stroke-opacity="${occ?.42:.15}"/>`;
+      if (reducer.out !== null) packets += packetAt(geo,.12,COLORS.amber,5);
+      reducer.pipe.forEach((_,i) => {packets+=packetAt(geo,.42+i*.105,COLORS.teal,4.4);});
+      if (reducer.input !== null) packets += packetAt(geo,.88,COLORS.blue,5.1);
+    }
+    for (let s = 0; s < conf.scans; s++) {
+      const scan = sim.scans[s];
+      const occupied = sim.edges[s].filter((e)=>e.out !== null).length;
+      nodes += nodeBox(52,scanY[s],127,38,`SCAN ${pad(s)}`,!scan.attached?`await attach · ${scan.delay}`:scan.remaining?`${scan.remaining} chunks left`:"produced / EOF",{type:"scan",id:s,backed:scan.blocked});
+      if (occupied) nodes += `<text x="177" y="${scanY[s]-25}" text-anchor="end" fill="${COLORS.amber}" font-family="monospace" font-size="10">${occupied} out</text>`;
+    }
+    for (let r = 0; r < conf.reducers; r++) {
+      const reducer = sim.reducers[r];
+      const inputCount = sim.edges.reduce((n, row) => n + Number(row[r].input !== null),0);
+      nodes += nodeBox(520,reduceY[r],145,42,`REDUCE ${pad(r)}`,pausedReducer===r?"PAUSED · no reads":reducer.spillPending?"R2 spill / wait":`${inputCount} inbox · ${reducer.processed} read`,{type:"reducer",id:r,paused:pausedReducer===r,spill:reducer.spillPending});
+    }
+    nodes += nodeBox(854,231,165,68,"FINALIZER",`${sim.finishedChunks} output chunks`,{type:"finalizer",id:0});
+    // A separate R2 destination is shown only when spilling is demonstrated.
+    const r2Color = conf.scenario === "spill" && sim.spillRuns ? COLORS.blue : "#597787";
+    nodes += `<path d="M 592 425 Q 717 468 900 412" fill="none" stroke="${r2Color}" stroke-dasharray="4 7" stroke-width="1.2" opacity="${conf.scenario === "spill" ? .8 : .25}"/>
+       <rect x="885" y="388" width="135" height="50" rx="5" fill="#10202c" stroke="#385565"/><text x="898" y="406" font-family="monospace" font-size="12" fill="#d3e2e6">R2 SPILL</text><text x="898" y="424" font-family="monospace" font-size="10" fill="#7699a6">${sim.spillRuns} committed runs</text>`;
+    $("#svg-links").innerHTML = links;
+    $("#svg-packets").innerHTML = packets;
+    $("#svg-nodes").innerHTML = nodes;
+  }
+
+  function renderInspector() {
+    let heading, title, description, vals, code;
+    if (selected.type === "scan") {
+      const s = sim.scans[selected.id];
+      const edges = sim.edges[selected.id];
+      heading = "SCANNER / WASM EGRESS";
+      title = `Scanner ${pad(selected.id)}`;
+      description = "A scan issues Parquet ReadAt requests, decodes batches in Rust, and emits WCS bytes into partition-specific output slots. The JS host releases each slot only after reading the bytes. RPC streams are opened on the first nonempty output.";
+      vals = [["EMITTED", s.emitted],["LEFT",s.remaining],["OUT SLOTS",edges.filter((e)=>e.out!==null).length]];
+      code = "host/run-scan-stream-pool.ts";
+    } else if (selected.type === "finalizer") {
+      heading = "FINALIZER / BOUNDED INPUT";
+      title = "Already listening";
+      description = "Its input streams are attached when reducers are prepared, not after those reducers complete. Any emitted data can be consumed concurrently. In the slow-finalizer scenario, the bounded downstream queues eventually stop reducer progress.";
+      vals = [["CONSUMED",sim.finishedChunks],["INPUTS",conf.reducers],["QUEUED",sim.reducers.reduce((n,r)=>n+r.pipe.length+Number(r.input!==null),0)]];
+      code = "host/run-wcol-engine.ts";
+    } else {
+      const r = sim.reducers[selected.id];
+      const ingress = sim.edges.reduce((n,row)=>n+Number(row[selected.id].input!==null),0);
+      heading = "REDUCER / WASM INGRESS";
+      title = `Reducer ${pad(selected.id)}`;
+      description = "Each scanner edge gets a separate 64 KiB ingress mailbox. The BYOB pump writes only when wcs_sp_in_free says a slot is available. This reducer can pause, hold its input slots, and cause the backpressure wave you see upstream.";
+      vals = [["PROCESSED",r.processed],["INPUT SLOTS",ingress],["GROUP MiB",r.groupMiB.toFixed(1)]];
+      code = "host/stream-pool.ts";
+    }
+    $("#inspect-kicker").textContent = heading;
+    $("#inspect-title").textContent = title;
+    $("#inspect-description").textContent = description;
+    $("#inspect-counters").innerHTML = vals.map(([name,value])=>`<div class="inspector-counter"><span>${esc(name)}</span><strong>${esc(value)}</strong></div>`).join("");
+    $("#inspect-code").textContent = code;
+  }
+  function renderEvents() {
+    $("#event-log").innerHTML = sim.events.slice(-6).reverse().map((evt)=>
+      `<div class="event-entry ${evt.kind === "warn" ? "is-warning" : ""}"><span class="event-time">T${pad(evt.tick,3)}</span><span><strong>${evt.kind === "warn" ? "WAIT" : evt.kind === "ok" ? "EVENT" : "INFO"}</strong> ${esc(evt.message)}</span></div>`
+    ).join("");
+  }
+
+  // Source-grounded stages are excerpted or abbreviated from the uploaded code.
+  const journeyStages = [
+    {
+      label: "R2 ReadAt", kicker: "01 / RANGE READ", title: "Ask for only the needed bytes.",
+      desc: "The GraphHost asks for a Parquet range. The TypeScript host starts an asynchronous ReadAt request, then completes the ticket back into Wasm. The Rust graph is woken when the bytes arrive.",
+      fact: "ReadAt is offset + length. It is not the same as a forward-only WCS input stream.",
+      file: "host/stream-pool.ts", code: "const ticket = wasm.wcs_sp_read_at_ticket!(handle);\nconst offset = wasm.wcs_sp_read_at_offset!(handle);\nwasm.wcs_sp_take_read_at!(handle);\nstartRead(ticket, source, offset, readLen);",
+      visual: "R2 RANGE READ", caption: "An asynchronous ReadAt ticket returns bytes to Wasm." },
+    {
+      label: "Scan + WCS", kicker: "02 / RUST SCAN", title: "Decode, project, and frame the data.",
+      desc: "Wasm decodes Parquet pages, applies the physical plan, partitions rows by destination, and emits WCS1 data. Frames stay bounded even when a logical batch is large.",
+      fact: "WCS1 frame payloads are capped at 64 KiB. A transport chunk is not guaranteed to align with a frame boundary.",
+      file: "host/run-scan-stream-pool.ts", code: "graph: { program: options.program,\n         scratchBytes: options.scratchBytes },\noutputs: options.partitionCount,\nreadAt: options.readAt,",
+      visual: "WCS1 / FRAME", caption: "A logical batch becomes many bounded frames." },
+    {
+      label: "Output slot", kicker: "03 / WASM EGRESS", title: "Read from one fixed output slot.",
+      desc: "Each output port owns a bounded Wasm buffer. A JS pull copies the available bytes into an owned Uint8Array and explicitly releases the Rust slot. Until that release, the producer cannot overwrite it.",
+      fact: "Default output slot: 128 KiB per port. Outputs may contain fragments of WCS frames.",
+      file: "host/stream-pool.ts", code: "const len = wasm.wcs_sp_out_len!(handle, port);\nconst copy = new Uint8Array(len);\ncopy.set(viewAt(wasm.memory, ptr, len));\ncontroller.enqueue(copy);\nwasm.wcs_sp_out_release!(handle, port);",
+      visual: "OUTPUT / 128 KiB", caption: "Copy into JS ownership, then release the Wasm mailbox." },
+    {
+      label: "RPC stream", kicker: "04 / FIRST-BYTE EDGE", title: "Start an edge only when it has data.",
+      desc: "The scanner forwards an output stream to a particular reducer. hashScanOutputStream waits for the first chunk before opening the body. A partition with no output need not open an empty RPC stream.",
+      fact: "Backpressure stays attached to the ReadableStream: a reader must pull before more chunks drain.",
+      file: "host/stream-pool.ts", code: "const first = await reader.read();\nif (first.done || !first.value?.byteLength) return;\nconst body = new ReadableStream({\n  async pull(controller) { /* read next */ }\n});\nawait onFirstByte(body);",
+      visual: "RPC / BODY", caption: "A live ReadableStream crosses the transport boundary." },
+    {
+      label: "BYOB pump", kicker: "05 / JS INGRESS PUMP", title: "Pull only when the mailbox is free.",
+      desc: "The receiving host attempts a BYOB reader and falls back to the default reader when necessary. It writes each returned view into the pool's WritableStream; backpressure naturally suspends the next read.",
+      fact: "The current pump requests a 64 KiB BYOB buffer; it does not require a network chunk of exactly that size.",
+      file: "host/stream-pool.ts", code: "reader = source.getReader({ mode: 'byob' });\n// Fallback to source.getReader() if unsupported\nconst result = await reader.read(buffer);\nif (result.value?.byteLength)\n  await writer.write(result.value);",
+      visual: "BYOB / 64 KiB", caption: "The host reader waits for space before feeding more bytes." },
+    {
+      label: "Input slot", kicker: "06 / WASM INGRESS", title: "The input mailbox is the backpressure boundary.",
+      desc: "The host waits until wcs_sp_in_free returns true, copies at most one input slot's capacity, commits the number of bytes, and wakes the Rust scheduler. It cannot reuse the slot until Rust has consumed it.",
+      fact: "Default input slot: 64 KiB per port. One reducer supports up to 100 input ports, each independently backpressured.",
+      file: "host/stream-pool.ts", code: "await waitWhen(() => inputFree(port));\nconst n = Math.min(inputBytes, chunk.byteLength - offset);\nviewAt(wasm.memory, ptr, n).set(chunk.subarray(offset, offset+n));\nwasm.wcs_sp_in_commit!(handle, port, n);\nonSlotChange();",
+      visual: "INPUT / 64 KiB", caption: "Rust owns the slot until the next in_free notification." },
+    {
+      label: "GraphHost", kicker: "07 / ENGINE STEP", title: "Make progress—or wait for the next event.",
+      desc: "GraphHost polls its operators. It may consume ingress, produce an output slot, request another ReadAt, or suspend on an R2 sorted-run spill operation. The TypeScript scheduler yields and wakes on I/O/slot changes; it does not spin merely because Rust is nonterminal.",
+      fact: "A spill to R2 is host-mediated I/O, not an unbounded in-memory buffer.",
+      file: "host/stream-pool.ts", code: "const status = wasm.wcs_sp_step!(handle, 100);\nif (status & STEP_SPILL_EXEC) await onSpillExec(handle);\nif (status & STEP_PROGRESS) { /* continue */ }\n// ReadAt completions and slot changes call requestAdvance()",
+      visual: "POLL / WAKE", caption: "Only useful work or external events schedule another advance." },
+    {
+      label: "Finalizer", kicker: "08 / CONCURRENT CONSUMER", title: "The next stage is already listening.",
+      desc: "Reducer output is attached to the finalizer during reducer preparation. Consumers do not wait for the entire reducer to finish before reading. sealInput marks ports that never opened; completed streams use normal EOF.",
+      fact: "Early attachment removes the circular wait: producer completion must not be a prerequisite for downstream draining.",
+      file: "host/stream-pool.ts", code: "pool.attachInput(port, readable); // late-safe\n// producer streams and consumer run concurrently\npool.sealInput(port);          // never opened\nawait pool.finished;           // after all work drains",
+      visual: "FINALIZER / LIVE", caption: "A bounded stream can be consumed before its producer completes." },
+  ];
+  let currentJourney = 0;
+  function renderJourney() {
+    $("#journey-steps").innerHTML = journeyStages.map((stage, i) =>
+      `<button type="button" class="journey-step ${i === currentJourney ? "is-selected" : ""}" data-journey="${i}" aria-pressed="${i === currentJourney}"><span>${pad(i+1)}</span><strong>${esc(stage.label)}</strong></button>`
+    ).join("");
+    const stage = journeyStages[currentJourney];
+    $("#journey-kicker").textContent = stage.kicker;
+    $("#journey-title").textContent = stage.title;
+    $("#journey-description").textContent = stage.desc;
+    $("#journey-fact").textContent = stage.fact;
+    $("#journey-file").textContent = stage.file;
+    $("#journey-code").textContent = stage.code;
+    $("#journey-stage-label").textContent = stage.visual;
+    $("#journey-illustration-caption").textContent = stage.caption;
+    $("#journey-progress-fill").style.width = `${(currentJourney+1)/journeyStages.length*100}%`;
+    $("#journey-prev").disabled = currentJourney === 0;
+    $("#journey-next").textContent = currentJourney === journeyStages.length - 1 ? "Back to first →" : "Next stage →";
+  }
+  function setJourney(index) {
+    currentJourney = clamp(index, 0, journeyStages.length - 1);
+    renderJourney();
+  }
+
+  const portStates = ["expected", "expected", "expected"];
+  let activePort = 0;
+  const portMeta = {
+    expected: { label: "EXPECTED / NOT ATTACHED", desc: "Registration is pending. The reducer must not treat this as end-of-stream: a scanner can still arrive. attachInput or sealInput can resolve the port." },
+    attached: { label: "ATTACHED / OPEN STREAM", desc: "An actual ReadableStream is connected. The BYOB pump moves bytes into the 64 KiB Wasm slot when it becomes free. Eventually it must reach EOF or abort." },
+    eof: { label: "EOF / INPUT FINISHED", desc: "The attached stream ended normally. Its writer closes, wcs_sp_in_end is sent, and the reducer knows no more bytes will arrive on this port." },
+    absent: { label: "ABSENT / NO EDGE OPENED", desc: "The producer never opened a stream for this port. sealInput sends wcs_sp_in_absent; this is distinct from EOF and prevents waiting on an edge that will never appear." },
+    aborted: { label: "ABORTED / PROPAGATE FAILURE", desc: "The reader and writer are cancelled or aborted; the pool reports an error rather than interpreting failure as successful EOF." },
+  };
+  function renderPorts() {
+    $$("[data-port]").forEach((btn) => btn.classList.toggle("is-selected", Number(btn.dataset.port) === activePort));
+    const state = portStates[activePort];
+    $("#port-index").textContent = pad(activePort);
+    $("#port-state-label").textContent = portMeta[state].label;
+    $("#port-explanation").textContent = portMeta[state].desc;
+    $("#port-states").innerHTML = portStates.map((item, i) =>
+      `<span class="port-state ${i === activePort ? item === "eof" ? "is-ended" : item === "absent" ? "is-absent" : "is-current" : ""}" title="Port ${pad(i)}: ${esc(item)}"></span>`
+    ).join("");
+    $("#port-attach").disabled = state !== "expected";
+    $("#port-eof").disabled = state !== "attached";
+    $("#port-absent").disabled = state !== "expected";
+    $("#port-abort").disabled = state === "aborted" || state === "eof" || state === "absent";
+  }
+  function transitionPort(action) {
+    const from = portStates[activePort];
+    if (action === "attach" && from === "expected") portStates[activePort] = "attached";
+    if (action === "eof" && from === "attached") portStates[activePort] = "eof";
+    if (action === "absent" && from === "expected") portStates[activePort] = "absent";
+    if (action === "abort" && (from === "expected" || from === "attached")) portStates[activePort] = "aborted";
+    renderPorts();
+  }
+
+  // Interactions, all local. Nothing is fetched from the network.
+  $("#scanner-count").addEventListener("input", (ev) => { conf.scans = Number(ev.target.value); reset(); });
+  $("#chunk-count").addEventListener("input", (ev) => { conf.chunks = Number(ev.target.value); reset(); });
+  $$("[data-scenario]").forEach((btn) => btn.addEventListener("click", () => setScenario(btn.dataset.scenario)));
+  $$("[data-reducers]").forEach((btn) => btn.addEventListener("click", () => {
+    conf.reducers = Number(btn.dataset.reducers);
+    $$("[data-reducers]").forEach((b) => b.classList.toggle("is-selected", b === btn));
+    reset();
+  }));
+  $$("[data-pipe]").forEach((btn) => btn.addEventListener("click", () => {
+    conf.pipeCap = Number(btn.dataset.pipe);
+    $$("[data-pipe]").forEach((b) => b.classList.toggle("is-selected", b === btn));
+    reset();
+  }));
+  $("#pause-reducer").addEventListener("click", () => {
+    const r = selected.type === "reducer" ? selected.id : pausedReducer >= 0 ? pausedReducer : Math.min(1,conf.reducers-1);
+    pausedReducer = pausedReducer === r ? -1 : r;
+    appendLog(pausedReducer >= 0 ? "warn" : "ok", `Reducer ${pad(r)} ${pausedReducer >= 0 ? "paused by visitor" : "resumed; ingress can drain again"}.`);
+    render();
+  });
+  $("#stream-svg").addEventListener("click", (ev) => {
+    const node = ev.target.closest("[data-node]");
+    if (node) {
+      selected = { type: node.dataset.node, id: Number(node.dataset.index) };
+      render();
+    }
+  });
+  $("#stream-svg").addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    const node = ev.target.closest("[data-node]");
+    if (node) {
+      ev.preventDefault();
+      selected = { type: node.dataset.node, id: Number(node.dataset.index) };
+      render();
+    }
+  });
+  $("#reset-sim").addEventListener("click", reset);
+  $("#step-sim").addEventListener("click", () => { stopPlayback(); tick(); });
+  $("#play-sim").addEventListener("click", () => {
+    if (sim.done) reset();
+    if (playing) stopPlayback();
+    else { playing = true; restartPlaybackTimer(); }
+    render();
+  });
+  $("#play-speed").addEventListener("change", (ev) => { conf.speed = Number(ev.target.value); restartPlaybackTimer(); });
+  $("#journey-steps").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-journey]");
+    if (btn) setJourney(Number(btn.dataset.journey));
+  });
+  $("#journey-prev").addEventListener("click", () => setJourney(currentJourney-1));
+  $("#journey-next").addEventListener("click", () => setJourney(currentJourney===journeyStages.length-1 ? 0 : currentJourney+1));
+  $$("[data-port]").forEach((btn) => btn.addEventListener("click", () => { activePort = Number(btn.dataset.port); renderPorts(); }));
+  $("#port-attach").addEventListener("click", () => transitionPort("attach"));
+  $("#port-eof").addEventListener("click", () => transitionPort("eof"));
+  $("#port-absent").addEventListener("click", () => transitionPort("absent"));
+  $("#port-abort").addEventListener("click", () => transitionPort("abort"));
+  $("#port-reset").addEventListener("click", () => { portStates.fill("expected"); activePort=0; renderPorts(); });
+  window.addEventListener("pagehide", stopPlayback);
+
+  makeModel();
+  render();
+  renderJourney();
+  renderPorts();
+  // Exposed only for deterministic automated tests, not part of the site API.
+  window.__WCOL_STREAMING_TEST__ = {
+    getState: () => ({ tick:sim.tick, produced:sim.produced, consumed:sim.consumed, buffered:bufferedCount(),
+      finishedChunks:sim.finishedChunks, spills:sim.spillRuns, done:sim.done, blocked:blockedScans(),
+      pausedReducer, scenario:conf.scenario, portStates:[...portStates], pipeKiB:sumPipeChunks()*CHUNK_KIB }),
+    step: tick,
+  };
+})();
+
+</script>
+<script src="_site.js"></script>
+</body>
+</html>

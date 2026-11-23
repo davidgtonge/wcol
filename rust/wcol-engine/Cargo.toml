@@ -1,0 +1,32 @@
+[package]
+name = "wcol-engine"
+version = "0.1.0"
+edition = "2021"
+description = "WCOL execution engine (no SQL parser, no DataFusion)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+thiserror = "2"
+compact-parquet-thrift = { path = "../../../compact-parquet-thrift" }
+rustc-hash = "2.0"
+# Slot-only index for two-key groups (keys stored once). Already in the lockfile.
+hashbrown = { version = "0.15", default-features = false, features = ["inline-more"] }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dlmalloc = { version = "0.2", features = ["global"] }
+
+[features]
+default = ["sqlite"]
+# The SQLite spill store (native only). The container reducer leaves it off, so it builds as a
+# static binary with no C toolchain.
+sqlite = ["dep:rusqlite"]
+# Streaming `wcol_reduce_*` exports. The node cdylib leaves this off.
+reduce-ffi = []
+coordinator-iterative-ffi = []
+alloc-track-native = []
+memory-plateau = ["alloc-track-native"]
+native = []

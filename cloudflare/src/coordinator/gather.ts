@@ -125,10 +125,15 @@ export async function runParquetGatherPrepared(
   };
 
   if (plan.edges.length === 0) {
-    const perTask = await Promise.all(
+    // Settle every task before failing: a task's RPC returns once its uploads end, so no
+    // file of this attempt lands after the attempt (and its sweep), and a retry does not
+    // run beside this attempt's remaining tasks.
+    const settled = await Promise.allSettled(
       plan.tasks.map((task) => uploadTask(task.id, task.slot, task.program, [])),
     );
-    return perTask.flat();
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+    return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
   }
 
   const outputs = new Map<number, Uint8Array>();

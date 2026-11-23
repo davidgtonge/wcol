@@ -49,6 +49,9 @@ struct RowGroupAccum {
     rows: usize,
     /// Bytes of the byte-array values held, with their per-value overhead.
     value_bytes: usize,
+    /// Bytes of the dictionaries copied from input batches. Kept apart from `value_bytes`:
+    /// a dictionary is written once per row group, so it does not bring the next flush closer.
+    dict_bytes: usize,
     cols: Vec<ColAccum>,
 }
 
@@ -224,6 +227,7 @@ impl ParquetEncode {
             group: RowGroupAccum {
                 rows: 0,
                 value_bytes: 0,
+                dict_bytes: 0,
                 cols,
             },
             completed: Vec::new(),
@@ -511,6 +515,7 @@ impl ParquetEncode {
         }
         self.group.rows = 0;
         self.group.value_bytes = 0;
+        self.group.dict_bytes = 0;
         Ok(())
     }
 
@@ -598,6 +603,10 @@ impl ParquetEncode {
                 continue;
             }
             for (idx, col) in view.columns.iter().enumerate() {
+                if matches!(self.typed[idx], TypedAccum::Unset) {
+                    self.typed[idx] = init_accum(&self.schema[idx], col)?;
+                    self.group.dict_bytes += dictionary_bytes(&self.typed[idx]);
+                }
                 self.group.value_bytes +=
                     push_typed_cell(&mut self.typed[idx], &self.schema[idx], col, row)?;
             }
@@ -680,6 +689,7 @@ impl ParquetEncode {
         self.write_encoded_group(num_rows, &encode_cols, dictionary)?;
         self.group.rows = 0;
         self.group.value_bytes = 0;
+        self.group.dict_bytes = 0;
         Ok(())
     }
 
@@ -1118,51 +1128,59 @@ fn prepare_column(accum: &TypedAccum, schema: &SchemaCol, rows: usize) -> Result
                 values: values.clone(),
             },
         ),
-        TypedAccum::DictI32 { dict, ids, nulls } => (
-            present_of(nulls)?,
-            PreparedKind::DictI32 {
-                dict: dict.clone(),
-                ids: ids.clone(),
-            },
-        ),
-        TypedAccum::DictI64 { dict, ids, nulls } => (
-            present_of(nulls)?,
-            PreparedKind::DictI64 {
-                dict: dict.clone(),
-                ids: ids.clone(),
-            },
-        ),
-        TypedAccum::DictF32 { dict, ids, nulls } => (
-            present_of(nulls)?,
-            PreparedKind::DictF32 {
-                dict: dict.clone(),
-                ids: ids.clone(),
-            },
-        ),
-        TypedAccum::DictF64 { dict, ids, nulls } => (
-            present_of(nulls)?,
-            PreparedKind::DictF64 {
-                dict: dict.clone(),
-                ids: ids.clone(),
-            },
-        ),
-        TypedAccum::DictBytes { dict, ids, nulls } => (
-            present_of(nulls)?,
-            PreparedKind::DictBytes {
-                dict: dict.clone(),
-                ids: ids.clone(),
-            },
-        ),
-        TypedAccum::DictFixed { dict, ids, nulls } => (
-            present_of(nulls)?,
-            PreparedKind::DictFixed {
-                width: schema.type_length as u32,
-                dict: dict.clone(),
-                ids: ids.clone(),
-            },
-        ),
+        TypedAccum::DictI32 { dict, ids, nulls } => {
+            let (dict, ids) = used_entries(dict, ids)?;
+            (present_of(nulls)?, PreparedKind::DictI32 { dict, ids })
+        }
+        TypedAccum::DictI64 { dict, ids, nulls } => {
+            let (dict, ids) = used_entries(dict, ids)?;
+            (present_of(nulls)?, PreparedKind::DictI64 { dict, ids })
+        }
+        TypedAccum::DictF32 { dict, ids, nulls } => {
+            let (dict, ids) = used_entries(dict, ids)?;
+            (present_of(nulls)?, PreparedKind::DictF32 { dict, ids })
+        }
+        TypedAccum::DictF64 { dict, ids, nulls } => {
+            let (dict, ids) = used_entries(dict, ids)?;
+            (present_of(nulls)?, PreparedKind::DictF64 { dict, ids })
+        }
+        TypedAccum::DictBytes { dict, ids, nulls } => {
+            let (dict, ids) = used_entries(dict, ids)?;
+            (present_of(nulls)?, PreparedKind::DictBytes { dict, ids })
+        }
+        TypedAccum::DictFixed { dict, ids, nulls } => {
+            let (dict, ids) = used_entries(dict, ids)?;
+            (
+                present_of(nulls)?,
+                PreparedKind::DictFixed {
+                    width: schema.type_length as u32,
+                    dict,
+                    ids,
+                },
+            )
+        }
     };
     Ok(Prepared { present, kind })
+}
+
+/// The dictionary entries `ids` use, in first-use order, and the ids renumbered to them. A
+/// row group holding a subset of a batch's rows (a filter's, or one partition's) would
+/// otherwise write the batch's whole dictionary.
+fn used_entries<T: Clone>(dict: &[T], ids: &[u32]) -> Result<(Vec<T>, Vec<u32>), String> {
+    let mut remap = vec![u32::MAX; dict.len()];
+    let mut used = Vec::new();
+    let mut renumbered = Vec::with_capacity(ids.len());
+    for &id in ids {
+        let slot = remap
+            .get_mut(id as usize)
+            .ok_or("dictionary id out of range")?;
+        if *slot == u32::MAX {
+            *slot = used.len() as u32;
+            used.push(dict[id as usize].clone());
+        }
+        renumbered.push(*slot);
+    }
+    Ok((used, renumbered))
 }
 
 fn present_bits(nulls: &[u8]) -> Vec<u8> {
@@ -1580,14 +1598,18 @@ impl ParquetEncode {
             CopyState::None => 0,
         };
         out.extend_from_slice(&self.pending[from.min(self.pending.len())..]);
-        self.pending.clear();
+        // Freed rather than cleared: a sink with several files open would otherwise keep
+        // each one's largest row group allocated while it waits for rows.
+        self.pending = Vec::new();
         self.copy = CopyState::None;
     }
 
-    /// Bytes the held rows occupy: byte-array values as counted, every other cell as 8.
+    /// Bytes the held rows occupy: byte-array values and copied dictionaries as counted,
+    /// every other cell as 8.
     pub(crate) fn held_bytes(&self) -> usize {
         self.group
             .value_bytes
+            .saturating_add(self.group.dict_bytes)
             .saturating_add(self.group.rows.saturating_mul(self.schema.len() * 9))
     }
 }
@@ -1655,9 +1677,36 @@ impl Operator for ParquetEncode {
     }
 }
 
+/// Bytes a typed accumulator's copied dictionary holds, with each byte entry's overhead.
+fn dictionary_bytes(accum: &TypedAccum) -> usize {
+    match accum {
+        TypedAccum::DictI32 { dict, .. } => dict.len() * 4,
+        TypedAccum::DictI64 { dict, .. } => dict.len() * 8,
+        TypedAccum::DictF32 { dict, .. } => dict.len() * 4,
+        TypedAccum::DictF64 { dict, .. } => dict.len() * 8,
+        TypedAccum::DictBytes { dict, .. } | TypedAccum::DictFixed { dict, .. } => dict
+            .iter()
+            .map(|value| value.len() + std::mem::size_of::<Vec<u8>>())
+            .sum(),
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ParquetEncode, ParquetEncodeConfig};
+    use super::{used_entries, ParquetEncode, ParquetEncodeConfig};
+
+    /// One partition's rows use a few entries of their batch's dictionary; writing all of it
+    /// made `partitionBy` files five times the size of an unpartitioned export.
+    #[test]
+    fn row_groups_keep_only_the_dictionary_entries_they_use() {
+        let dict = ["a", "b", "c", "d"];
+        assert_eq!(
+            used_entries(&dict, &[3, 1, 3]).unwrap(),
+            (vec!["d", "b"], vec![0, 1, 0])
+        );
+        assert!(used_entries(&dict, &[4]).is_err());
+    }
 
     /// A shard export opens its sink when the reducer starts, long before its first row:
     /// a sink sized for a full 65,536-row group then held 7 MiB of a reducer's memory.

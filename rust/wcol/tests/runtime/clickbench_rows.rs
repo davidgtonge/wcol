@@ -564,8 +564,9 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
         return;
     }
     let q19 = "SELECT UserID FROM hits WHERE UserID = 435090932899640449";
-    let expected_q19 = duck_cells(
+    let expected_q19 = golden_cells(
         &path,
+        "q19",
         "SELECT CAST(UserID AS VARCHAR) FROM hits WHERE UserID = 435090932899640449",
     );
     for nodes in [1u32, 2, 4] {
@@ -577,6 +578,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
 
     check_ordered(
         &path,
+        "q24_google_by_time",
         "SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10",
         "SELECT *, CAST(EventTime AS VARCHAR) FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10",
         1,
@@ -584,6 +586,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
     check_ordered(
         &path,
+        "q25_phrase_by_time",
         "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10",
         "SELECT CAST(SearchPhrase AS VARCHAR), CAST(EventTime AS VARCHAR) FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10",
         1,
@@ -591,6 +594,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
     check_ordered(
         &path,
+        "q26_phrase_by_phrase",
         "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
         "SELECT CAST(SearchPhrase AS VARCHAR), CAST(SearchPhrase AS VARCHAR) FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
         1,
@@ -598,6 +602,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
     check_ordered(
         &path,
+        "q27_phrase_by_time_and_phrase",
         "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10",
         "SELECT CAST(SearchPhrase AS VARCHAR), CAST(EventTime AS VARCHAR), CAST(SearchPhrase AS VARCHAR) FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10",
         2,
@@ -605,17 +610,29 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
 }
 
-fn duck_cells(path: &Path, sql: &str) -> Vec<Vec<Cell>> {
-    let file = std::env::temp_dir().join(format!("wcol-duck-rows-{}.csv", std::process::id()));
-    let copy = format!(
-        "COPY ({}) TO '{}' (FORMAT CSV, HEADER false, NULLSTR '\\N')",
-        parquet_sql(path, sql),
-        file.display()
-    );
-    let status = Command::new("duckdb").args(["-c", &copy]).status().unwrap();
-    assert!(status.success(), "duckdb copy failed");
-    let text = std::fs::read_to_string(&file).unwrap();
-    let _ = std::fs::remove_file(&file);
+/// DuckDB's answer to `sql` on the hits subset, read from `tests/fixtures/golden/<name>.csv`.
+/// `WCOL_UPDATE_GOLDEN=1` rewrites the file with the `duckdb` CLI first; the SQL stays here
+/// so the oracle can be regenerated.
+fn golden_cells(path: &Path, name: &str, sql: &str) -> Vec<Vec<Cell>> {
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/golden")
+        .join(format!("{name}.csv"));
+    if std::env::var_os("WCOL_UPDATE_GOLDEN").is_some() {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let copy = format!(
+            "COPY ({}) TO '{}' (FORMAT CSV, HEADER false, NULLSTR '\\N')",
+            parquet_sql(path, sql),
+            file.display()
+        );
+        let status = Command::new("duckdb").args(["-c", &copy]).status().unwrap();
+        assert!(status.success(), "duckdb copy failed");
+    }
+    let text = std::fs::read_to_string(&file).unwrap_or_else(|error| {
+        panic!(
+            "{}: {error}; regenerate with WCOL_UPDATE_GOLDEN=1",
+            file.display()
+        )
+    });
     parse_csv(&text)
         .into_iter()
         .map(|row| {
@@ -632,9 +649,16 @@ fn duck_cells(path: &Path, sql: &str) -> Vec<Vec<Cell>> {
         .collect()
 }
 
-fn check_ordered(path: &Path, wcol_sql: &str, ranked_sql: &str, key_width: usize, tie_sql: &str) {
-    let ranked = duck_cells(path, ranked_sql);
-    let ties = duck_cells(path, tie_sql);
+fn check_ordered(
+    path: &Path,
+    name: &str,
+    wcol_sql: &str,
+    ranked_sql: &str,
+    key_width: usize,
+    tie_sql: &str,
+) {
+    let ranked = golden_cells(path, name, ranked_sql);
+    let ties = golden_cells(path, &format!("{name}_ties"), tie_sql);
     for nodes in [1u32, 2, 4] {
         for reverse in [false, true] {
             let got = execute(path, wcol_sql, nodes, reverse);

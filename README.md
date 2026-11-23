@@ -50,7 +50,7 @@ npm run typecheck
 npm run lint:rust      # rustfmt and clippy
 ```
 
-`npm run test:slow` runs the long spill tests. `npm run clickbench:local` runs ClickBench queries on Miniflare against a local Parquet file: `data/hits_subset_500k.parquet` by default, or a path passed after `--`. The `data/` directory is not in the repository.
+`npm run test:slow` runs the long spill tests. `npm run clickbench:local` runs ClickBench queries on Miniflare against a local Parquet file: `data/hits_subset_500k.parquet` by default, or a path passed after `--`. The repository includes that 500k-row sample of the ClickBench hits table.
 
 ## Deploy to Cloudflare
 

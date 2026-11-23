@@ -7,7 +7,9 @@
 # Tiny encoder fixture; several tests read it, so it must not depend on test order.
 !tests/fixtures/flat.parquet
 !tests/fixtures/legacy_encodings.parquet
-/data/
+/data/*
+# ClickBench sample the tests and `clickbench:local` read (500k rows of hits).
+!/data/hits_subset_500k.parquet
 
 # Dependencies & build
 node_modules/

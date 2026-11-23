@@ -24,6 +24,12 @@ jobs:
           workspaces: wcol/rust
       - name: Binaryen (wasm-opt)
         run: sudo apt-get update && sudo apt-get install -y binaryen
+      - name: DuckDB CLI
+        # Rust tests compare query results with the duckdb CLI on the hits subset.
+        run: |
+          curl -fsSL -o /tmp/duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.3.2/duckdb_cli-linux-amd64.zip
+          sudo unzip -o /tmp/duckdb.zip -d /usr/local/bin
+          duckdb --version
       - uses: actions/setup-node@v4
         with:
           node-version: 22

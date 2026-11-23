@@ -553,13 +553,16 @@ fn resident_graph_retains_rows_and_resumes_through_the_stream_pool() {
     assert_eq!(pool.step(100) & 1, 0, "an idle resident graph must park");
 }
 
+/// The 500k-row hits subset; it is local data, not part of the repository.
+fn hits_subset() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits_subset_500k.parquet")
+}
+
 /// Exchange keys of the one hash exchange in `sql`'s plan on the 500k hits subset.
 fn hits_exchange_keys(sql: &str) -> Vec<u32> {
     use wcol::plan::physical_plan::OpKind;
     use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits_subset_500k.parquet");
-    let (_, footer) = wcol::formats::parquet::open_plan(&path).unwrap();
+    let (_, footer) = wcol::formats::parquet::open_plan(&hits_subset()).unwrap();
     let mut config = PhysicalPlannerConfig::for_coordinator(32);
     config.hash_aggregate.reducers = Some(4);
     let (_, plan, _) = plan_query_job(sql, &[("hits", &footer)], 32, 1024, &config).unwrap();
@@ -574,6 +577,10 @@ fn hits_exchange_keys(sql: &str) -> Vec<u32> {
 
 #[test]
 fn distinct_keeps_many_groups_whole_and_spreads_few() {
+    if !hits_subset().exists() {
+        eprintln!("skip: missing {}", hits_subset().display());
+        return;
+    }
     // Q13: SearchPhrase has no footer bound, so each phrase stays on one reducer, its count is
     // final there, and reducers rank before the finalizer.
     let q13 = "SELECT SearchPhrase, COUNT(DISTINCT UserID) AS u FROM hits \

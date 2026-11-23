@@ -391,7 +391,7 @@ pub fn distinct_counts_snapshot(snap: &PartialSnapshot) -> Result<PartialSnapsho
     let groups = finalize_groups(snap)?;
     // The distinct value is the hidden last key of a grouped partial; it is folded away.
     let key_len = if snap.grouped {
-        u8::try_from(snap.key_len.saturating_sub(1)).map_err(|_| "key too wide")?
+        snap.key_len.saturating_sub(1)
     } else {
         0
     };

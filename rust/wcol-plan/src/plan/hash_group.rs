@@ -153,7 +153,7 @@ fn plan_limit(plan: &WcolPhysicalPlan) -> (u64, Option<u64>) {
     (skip, fetch)
 }
 
-fn task<'a>(tasks: &'a [ExecutionTask], id: u32) -> Result<&'a ExecutionTask, String> {
+fn task(tasks: &[ExecutionTask], id: u32) -> Result<&ExecutionTask, String> {
     tasks
         .iter()
         .find(|task| task.id == id)
@@ -244,7 +244,7 @@ fn drive(
 mod tests {
     use super::*;
     use crate::plan::physical_plan::OpKind;
-    use crate::plan::{plan_query_dispatch, Frontend, PhysicalPlannerConfig, QueryDispatch};
+    use crate::plan::{plan_query_dispatch, PhysicalPlannerConfig, QueryDispatch};
     use std::path::PathBuf;
 
     fn flat() -> (Vec<u8>, crate::formats::parquet::Plan) {
@@ -283,8 +283,7 @@ mod tests {
         let mut gather_cfg = PhysicalPlannerConfig::default();
         gather_cfg.hash_aggregate.reducers = Some(1);
         let (dispatch, plan) =
-            plan_query_dispatch(sql, "flat", &footer, 1, 32, &gather_cfg, &[Frontend::Sql])
-                .unwrap();
+            plan_query_dispatch(sql, "flat", &footer, 1, 32, &gather_cfg).unwrap();
         assert!(plan
             .operators
             .iter()
@@ -300,8 +299,7 @@ mod tests {
             let mut config = PhysicalPlannerConfig::default();
             config.hash_aggregate.reducers = Some(reducers);
             let (dispatch, plan) =
-                plan_query_dispatch(sql, "flat", &footer, 1, 32, &config, &[Frontend::Sql])
-                    .unwrap();
+                plan_query_dispatch(sql, "flat", &footer, 1, 32, &config).unwrap();
             let QueryDispatch::Nodes(programs) = dispatch else {
                 panic!("expected node programs");
             };
@@ -325,8 +323,7 @@ mod tests {
         let mut gather_cfg = PhysicalPlannerConfig::default();
         gather_cfg.hash_aggregate.reducers = Some(1);
         let (dispatch, plan) =
-            plan_query_dispatch(sql, "flat", &footer, 1, 32, &gather_cfg, &[Frontend::Sql])
-                .unwrap();
+            plan_query_dispatch(sql, "flat", &footer, 1, 32, &gather_cfg).unwrap();
         assert!(plan
             .operators
             .iter()
@@ -341,8 +338,7 @@ mod tests {
 
         let mut config = PhysicalPlannerConfig::default();
         config.hash_aggregate.reducers = Some(2);
-        let (dispatch, plan) =
-            plan_query_dispatch(sql, "flat", &footer, 1, 32, &config, &[Frontend::Sql]).unwrap();
+        let (dispatch, plan) = plan_query_dispatch(sql, "flat", &footer, 1, 32, &config).unwrap();
         assert!(plan
             .operators
             .iter()
@@ -378,7 +374,6 @@ mod tests {
             1,
             32,
             &config,
-            &[Frontend::Sql],
         )
         .unwrap();
         assert!(

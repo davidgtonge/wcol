@@ -2,7 +2,7 @@
 name = "wcol-plan"
 version = "0.1.0"
 edition = "2021"
-description = "WCOL coordinator planner (hand parser always on; DataFusion opt-in)"
+description = "WCOL coordinator planner (SQL parser, logical and physical planning)"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
@@ -12,33 +12,7 @@ compact-parquet-thrift = { path = "../../../compact-parquet-thrift" }
 thiserror = "2"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 serde_json = "1"
-# DataFusion SQL frontend (`plan::sql`). Off unless `--features datafusion`.
-datafusion-sql = { version = "55.2.0", optional = true }
-datafusion-expr = { version = "55.2.0", optional = true }
-datafusion-common = { version = "55.2.0", optional = true }
-datafusion-optimizer = { version = "55.2.0", optional = true }
-datafusion-functions = { version = "55.2.0", optional = true }
-datafusion-functions-aggregate = { version = "55.2.0", optional = true }
-chrono = { version = "0.4", default-features = false, features = ["std"], optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# DataFusion's uuid needs some randomness source on wasm32. Only linked with `--features datafusion`.
-uuid = { version = "1", features = ["rng-getrandom"], optional = true }
-getrandom = { version = "0.3", optional = true }
 
 [features]
 default = []
 native = []
-# Opt-in DataFusion SQL frontend. Our parser (`plan::sql_parser`) is always compiled.
-# Ordinary `cargo build` / `cargo test` / `cargo check` do not pass this flag.
-datafusion = [
-  "dep:datafusion-sql",
-  "dep:datafusion-expr",
-  "dep:datafusion-common",
-  "dep:datafusion-optimizer",
-  "dep:datafusion-functions",
-  "dep:datafusion-functions-aggregate",
-  "dep:chrono",
-  "dep:uuid",
-  "dep:getrandom",
-]

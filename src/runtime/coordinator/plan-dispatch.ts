@@ -36,8 +36,6 @@ export async function readParquetFooter(read: ReadAt, fileSize: number): Promise
 
 const encoder = new TextEncoder();
 
-export type PlanFrontend = "sql" | "datafusion";
-
 function encodePlanRequest(options: {
   sql: string;
   objectId: string;
@@ -45,13 +43,11 @@ function encodePlanRequest(options: {
   nodeCount: number;
   batchRows: number;
   maxRowGroups?: number;
-  frontends?: PlanFrontend[];
 }): Uint8Array {
   const sql = encoder.encode(options.sql);
   const objectId = encoder.encode(options.objectId);
-  const frontends = options.frontends ?? ["sql"];
   const out = new Uint8Array(
-    12 + 12 + objectId.byteLength + options.footer.byteLength + sql.byteLength + 4 + frontends.length,
+    12 + 12 + objectId.byteLength + options.footer.byteLength + sql.byteLength,
   );
   const view = new DataView(out.buffer);
   let at = 0;
@@ -70,8 +66,6 @@ function encodePlanRequest(options: {
   bytes(objectId);
   bytes(options.footer);
   bytes(sql);
-  u32(frontends.length);
-  for (const frontend of frontends) out[at++] = frontend === "datafusion" ? 1 : 0;
   return out;
 }
 
@@ -86,8 +80,6 @@ export function planQueryDispatch(
     batchRows?: number;
     /** Plan over the first row groups only (0 or absent: all). */
     maxRowGroups?: number;
-    /** Tried in order. Default is the hand parser. */
-    frontends?: PlanFrontend[];
   },
 ): QueryDispatch {
   if (!wasm.wcol_plan_query || !wasm.wcol_plan_output_ptr) {

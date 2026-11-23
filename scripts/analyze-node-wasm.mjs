@@ -27,7 +27,7 @@ function run(cmd, args, opts = {}) {
 function buildAnalyzeWasm() {
   const env = {
     ...process.env,
-    RUSTFLAGS: '-C panic=abort -C target-feature=+simd128 --cfg getrandom_backend="custom"',
+    RUSTFLAGS: '-C panic=abort -C target-feature=+simd128',
   };
   spawnSync(
     "cargo",

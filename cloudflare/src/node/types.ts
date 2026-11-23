@@ -4,7 +4,7 @@ import type { HostBytes } from "../../../src/runtime/host/host-bytes.ts";
 import type { ReducerIngressSession } from "../../../src/runtime/host/scan-edge-session.ts";
 import type { DictTraffic, MemGrowthSample, SpillBoundary } from "../../../src/runtime/host/host-types.ts";
 import type { StreamRunStats } from "../../../src/runtime/host/wasm-stream.ts";
-import type { DualR2Env } from "../r2.ts";
+import type { R2Env } from "../r2.ts";
 
 /** One object a task reads: an R2 binding name and key, or an http(s) URL. */
 export type GraphJobSource = { url: string } | { bucket: string; key: string };
@@ -156,7 +156,7 @@ export type GraphTaskNode = {
   placement(): Promise<ReducerPlacementFacts>;
 };
 
-export type GraphTaskEnv = DualR2Env & {
+export type GraphTaskEnv = R2Env & {
   WCOL_NODE: DurableObjectNamespace;
   /** Container-backed hash reducers (`reducer-container.ts`), for jobs that ask for them. */
   WCOL_REDUCER_CONTAINER?: DurableObjectNamespace;
@@ -168,16 +168,6 @@ export type GraphTaskEnv = DualR2Env & {
   WCOL_RESIDENT_MEMORY_BYTES?: string;
   /** Set per deploy on both workers (scripts/deploy-worker.ts). */
   WCOL_DEPLOY_ID?: string;
-  /** Stop the reducer after this many completed spill runs and keep the progress snapshot. */
-  WCOL_SPILL_RUN_CAP?: string;
-  /** Issued Rust I/O operations between Rust yield actions. Unset keeps the engine default of 64. */
-  WCOL_YIELD_AFTER?: string;
-  /** Completed host polls between macrotask yields. Unset uses 64. */
-  WCOL_POLLS_PER_TURN?: string;
-  /** `1` logs reducer frame, consume, and flush entry through the wasm trace import. */
-  WCOL_REDUCER_TRACE?: string;
-  /** Reducer slot that writes the phase breadcrumb. Unset disables it. */
-  WCOL_PHASE_SLOT?: string;
   /** Optional first-create placement for graph slot objects (Wrangler var). */
   WCOL_DO_LOCATION_HINT?: string;
 };

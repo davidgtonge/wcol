@@ -3,8 +3,8 @@
 //! placement, reads and operators all come from [`lower_to_physical`].
 
 use crate::formats::parquet::{plan_footer, Plan};
-use crate::ir::ColumnKind;
 use crate::ir::CatalogColumn;
+use crate::ir::ColumnKind;
 use crate::ops::AggregateOp;
 use crate::plan::coordinator_fragment::{CoordinatorStep, ExportColumn};
 use crate::plan::logical_from_parser::logical_plan_and_output_from_footer;
@@ -14,7 +14,6 @@ use crate::plan::physical_plan::{
     SinkKind, WcolLogicalPlan, WcolPhysicalPlan,
 };
 use crate::plan::result::{encode_result_columns, export_steps, result_columns, ResultColumn};
-use crate::plan::sql_parser::OutputItem;
 use crate::stream::partial_wcs::partial_state_to_wcs_payload;
 
 /// One worker slot's program and the reads the plan expects it to make.
@@ -77,32 +76,7 @@ fn row_id_catalog_column() -> CatalogColumn {
     }
 }
 
-/// Which SQL frontend produces the logical plan. The coordinator passes these in try order.
-/// Feature off: only [`Frontend::Sql`]. Feature on: [`Frontend::DataFusion`] can go first or
-/// second; the first frontend that accepts the statement wins.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Frontend {
-    /// Hand parser (`sql_parser`). Always compiled.
-    Sql,
-    /// DataFusion parse, optimize, and lower. Compiled only with `--features datafusion`.
-    #[cfg(feature = "datafusion")]
-    DataFusion,
-}
-
-impl Frontend {
-    fn label(self) -> &'static str {
-        match self {
-            Frontend::Sql => "sql",
-            #[cfg(feature = "datafusion")]
-            Frontend::DataFusion => "datafusion",
-        }
-    }
-}
-
 /// Plan `sql` over one Parquet object for `node_count` slots.
-///
-/// `frontends` is the coordinator's try order. An empty list is an error. With the
-/// `datafusion` feature off, the only value is [`Frontend::Sql`].
 pub fn plan_query_dispatch(
     sql: &str,
     object_id: &str,
@@ -110,17 +84,9 @@ pub fn plan_query_dispatch(
     node_count: u32,
     batch_rows: u32,
     config: &PhysicalPlannerConfig,
-    frontends: &[Frontend],
 ) -> Result<(QueryDispatch, WcolPhysicalPlan), String> {
-    plan_query_job(
-        sql,
-        &[(object_id, footer)],
-        node_count,
-        batch_rows,
-        config,
-        frontends,
-    )
-    .map(|(dispatch, plan, _)| (dispatch, plan))
+    plan_query_job(sql, &[(object_id, footer)], node_count, batch_rows, config)
+        .map(|(dispatch, plan, _)| (dispatch, plan))
 }
 
 /// [`plan_query_dispatch`] plus the result columns: each output name and the row-frame column
@@ -133,69 +99,17 @@ pub fn plan_query_job(
     node_count: u32,
     batch_rows: u32,
     config: &PhysicalPlannerConfig,
-    frontends: &[Frontend],
 ) -> Result<(QueryDispatch, WcolPhysicalPlan, Vec<ResultColumn>), String> {
     if node_count == 0 {
         return Err("query needs at least one node slot".to_string());
     }
-    if frontends.is_empty() {
-        return Err("no SQL frontend configured".to_string());
-    }
     let footer = same_schema(objects)?;
-    let mut errors = Vec::new();
-    for frontend in frontends {
-        match logical_from_frontend(*frontend, sql, footer) {
-            Ok((logical, output)) => {
-                let (dispatch, plan) =
-                    dispatch_prepared(&logical, objects, node_count, batch_rows, config)?;
-                let names: Vec<String> =
-                    footer.leaves.iter().map(|leaf| leaf.name.clone()).collect();
-                let columns = result_columns(&plan, output.as_deref(), &names)?;
-                return Ok((dispatch, plan, columns));
-            }
-            Err(err) => errors.push(format!("{}: {err}", frontend.label())),
-        }
-    }
-    Err(errors.join("; "))
-}
-
-/// The frontend's logical plan and its `SELECT` list (`None` when the frontend cannot say;
-/// the result then takes default names).
-fn logical_from_frontend(
-    frontend: Frontend,
-    sql: &str,
-    footer: &Plan,
-) -> Result<(WcolLogicalPlan, Option<Vec<OutputItem>>), String> {
-    match frontend {
-        Frontend::Sql => logical_plan_and_output_from_footer(sql, footer)
-            .map(|(logical, output)| (logical, Some(output)))
-            .map_err(|err| format!("sql is not supported by the planner: {err}")),
-        #[cfg(feature = "datafusion")]
-        Frontend::DataFusion => crate::plan::sql::logical_plan_and_output_from_footer(sql, footer),
-    }
-}
-
-/// Physical plan and execution-graph wire for a logical plan already produced by DataFusion.
-pub fn plan_execution_wire_from_logical(
-    logical: &WcolLogicalPlan,
-    object_id: &str,
-    footer: &Plan,
-    node_count: u32,
-    batch_rows: u32,
-    config: &PhysicalPlannerConfig,
-) -> Result<Vec<u8>, String> {
-    if node_count == 0 {
-        return Err("query needs at least one node slot".to_string());
-    }
-    let (dispatch, plan) = dispatch_prepared(
-        logical,
-        &[(object_id, footer)],
-        node_count,
-        batch_rows,
-        config,
-    )?;
-    let exec = crate::plan::execution_plan_from_dispatch(&dispatch, &plan, config)?;
-    Ok(crate::plan::encode_execution_plan_wire(&exec))
+    let (logical, output) = logical_plan_and_output_from_footer(sql, footer)
+        .map_err(|err| format!("sql: sql is not supported by the planner: {err}"))?;
+    let (dispatch, plan) = dispatch_prepared(&logical, objects, node_count, batch_rows, config)?;
+    let names: Vec<String> = footer.leaves.iter().map(|leaf| leaf.name.clone()).collect();
+    let columns = result_columns(&plan, Some(output.as_slice()), &names)?;
+    Ok((dispatch, plan, columns))
 }
 
 /// The schema every object shares: the first footer's, once each object's columns match it.
@@ -449,9 +363,7 @@ pub fn nodes_parquet_finalize_steps(
 }
 
 /// Wire form for hosts: the execution plan, then `u32`-length result columns. Input: `u32 batch_rows, u32 max_nodes, u32 max_row_groups (0 = all),
-/// str object_id, bytes footer, str sql` (strings and bytes are `u32` length + data),
-/// then an optional frontend list: `u32` count and one `u8` tag each (`0` Sql, `1` DataFusion).
-/// An empty remainder plans with [`Frontend::Sql`].
+/// str object_id, bytes footer, str sql` (strings and bytes are `u32` length + data).
 pub fn plan_query_dispatch_wire(input: &[u8]) -> Result<Vec<u8>, String> {
     let mut cur = input;
     let batch_rows = take_u32(&mut cur)?;
@@ -461,7 +373,9 @@ pub fn plan_query_dispatch_wire(input: &[u8]) -> Result<Vec<u8>, String> {
         std::str::from_utf8(take_bytes(&mut cur)?).map_err(|_| "object id is not UTF-8")?;
     let footer_bytes = take_bytes(&mut cur)?;
     let sql = std::str::from_utf8(take_bytes(&mut cur)?).map_err(|_| "sql is not UTF-8")?;
-    let frontends = parse_frontend_list(&mut cur)?;
+    if !cur.is_empty() {
+        return Err("trailing bytes after plan request".to_string());
+    }
     let mut footer = plan_footer(footer_bytes).map_err(|err| format!("parquet footer: {err:?}"))?;
     if max_row_groups > 0 {
         // Plan over the first row groups only (tests and benchmarks on a prefix of a large file).
@@ -476,7 +390,6 @@ pub fn plan_query_dispatch_wire(input: &[u8]) -> Result<Vec<u8>, String> {
         config.max_nodes,
         batch_rows,
         &config,
-        &frontends,
     )?;
     let exec = crate::plan::execution_plan_from_dispatch(&dispatch, &plan, &config)?;
     let mut out = crate::plan::encode_execution_plan_wire(&exec);
@@ -485,38 +398,6 @@ pub fn plan_query_dispatch_wire(input: &[u8]) -> Result<Vec<u8>, String> {
     out.extend_from_slice(&(columns.len() as u32).to_le_bytes());
     out.extend_from_slice(&columns);
     Ok(out)
-}
-
-/// Empty remainder keeps the historical default (`Frontend::Sql`).
-/// A present list is `u32` count then one `u8` tag per frontend (`0` = Sql, `1` = DataFusion).
-fn parse_frontend_list(cur: &mut &[u8]) -> Result<Vec<Frontend>, String> {
-    if cur.is_empty() {
-        return Ok(vec![Frontend::Sql]);
-    }
-    let count = take_u32(cur)?;
-    if count == 0 || count > 4 {
-        return Err("frontend count".to_string());
-    }
-    let mut frontends = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        if cur.is_empty() {
-            return Err("plan request is truncated".to_string());
-        }
-        let tag = cur[0];
-        *cur = &cur[1..];
-        frontends.push(match tag {
-            0 => Frontend::Sql,
-            #[cfg(feature = "datafusion")]
-            1 => Frontend::DataFusion,
-            #[cfg(not(feature = "datafusion"))]
-            1 => return Err("datafusion frontend is not compiled".to_string()),
-            other => return Err(format!("unknown frontend tag {other}")),
-        });
-    }
-    if !cur.is_empty() {
-        return Err("trailing bytes after plan request".to_string());
-    }
-    Ok(frontends)
 }
 
 fn take_u32(cur: &mut &[u8]) -> Result<u32, String> {

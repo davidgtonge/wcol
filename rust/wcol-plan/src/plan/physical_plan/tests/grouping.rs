@@ -70,9 +70,7 @@ fn boolean_key_is_a_known_small_domain() {
 
 #[test]
 fn grouped_count_distinct_hashes_on_group_keys() {
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
-    config.hash_aggregate.reducers = Some(4);
+    let config = four_nodes_four_reducers();
     let plan = lower_to_physical(
         &grouped_distinct(vec![0], false),
         &few_groups(),
@@ -92,9 +90,7 @@ fn grouped_count_distinct_hashes_on_group_keys() {
 
 #[test]
 fn global_count_distinct_hashes_on_the_value() {
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
-    config.hash_aggregate.reducers = Some(4);
+    let config = four_nodes_four_reducers();
     let plan = lower_to_physical(
         &grouped_distinct(vec![], false),
         &million_row_keys(),
@@ -114,9 +110,7 @@ fn global_count_distinct_hashes_on_the_value() {
 
 #[test]
 fn mixed_distinct_and_count_hash_on_the_group_and_the_value() {
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
-    config.hash_aggregate.reducers = Some(4);
+    let config = four_nodes_four_reducers();
     let plan = lower_to_physical(
         &grouped_distinct(vec![0], true),
         &few_groups(),
@@ -137,9 +131,7 @@ fn mixed_distinct_and_count_hash_on_the_group_and_the_value() {
 #[test]
 fn a_small_dictionary_keeps_the_value_in_the_keys() {
     // Q10: MobilePhoneModel has no bound, but its dictionary pages are tiny.
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
-    config.hash_aggregate.reducers = Some(4);
+    let config = four_nodes_four_reducers();
     let keys_for = |dictionary: u64| {
         let mut meta = million_row_keys();
         meta.leaf_dictionary_bytes = vec![Some(dictionary), Some(dictionary)];
@@ -161,9 +153,7 @@ fn a_small_dictionary_keeps_the_value_in_the_keys() {
 fn many_groups_partition_a_distinct_on_the_group_alone() {
     // Q13: an unbounded SearchPhrase has far more groups than reducers. Each group then
     // sits whole on one reducer, so its distinct count is final there.
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
-    config.hash_aggregate.reducers = Some(4);
+    let config = four_nodes_four_reducers();
     for extra_count in [false, true] {
         let plan = lower_to_physical(
             &grouped_distinct(vec![0], extra_count),
@@ -188,8 +178,10 @@ fn mixed_distinct_partitions_when_the_value_has_no_bound() {
     // A footer bound on the GROUP BY column alone used to keep Q9 on the gather plan.
     // The distinct value is part of the state, so a missing bound partitions.
     let meta = few_groups();
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
+    let config = PhysicalPlannerConfig {
+        max_nodes: 4,
+        ..Default::default()
+    };
     let plan =
         lower_to_physical(&grouped_distinct(vec![0], true), &meta, &nodes(1), &config).unwrap();
     assert!(plan.metrics.hash_reducers > 1);
@@ -203,8 +195,10 @@ fn mixed_distinct_partitions_when_the_value_has_no_bound() {
 fn small_mixed_distinct_stays_on_gather() {
     let mut meta = million_row_keys();
     meta.leaf_distinct_upper = vec![Some(100), Some(100)];
-    let mut config = PhysicalPlannerConfig::default();
-    config.max_nodes = 4;
+    let config = PhysicalPlannerConfig {
+        max_nodes: 4,
+        ..Default::default()
+    };
     let plan =
         lower_to_physical(&grouped_distinct(vec![0], true), &meta, &nodes(1), &config).unwrap();
     assert_eq!(plan.metrics.hash_reducers, 1);
@@ -225,4 +219,13 @@ fn string_group_key_uses_hash_exchange() {
         .operators
         .iter()
         .any(|op| matches!(op.kind, OpKind::HashExchange { partitions: 2, .. })));
+}
+
+fn four_nodes_four_reducers() -> PhysicalPlannerConfig {
+    let mut config = PhysicalPlannerConfig {
+        max_nodes: 4,
+        ..Default::default()
+    };
+    config.hash_aggregate.reducers = Some(4);
+    config
 }

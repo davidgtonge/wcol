@@ -112,7 +112,6 @@ fn typed_graph_metadata_count() {
         1,
         4,
         &wcol::plan::PhysicalPlannerConfig::default(),
-        &[wcol::plan::Frontend::Sql],
     )
     .unwrap();
     let wcol::plan::QueryDispatch::Partial(pwcl) = dispatch else {

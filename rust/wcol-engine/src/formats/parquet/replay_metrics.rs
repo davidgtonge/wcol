@@ -1,4 +1,4 @@
-//! Skip-replay baseline instrumentation (see `BOUNDED_MEMORY.md`).
+//! Skip-replay baseline instrumentation.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -131,8 +131,7 @@ pub(super) fn metadata_answer(
     }
     // Only the aggregated columns may be read; anything else needs the rows.
     if linear.columns.iter().any(|column| {
-        !agg
-            .aggregates
+        !agg.aggregates
             .iter()
             .any(|aggregate| aggregate.column == Some(*column))
     }) {

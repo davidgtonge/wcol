@@ -3,23 +3,6 @@
 
 #![deny(unused, dead_code)]
 
-/// `getrandom` on `wasm32-unknown-unknown` has no OS entropy. Planning does not need any.
-#[cfg(all(
-    feature = "datafusion",
-    target_arch = "wasm32",
-    getrandom_backend = "custom"
-))]
-#[no_mangle]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
-    if !dest.is_null() {
-        core::ptr::write_bytes(dest, 0, len);
-    }
-    Ok(())
-}
-
 #[allow(dead_code)]
 #[used]
 static KEEP_NODE_FFI: [wcol_engine::exec::runtime::ffi::FfiSymbol;

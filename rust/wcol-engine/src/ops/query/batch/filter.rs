@@ -256,7 +256,7 @@ fn number_pred(op: CmpOp, v: f64) -> Option<Pred> {
         return None;
     }
     const HI: f64 = 9_223_372_036_854_775_808.0;
-    if v >= HI || v < -HI {
+    if !(-HI..HI).contains(&v) {
         let above = v >= HI;
         return Some(match op {
             CmpOp::Eq => Pred::Never,

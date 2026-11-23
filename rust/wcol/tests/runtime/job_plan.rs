@@ -556,21 +556,13 @@ fn resident_graph_retains_rows_and_resumes_through_the_stream_pool() {
 /// Exchange keys of the one hash exchange in `sql`'s plan on the 500k hits subset.
 fn hits_exchange_keys(sql: &str) -> Vec<u32> {
     use wcol::plan::physical_plan::OpKind;
-    use wcol::plan::{plan_query_job, Frontend, PhysicalPlannerConfig};
+    use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits_subset_500k.parquet");
     let (_, footer) = wcol::formats::parquet::open_plan(&path).unwrap();
     let mut config = PhysicalPlannerConfig::for_coordinator(32);
     config.hash_aggregate.reducers = Some(4);
-    let (_, plan, _) = plan_query_job(
-        sql,
-        &[("hits", &footer)],
-        32,
-        1024,
-        &config,
-        &[Frontend::Sql],
-    )
-    .unwrap();
+    let (_, plan, _) = plan_query_job(sql, &[("hits", &footer)], 32, 1024, &config).unwrap();
     plan.operators
         .iter()
         .find_map(|op| match &op.kind {
@@ -597,7 +589,7 @@ fn distinct_keeps_many_groups_whole_and_spreads_few() {
 #[test]
 fn full_hits_distinct_exchange_keys() {
     use wcol::plan::physical_plan::OpKind;
-    use wcol::plan::{plan_query_job, Frontend, PhysicalPlannerConfig};
+    use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
     let Ok(bytes) = std::fs::read(&path) else {
         return;
@@ -606,15 +598,7 @@ fn full_hits_distinct_exchange_keys() {
     let mut config = PhysicalPlannerConfig::for_coordinator(32);
     config.hash_aggregate.reducers = Some(64);
     let keys = |sql: &str| {
-        let (_, plan, _) = plan_query_job(
-            sql,
-            &[("hits", &footer)],
-            32,
-            1024,
-            &config,
-            &[Frontend::Sql],
-        )
-        .unwrap();
+        let (_, plan, _) = plan_query_job(sql, &[("hits", &footer)], 32, 1024, &config).unwrap();
         plan.operators
             .iter()
             .find_map(|op| match &op.kind {
@@ -739,7 +723,7 @@ fn full_hits_wide_topk_reads_rows_late() {
 /// so RegionID partitions. A few OS values stay gathered.
 #[test]
 fn full_hits_grouped_sketches_partition_by_size() {
-    use wcol::plan::{plan_query_job, Frontend, PhysicalPlannerConfig};
+    use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
     let Ok(bytes) = std::fs::read(&path) else {
         return;
@@ -747,15 +731,7 @@ fn full_hits_grouped_sketches_partition_by_size() {
     let footer = plan_footer(&bytes).unwrap();
     let config = PhysicalPlannerConfig::for_coordinator(32);
     let reducers = |sql: &str| {
-        let (_, plan, _) = plan_query_job(
-            sql,
-            &[("hits", &footer)],
-            32,
-            1024,
-            &config,
-            &[Frontend::Sql],
-        )
-        .unwrap();
+        let (_, plan, _) = plan_query_job(sql, &[("hits", &footer)], 32, 1024, &config).unwrap();
         plan.metrics.hash_reducers
     };
     assert!(
@@ -818,7 +794,7 @@ fn shard_export_streams_the_rows_a_finalizer_merges() {
     let producer = tasks.iter().find(|task| task.id == edge.from).unwrap();
     let partials = run_task(&[&file], &producer.program, &[]);
     let steps = decode_coordinator_steps(&root.program[14..]).unwrap();
-    let merged = run_task(&[&file], &root.program, &[partials.clone()]);
+    let merged = run_task(&[&file], &root.program, std::slice::from_ref(&partials));
     let streamed = run_task(&[&file], &encode_shard_export_program(&steps), &[partials]);
     let rows = |parquet: &[u8]| query(parquet, "SELECT d, c, s, a FROM t ORDER BY d", 1);
     assert_eq!(rows(&streamed), rows(&merged));
@@ -851,12 +827,17 @@ fn json_job_reports_the_aggregate_memory_estimate() {
 fn min_and_max_come_from_the_footer_and_match_a_scan() {
     let file = fixture();
     let body = |sql: &str| {
-        format!(r#"{{"sources":{{"t":{{"key":"http://x/t.parquet"}}}},"sql":{sql:?},"output":{{"format":"json"}}}}"#)
+        format!(
+            r#"{{"sources":{{"t":{{"key":"http://x/t.parquet"}}}},"sql":{sql:?},"output":{{"format":"json"}}}}"#
+        )
     };
     let footer_only = |sql: &str| {
         matches!(
             job(&body(sql), &[&file], 4),
-            JobPlan::Json { exec: ExecutionPlan::MetadataPartial(_), .. }
+            JobPlan::Json {
+                exec: ExecutionPlan::MetadataPartial(_),
+                ..
+            }
         )
     };
     assert!(footer_only("SELECT MIN(d), MAX(d), COUNT(*) FROM t"));
@@ -867,11 +848,21 @@ fn min_and_max_come_from_the_footer_and_match_a_scan() {
     );
     // A filter that keeps every non-null value forces a scan; both answers agree.
     for (footer, scanned) in [
-        ("SELECT MIN(d), MAX(d) FROM t", "SELECT MIN(d), MAX(d) FROM t WHERE d > -2147483648"),
-        ("SELECT MIN(p), MAX(p) FROM t", "SELECT MIN(p), MAX(p) FROM t WHERE p > -9223372036854775807"),
+        (
+            "SELECT MIN(d), MAX(d) FROM t",
+            "SELECT MIN(d), MAX(d) FROM t WHERE d > -2147483648",
+        ),
+        (
+            "SELECT MIN(p), MAX(p) FROM t",
+            "SELECT MIN(p), MAX(p) FROM t WHERE p > -9223372036854775807",
+        ),
     ] {
         assert!(!footer_only(scanned), "{scanned} reads rows");
-        assert_eq!(query(&file, footer, 4), query(&file, scanned, 4), "{footer}");
+        assert_eq!(
+            query(&file, footer, 4),
+            query(&file, scanned, 4),
+            "{footer}"
+        );
     }
     // Anything the footer cannot answer still reads rows.
     assert!(!footer_only("SELECT SUM(d) FROM t"));

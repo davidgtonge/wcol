@@ -1,7 +1,2 @@
 [target.wasm32-unknown-unknown]
-rustflags = [
-    "-C",
-    "panic=abort",
-    "--cfg",
-    'getrandom_backend="custom"',
-]
+rustflags = ["-C", "panic=abort"]

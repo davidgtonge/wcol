@@ -135,7 +135,7 @@ impl<'a> Parser<'a> {
                 "model_type" => {
                     let value = self.expect(TokKind::Str)?;
                     saw_model_type = true;
-                    if unquote(value.lex).to_ascii_lowercase() != "kmeans" {
+                    if !unquote(value.lex).eq_ignore_ascii_case("kmeans") {
                         return Err(ParseError {
                             msg: "only model_type 'kmeans' is supported",
                             at: value.start,

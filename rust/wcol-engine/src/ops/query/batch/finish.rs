@@ -65,7 +65,7 @@ impl BatchQuery {
         let stat = stat_to_partial(&count_stat(count));
         let mut out = PartialColumnsBuilder::new(0, &self.partial_aggs(), 1);
         for index in 0..self.aggs.len() {
-            out.extend_stats(index, &[stat.clone()]);
+            out.extend_stats(index, std::slice::from_ref(&stat));
         }
         out.finish(
             PartialStateSchemaV1 {

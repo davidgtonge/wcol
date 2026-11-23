@@ -123,7 +123,7 @@ impl KMeansKernel {
     ) -> Result<KMeansResident, KMeansError> {
         self.validate_config()?;
         if dimensions != self.config.dimensions
-            || values.len() % dimensions != 0
+            || !values.len().is_multiple_of(dimensions)
             || values.iter().any(|value| !value.is_finite())
         {
             return Err(KMeansError::InvalidMatrix);
@@ -139,7 +139,10 @@ impl KMeansKernel {
     pub fn seeded_centroids(&self, sample: &[f32], seed: u64) -> Result<KMeansState, KMeansError> {
         self.validate_config()?;
         let d = self.config.dimensions;
-        if sample.is_empty() || sample.len() % d != 0 || sample.iter().any(|v| !v.is_finite()) {
+        if sample.is_empty()
+            || !sample.len().is_multiple_of(d)
+            || sample.iter().any(|v| !v.is_finite())
+        {
             return Err(KMeansError::InvalidMatrix);
         }
         let rows = sample.len() / d;
@@ -233,7 +236,7 @@ impl KMeansKernel {
 
 impl FeatureMoments {
     pub fn from_nullable_rows(values: &[f64], dimensions: usize) -> Result<Self, KMeansError> {
-        if dimensions == 0 || values.is_empty() || values.len() % dimensions != 0 {
+        if dimensions == 0 || values.is_empty() || !values.len().is_multiple_of(dimensions) {
             return Err(KMeansError::InvalidMatrix);
         }
         let mut moments = Self {
@@ -277,7 +280,7 @@ impl FeatureMoments {
     /// Nulls become zero after centering; constant and all-null columns become zero.
     pub fn standardize(&self, values: &[f64]) -> Result<Vec<f32>, KMeansError> {
         let dimensions = self.counts.len();
-        if dimensions == 0 || values.len() % dimensions != 0 {
+        if dimensions == 0 || !values.len().is_multiple_of(dimensions) {
             return Err(KMeansError::InvalidMatrix);
         }
         let means: Vec<f64> = self

@@ -7,7 +7,7 @@ use wcol::plan::execution_graph::{
 };
 use wcol::plan::job::{JobRequest, NamedObject, ObjectLocation};
 use wcol::plan::job_plan::{plan_job, JobFooter, JobPlan};
-use wcol::plan::{Frontend, PhysicalPlannerConfig};
+use wcol::plan::PhysicalPlannerConfig;
 use wcol::program::stream_program::{OP_HASH_REDUCER, OP_SHARD_EXPORT};
 
 fn duckdb_footer() -> JobFooter {
@@ -91,16 +91,8 @@ fn ordered_parquet_scan_plans_range_exchange() {
         ..PhysicalPlannerConfig::for_coordinator(4)
     };
     let sql = "SELECT d, p FROM t ORDER BY d, p";
-    let (_dispatch, plan) = wcol::plan::plan_query_dispatch(
-        sql,
-        "t.parquet",
-        &footer,
-        4,
-        1024,
-        &config,
-        &[Frontend::Sql],
-    )
-    .unwrap();
+    let (_dispatch, plan) =
+        wcol::plan::plan_query_dispatch(sql, "t.parquet", &footer, 4, 1024, &config).unwrap();
     assert!(
         plan_range_exchange(&plan).is_some(),
         "multi-node ordered parquet should plan range exchange"

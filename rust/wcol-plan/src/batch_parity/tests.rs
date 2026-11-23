@@ -579,8 +579,9 @@ fn count_distinct_matches_brute_force() {
         // Grouped with a filter and other aggregates.
         let sql =
             "SELECT d, COUNT(DISTINCT c), COUNT(*), SUM(a), MIN(a) FROM t WHERE b <> 2 GROUP BY d";
-        let mut expected: BTreeMap<Vec<PartialKeyPart>, (BTreeSet<i64>, u64, i128, Option<i64>)> =
-            BTreeMap::new();
+        // Per group: distinct c, COUNT(*), SUM(a), MIN(a).
+        type Expected = (BTreeSet<i64>, u64, i128, Option<i64>);
+        let mut expected: BTreeMap<Vec<PartialKeyPart>, Expected> = BTreeMap::new();
         for r in rows.iter().filter(|r| r[1] != Some(2)) {
             let e = expected.entry(vec![key_part(r[3])]).or_default();
             if let Some(c) = r[2] {

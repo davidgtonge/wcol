@@ -89,7 +89,10 @@ describe("scale milestone", { concurrency: 1 }, () => {
       assert.equal(scans.size, 100);
       assert.equal(reducers.size, 64);
       assert.equal(partitionEdges.length, 100 * 64);
-      assert.equal(result.timing?.openedEdges, 100 * 64);
+      // Scans claim row groups as they run, so on a small file a few fast scans may take
+      // all the work. Each scan that ran opens every partition: its keys hash to all 64.
+      const opened = result.timing?.openedEdges ?? 0;
+      assert.ok(opened >= 64 && opened <= 100 * 64 && opened % 64 === 0, `opened edges ${opened}`);
       assert.ok(result.peakSimultaneousScans <= 16, `scans in flight ${result.peakSimultaneousScans}`);
       assert.equal(json.rows?.length, 1);
       assert.ok(peakWasm > 0 && peakWasm < 128 * 1024 * 1024);

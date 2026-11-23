@@ -35,7 +35,7 @@ fn flat_catalog(plan: &Plan) -> Vec<CatalogColumn> {
 fn numeric_leaf(plan: &Plan, leaf: u32) -> bool {
     matches!(
         plan.leaves.get(leaf as usize).map(|l| l.physical),
-        Some(0 | 1 | 2)
+        Some(0..=2)
     )
 }
 

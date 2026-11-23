@@ -109,8 +109,8 @@ fn fragmented_frame_completes_across_arbitrary_chunks() {
 
 fn hash_reducer(producers: u32) -> GraphHost {
     use crate::ir::{CatalogColumn, ColumnKind};
-    use crate::program::encode_hash_reducer_program;
     use crate::program::types::{AggExpr, AggKind};
+    use crate::program::{encode_hash_reducer_program, HashReducerSpec};
     let catalog = vec![CatalogColumn {
         name: "k".into(),
         kind: ColumnKind::Text,
@@ -119,24 +119,24 @@ fn hash_reducer(producers: u32) -> GraphHost {
         max_def: 1,
         max_rep: 0,
     }];
-    let program = encode_hash_reducer_program(
-        producers,
-        &catalog,
-        &[],
-        &[AggExpr {
+    let program = encode_hash_reducer_program(&HashReducerSpec {
+        producer_count: producers,
+        catalog: &catalog,
+        group_by: &[],
+        aggregates: &[AggExpr {
             kind: AggKind::CountStar,
             column: None,
             offset: 0,
         }],
-        0,
-        None,
-        None,
-        0,
-        false,
-        0,
-        false,
-        0,
-    );
+        skip: 0,
+        fetch: None,
+        rank: None,
+        group_budget: 0,
+        group_spill: false,
+        spill_combined_budget: 0,
+        spill_discard: false,
+        partition: 0,
+    });
     let mut cur = PlanCursor::new(&program[6..]);
     GraphHost::open_hash_reducer(&mut cur, 64 * 1024, 1).unwrap()
 }
@@ -213,8 +213,8 @@ fn pump(host: &mut GraphHost) {
 /// A reducer grouping text column 0 by COUNT(*).
 fn grouped_text_reducer(producers: u32) -> GraphHost {
     use crate::ir::{CatalogColumn, ColumnKind};
-    use crate::program::encode_hash_reducer_program;
     use crate::program::types::{AggExpr, AggKind};
+    use crate::program::{encode_hash_reducer_program, HashReducerSpec};
     let catalog = vec![CatalogColumn {
         name: "k".into(),
         kind: ColumnKind::Text,
@@ -223,24 +223,24 @@ fn grouped_text_reducer(producers: u32) -> GraphHost {
         max_def: 1,
         max_rep: 0,
     }];
-    let program = encode_hash_reducer_program(
-        producers,
-        &catalog,
-        &[0],
-        &[AggExpr {
+    let program = encode_hash_reducer_program(&HashReducerSpec {
+        producer_count: producers,
+        catalog: &catalog,
+        group_by: &[0],
+        aggregates: &[AggExpr {
             kind: AggKind::CountStar,
             column: None,
             offset: 0,
         }],
-        0,
-        None,
-        None,
-        0,
-        false,
-        0,
-        false,
-        0,
-    );
+        skip: 0,
+        fetch: None,
+        rank: None,
+        group_budget: 0,
+        group_spill: false,
+        spill_combined_budget: 0,
+        spill_discard: false,
+        partition: 0,
+    });
     let mut cur = PlanCursor::new(&program[6..]);
     GraphHost::open_hash_reducer(&mut cur, 64 * 1024, 1).unwrap()
 }

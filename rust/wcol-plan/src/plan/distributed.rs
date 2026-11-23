@@ -406,8 +406,10 @@ mod tests {
         })
         .is_err());
         PartitionWriterConfig::default().validate().unwrap();
-        let mut tight = PartitionWriterConfig::default();
-        tight.multipart_part_bytes = 1024;
+        let tight = PartitionWriterConfig {
+            multipart_part_bytes: 1024,
+            ..Default::default()
+        };
         assert!(tight.validate().is_err());
         assert_eq!(
             attempt_object_key("job-1", &TaskId(0xab), 2, "part.parquet"),

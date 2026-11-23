@@ -5,7 +5,7 @@ mod decode_query_harness;
 
 use std::collections::HashSet;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use wcol::plan::catalog_from_footer;
 
 use wcol::{
@@ -19,7 +19,7 @@ fn fixture_flat() -> PathBuf {
 }
 
 fn decode_all_batches(
-    path: &PathBuf,
+    path: &Path,
     sql: &str,
 ) -> (Vec<CatalogColumn>, Vec<Vec<u8>>, Vec<OwnedWcolBatch>) {
     let (mut file, plan) = open_plan(path).unwrap();

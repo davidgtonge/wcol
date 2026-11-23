@@ -67,11 +67,19 @@ fn connection(stream: TcpStream, handler: &dyn Fn(Request<'_>) -> Reply) -> io::
         }
         let reply = {
             let mut body: Box<dyn Read + '_> = if head.chunked {
-                Box::new(Chunked { inner: &mut reader, left: 0, done: false })
+                Box::new(Chunked {
+                    inner: &mut reader,
+                    left: 0,
+                    done: false,
+                })
             } else {
                 Box::new((&mut reader).take(head.length))
             };
-            let reply = handler(Request { method: head.method, target: head.target, body: &mut *body });
+            let reply = handler(Request {
+                method: head.method,
+                target: head.target,
+                body: &mut *body,
+            });
             // The next request starts after this body, whatever the handler read.
             io::copy(&mut body, &mut io::sink())?;
             reply
@@ -117,7 +125,9 @@ impl Head {
                 _ => Method::Other,
             },
             target: request.path.unwrap_or("/").to_string(),
-            length: header("content-length").and_then(|v| v.parse().ok()).unwrap_or(0),
+            length: header("content-length")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             chunked: header("transfer-encoding").is_some_and(|v| v.contains("chunked")),
             close: header("connection").is_some_and(|v| v == "close"),
             expect_continue: header("expect").is_some_and(|v| v == "100-continue"),
@@ -130,7 +140,11 @@ fn read_head(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut head = Vec::new();
     loop {
         if reader.read_until(b'\n', &mut head)? == 0 {
-            return if head.is_empty() { Ok(None) } else { Err(invalid("connection closed mid-head")) };
+            return if head.is_empty() {
+                Ok(None)
+            } else {
+                Err(invalid("connection closed mid-head"))
+            };
         }
         if head == b"\r\n" {
             head.clear(); // a stray blank line between requests
@@ -171,7 +185,9 @@ impl<R: BufRead> Read for Chunked<R> {
                 return Ok(0);
             }
         }
-        let max = buf.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+        let max = buf
+            .len()
+            .min(usize::try_from(self.left).unwrap_or(usize::MAX));
         let n = self.inner.read(&mut buf[..max])?;
         if n == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());

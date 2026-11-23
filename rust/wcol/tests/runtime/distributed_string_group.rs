@@ -6,8 +6,7 @@ use std::path::{Path, PathBuf};
 use wcol::formats::parquet::open_plan;
 use wcol::ops::query::encoded_partials_equivalent;
 use wcol::plan::{
-    coordinator_reduce_partials, plan_query_dispatch, Frontend, PhysicalPlannerConfig,
-    QueryDispatch,
+    coordinator_reduce_partials, plan_query_dispatch, PhysicalPlannerConfig, QueryDispatch,
 };
 use wcol::stream::core::{Action, WCS_HEADER_BYTES, WCS_MAGIC};
 use wcol::{open_wcol_plan, partial_state_from_wcs_bytes};
@@ -131,7 +130,6 @@ fn distributed_string_group_by_matches_monolithic_on_hits_slice() {
         1,
         batch_rows,
         &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
     )
     .unwrap();
     let mono_partial = match mono {
@@ -151,7 +149,6 @@ fn distributed_string_group_by_matches_monolithic_on_hits_slice() {
         2,
         batch_rows,
         &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
     )
     .unwrap();
     let QueryDispatch::Nodes(programs) = dispatch else {

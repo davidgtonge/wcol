@@ -1,7 +1,7 @@
 //! `WCOLpjv1` columnar projection blobs (WCOL wire / batch columns).
 
 use crate::error::{WcolError, WcolResult};
-use crate::stream::batch::{WcolBatch, WcolColumn};
+use crate::stream::batch::{I64Column, WcolBatch, WcolColumn};
 
 /// Version 1 projection bodies (`WCOLpjv1`): i64 and dictionary ids. Still decoded.
 pub const PROJ_MAGIC: &[u8; 8] = b"WCOLpjv1";
@@ -273,7 +273,7 @@ pub fn max_rows_for_body_budget(
     let mut lo = 1usize;
     let mut hi = available;
     while lo < hi {
-        let mid = (lo + hi + 1) / 2;
+        let mid = (lo + hi).div_ceil(2);
         if body_len_for_row_slice(view, row_start, mid)? <= body_budget {
             lo = mid;
         } else {
@@ -590,7 +590,7 @@ pub fn decode_projection_columns(body: &[u8]) -> WcolResult<Vec<DecodedProjectio
             u32::from_le_bytes(body[cursor + 12..cursor + 16].try_into().unwrap()) as usize;
         if offset
             .checked_add(section_len)
-            .map_or(true, |end| end > body.len())
+            .is_none_or(|end| end > body.len())
         {
             return Err(WcolError::from("truncated projection column"));
         }
@@ -770,7 +770,7 @@ fn decode_nulls(
     }
 }
 
-pub fn decode_projection_i64_columns(body: &[u8]) -> WcolResult<Vec<(u32, Vec<i64>, Vec<u8>)>> {
+pub fn decode_projection_i64_columns(body: &[u8]) -> WcolResult<Vec<I64Column>> {
     let cols = decode_projection_columns(body)?;
     let mut out = Vec::new();
     for col in cols {

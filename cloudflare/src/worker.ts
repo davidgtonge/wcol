@@ -13,6 +13,17 @@ export type CoordinatorEnv = ShardCoordinatorEnv & {
   WCOL_API_TOKEN?: string;
 };
 
+/** A job's coordinator Durable Object, which serves that job's `/jobs` routes. */
+function coordinatorFor(
+  env: CoordinatorEnv,
+  jobId: string,
+  options?: { locationHint?: string },
+): { fetch(url: string, init?: RequestInit): Promise<Response> } {
+  return env.WCOL_COORDINATOR.get(env.WCOL_COORDINATOR.idFromName(jobId), options) as {
+    fetch(url: string, init?: RequestInit): Promise<Response>;
+  };
+}
+
 /** Whether a `/jobs` request carries the API token, compared in constant time. */
 function apiAuthorized(env: CoordinatorEnv, request: Request): boolean {
   if (!env.WCOL_API_TOKEN) return true;
@@ -29,9 +40,6 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-/** Routes that `POST /jobs` replaced (I12). */
-const RETIRED_ROUTES = new Set(["/row-export", "/row-export/status", "/page-compact", "/page-compact/status", "/export", "/compact", "/distributed", "/graph", "/job"]);
-
 /** A client `idempotencyKey` names the job, so a repeat reaches the same coordinator. */
 async function jobIdFor(idempotencyKey: string | undefined): Promise<string> {
   if (!idempotencyKey) return crypto.randomUUID();
@@ -39,14 +47,11 @@ async function jobIdFor(idempotencyKey: string | undefined): Promise<string> {
   return `k-${[...digest.subarray(0, 16)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
-/** Production Worker fetch: jobs only. WCS bench proxies live on `worker.bench.ts`. */
+/** The front Worker: the console, the job API, and an authorised shutdown. */
 export default {
   async fetch(request: Request, env: CoordinatorEnv): Promise<Response> {
     const url = new URL(request.url);
     try {
-      if (RETIRED_ROUTES.has(url.pathname)) {
-        return json({ error: "this route was removed: use POST /jobs (docs/COORDINATOR_JOB_API.md)" }, 410);
-      }
       if (url.pathname === "/" && request.method === "GET") {
         return new Response(consoleHtml, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
       }
@@ -57,8 +62,7 @@ export default {
         const payload = (await request.json()) as { idempotencyKey?: string; jobId?: string };
         const jobId = payload.jobId ?? (await jobIdFor(payload.idempotencyKey));
         // A new job's coordinator is created here: near the bucket, with its scans.
-        const coordinator = env.WCOL_COORDINATOR.get(env.WCOL_COORDINATOR.idFromName(jobId), doLocation(env));
-        return coordinator.fetch("http://do/jobs", {
+        return coordinatorFor(env, jobId, doLocation(env)).fetch("http://do/jobs", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ ...payload, jobId }),
@@ -67,14 +71,12 @@ export default {
       const live = /^\/jobs\/([^/]+)\/live$/.exec(url.pathname);
       if (live && request.method === "GET") {
         const jobId = decodeURIComponent(live[1]!);
-        const coordinator = env.WCOL_COORDINATOR.get(env.WCOL_COORDINATOR.idFromName(jobId));
-        return coordinator.fetch(`http://do/jobs/live?jobId=${encodeURIComponent(jobId)}`);
+        return coordinatorFor(env, jobId).fetch(`http://do/jobs/live?jobId=${encodeURIComponent(jobId)}`);
       }
       if (url.pathname.startsWith("/jobs/") && request.method === "GET") {
         const jobId = url.pathname.slice("/jobs/".length);
         if (!jobId || jobId.includes("/")) return json({ error: "not found" }, 404);
-        const coordinator = env.WCOL_COORDINATOR.get(env.WCOL_COORDINATOR.idFromName(jobId));
-        return coordinator.fetch(`http://do/jobs?jobId=${encodeURIComponent(jobId)}`);
+        return coordinatorFor(env, jobId).fetch(`http://do/jobs?jobId=${encodeURIComponent(jobId)}`);
       }
       if (url.pathname === "/version" && request.method === "GET") {
         // The deploy script waits for this to report the new deploy before it returns.

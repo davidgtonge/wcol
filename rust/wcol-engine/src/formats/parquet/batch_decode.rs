@@ -161,11 +161,16 @@ fn planned_group(group: &crate::program::IngestGroup) -> PlannedGroup {
     }
 }
 
+/// `(column, offset, codec, length)` of one column chunk to decode.
+pub type ChunkSpec = (u32, u64, i32, u32);
+/// `(row_group, rows, chunks)` of one row group to decode.
+pub type RowGroupSpec = (u32, u64, Vec<ChunkSpec>);
+
 impl ParquetDecode {
     pub fn new(
         batch_rows: usize,
         catalog: Vec<CatalogColumn>,
-        groups: Vec<(u32, u64, Vec<(u32, u64, i32, u32)>)>,
+        groups: Vec<RowGroupSpec>,
         dict_columns: HashSet<u32>,
     ) -> Self {
         let groups = groups

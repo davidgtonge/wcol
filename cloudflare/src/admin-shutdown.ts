@@ -6,9 +6,9 @@
  */
 
 import { graphSlotObjectName } from "./node/session.ts";
-import type { DualR2Env } from "./r2.ts";
+import type { R2Env, R2OutputBucket } from "./r2.ts";
 
-export type ShutdownEnv = DualR2Env & {
+export type ShutdownEnv = R2Env & {
   WCOL_NODE: DurableObjectNamespace;
   WCOL_COORDINATOR: DurableObjectNamespace;
   WCOL_SHUTDOWN_SECRET?: string;
@@ -94,7 +94,8 @@ async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => P
   return out;
 }
 
-async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
+async function listKeys(bucket: R2OutputBucket, prefix: string): Promise<string[]> {
+  if (!bucket.list) throw new Error("the output bucket cannot list objects");
   const keys: string[] = [];
   let cursor: string | undefined;
   for (;;) {

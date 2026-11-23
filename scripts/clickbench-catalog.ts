@@ -7,7 +7,7 @@ import path from "node:path";
 
 export type CatalogQuery = { name: string; sql: string };
 
-/** Planner-unsupported ClickBench queries (docs/CLICKBENCH_PLANS.md). */
+/** ClickBench queries the planner does not support yet. */
 export const UNSUPPORTED = new Set(["Q18", "Q35", "Q42"]);
 
 /** Every query in the TSV the planner supports: ClickBench's `Q…` and WCOL's own. */

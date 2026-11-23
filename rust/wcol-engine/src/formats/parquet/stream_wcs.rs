@@ -45,7 +45,7 @@ pub fn encode_numeric_dictionary(
     value_width: u8,
     values: &[u8],
 ) -> WcolResult<Vec<u8>> {
-    if values.len() % value_width as usize != 0 {
+    if !values.len().is_multiple_of(value_width as usize) {
         return Err(WcolError::from("numeric dictionary length mismatch"));
     }
     let count = (values.len() / value_width as usize) as u32;

@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use wcol::plan::catalog_from_footer;
 
 use wcol::columns_for_sql;
-use wcol::formats::parquet::schema::Plan;
 use wcol::formats::parquet::{
     decode::ScanLimits,
     ingest_memory::{
@@ -24,12 +23,9 @@ use wcol::formats::parquet::{
 };
 use wcol::ops::query::CatalogColumn;
 use wcol::plan::physical::IngestMemoryProfile;
-use wcol::plan::sql_parser::ColumnKind;
 use wcol::{ingest_groups_from_plan, GraphPump, LinearColocatedGraph};
 
 const Q3: &str = "SELECT SUM(AdvEngineID), COUNT(*), AVG(ResolutionWidth) FROM hits";
-/// Host ring capacity used by the plateau runs.
-const Q3_SCRATCH_BYTES: usize = 1024 * 1024;
 
 struct ChunkFeed {
     row_group: u32,
@@ -76,10 +72,8 @@ fn drive_q3_ingest(
     sql: &str,
     catalog: &[CatalogColumn],
     groups: &[wcol::IngestGroup],
-    scratch_bytes: usize,
     memory_profile: IngestMemoryProfile,
 ) -> Q3MemoryRun {
-    let _ = scratch_bytes;
     ingest_replay_reset();
     let mut graph = LinearColocatedGraph::open_custom(
         Some(Box::new(wcol::ops::ParquetSourceOp::new(
@@ -237,7 +231,6 @@ fn batch_column_capacity_does_not_grow_on_flat_fixture() {
         sql,
         &catalog,
         &groups,
-        256 * 1024,
         IngestMemoryProfile::default(),
     );
     assert!(run.chunks_fed > 0);
@@ -349,7 +342,6 @@ fn q3_memory_plateau_baseline_harness() {
         Q3,
         &catalog,
         &groups,
-        Q3_SCRATCH_BYTES,
         IngestMemoryProfile::default(),
     );
     assert_eq!(run.chunks_fed, feed.len());
@@ -385,7 +377,6 @@ fn q3_memory_plateau_local() {
         Q3,
         &catalog,
         &groups,
-        Q3_SCRATCH_BYTES,
         IngestMemoryProfile::default(),
     );
     assert_eq!(run.chunks_fed, feed.len());
@@ -420,7 +411,6 @@ fn q3_memory_plateau_restrictive_budget() {
         Q3,
         &catalog,
         &groups,
-        Q3_SCRATCH_BYTES,
         IngestMemoryProfile::Q3Restrictive,
     );
     assert_eq!(run.chunks_fed, feed.len());
@@ -461,7 +451,7 @@ fn q3_memory_plateau_restrictive_any_hits() {
     let catalog = catalog_from_footer(&plan);
     let columns = columns_for_sql(Q3, &catalog).unwrap().columns;
     let groups = ingest_groups_from_plan(&plan, &columns);
-    assert!(groups.len() >= 1, "need at least one row group");
+    assert!(!groups.is_empty(), "need at least one row group");
     let feed = chunk_feed(&groups);
     let run = drive_q3_ingest(
         &mut file,
@@ -470,7 +460,6 @@ fn q3_memory_plateau_restrictive_any_hits() {
         Q3,
         &catalog,
         &groups,
-        Q3_SCRATCH_BYTES,
         IngestMemoryProfile::Q3Restrictive,
     );
     assert_eq!(run.chunks_fed, feed.len());
@@ -506,7 +495,6 @@ fn q3_memory_plateau_restrictive_flat_fixture() {
         sql,
         &catalog,
         &groups,
-        Q3_SCRATCH_BYTES,
         IngestMemoryProfile::Q3Restrictive,
     );
     assert_owned_ingest_zero_replays(&run);

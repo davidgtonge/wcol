@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use wcol::exec::operator::{Operator, OperatorIo, StreamProgress, WcolStreamItem};
 use wcol::formats::parquet::{open_plan, ParquetEncode, ParquetEncodeConfig};
-use wcol::plan::{plan_query_dispatch, Frontend, OpKind, PhysicalPlannerConfig};
+use wcol::plan::{plan_query_dispatch, OpKind, PhysicalPlannerConfig};
 use wcol::stream::OwnedWcolBatch;
 
 fn drive_encode(enc: &mut ParquetEncode, batch: OwnedWcolBatch) -> Vec<u8> {
@@ -90,7 +90,6 @@ fn ordered_export_on_two_nodes_range_partitions_our_own_file() {
         2,
         8,
         &config,
-        &[Frontend::Sql],
     )
     .unwrap();
     let partitions = physical.operators.iter().find_map(|op| match &op.kind {

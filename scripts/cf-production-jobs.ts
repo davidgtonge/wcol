@@ -10,10 +10,7 @@
  * in data/oracle-cache/: each full-hits query runs in DuckDB once, under a memory cap,
  * instead of pulling the 14 GB file through range requests on every run.
  *
- * Hosted full-hits Q8 (COUNT DISTINCT) completes with reducers spilling to R2 (Nov 2026,
- * ~17 s on a warm pool, 64 reducers at ~54 MB Wasm each). Q15 (high-card UserID) last failed with
- * "ReadableStream received over RPC disconnected prematurely". Re-run with
- * ONLY=Q8 or ONLY=Q15-16.
+ * ONLY=Q8 or ONLY=Q15-16 runs a subset.
  *
  * CLICKBENCH_TSV=1 runs every planner-supported query in scripts/clickbench-queries.tsv
  * (stage c). ORACLE=cached checks only queries whose DuckDB answer is already cached and

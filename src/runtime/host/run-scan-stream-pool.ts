@@ -37,10 +37,23 @@ export async function runScanStreamPool(options: RunScanStreamPoolOptions): Prom
     const forwards = Array.from({ length: options.partitionCount }, (_, partition) =>
       hashScanOutputStream(pool.outputStreams[partition]!, (body) => options.onPartitionStream(partition, body)),
     );
-    await Promise.all([pool.finished, ...forwards]);
+    // A scan whose pool has finished still waits for each edge to be taken. If one is
+    // refused, the abort is the only news of it: fail now rather than wait for a reader
+    // that will never come (the job's stall timeout).
+    await Promise.race([Promise.all([pool.finished, ...forwards]), rejectOnAbort(options.signal)]);
     return pool.stats();
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     await pool.close();
   }
+}
+
+/** Rejects with the signal's reason once it aborts; never settles without one. */
+function rejectOnAbort(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    if (!signal) return;
+    const abort = () => reject(signal.reason ?? new Error("scan aborted"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
 }

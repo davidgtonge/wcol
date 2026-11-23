@@ -668,9 +668,17 @@ impl LinearColocatedGraph {
     }
 
     pub fn finish(&mut self) -> Result<&OwnedWcolBatch, String> {
-        if self.result.is_some() {
-            return Ok(self.result.as_ref().unwrap());
+        if self.result.is_none() {
+            let batch = self.finalize_result()?;
+            self.result = Some(batch);
+            self.finished = true;
         }
+        self.result
+            .as_ref()
+            .ok_or_else(|| "finalize missing output".to_string())
+    }
+
+    fn finalize_result(&mut self) -> Result<OwnedWcolBatch, String> {
         if !self.ingest_done {
             return Err("finish called before ingest completed".to_string());
         }
@@ -709,9 +717,7 @@ impl LinearColocatedGraph {
         if batch.is_partial_batch() {
             return Err("finalize output was not a row batch".to_string());
         }
-        self.result = Some(batch);
-        self.finished = true;
-        Ok(self.result.as_ref().unwrap())
+        Ok(batch)
     }
 
     pub fn mark_ingest_done(&mut self) {

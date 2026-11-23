@@ -23,7 +23,6 @@ fn aggregate_graph_ends_in_a_finalizer_on_coordinator_slot() {
         2,
         8,
         &PhysicalPlannerConfig::default(),
-        &[crate::plan::Frontend::Sql],
     )
     .unwrap();
     let QueryDispatch::Nodes(_) = dispatch else {
@@ -71,7 +70,6 @@ fn several_nodes_use_do_rpc() {
         2,
         8,
         &PhysicalPlannerConfig::default(),
-        &[crate::plan::Frontend::Sql],
     )
     .unwrap();
     let programs = vec![
@@ -118,7 +116,6 @@ fn one_node_aggregate_is_colocated_on_the_coordinator() {
         config.max_nodes,
         8,
         &config,
-        &[crate::plan::Frontend::Sql],
     )
     .unwrap();
     let exec = execution_plan_from_dispatch(&dispatch, &plan, &config).unwrap();
@@ -148,7 +145,6 @@ fn ordered_parquet_range_graph_has_one_writer_per_partition() {
         4,
         1024,
         &config,
-        &[crate::plan::Frontend::Sql],
     )
     .unwrap();
     let (_, partitions) = plan_range_exchange(&plan).expect("range exchange");

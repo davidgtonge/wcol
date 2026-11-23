@@ -2,23 +2,6 @@
 
 #![deny(unused, dead_code)]
 
-/// `getrandom` on `wasm32-unknown-unknown` has no OS entropy. Planning does not need any.
-#[cfg(all(
-    feature = "datafusion",
-    target_arch = "wasm32",
-    getrandom_backend = "custom"
-))]
-#[no_mangle]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
-    if !dest.is_null() {
-        core::ptr::write_bytes(dest, 0, len);
-    }
-    Ok(())
-}
-
 pub use wcol_engine::error;
 pub use wcol_engine::exec;
 pub use wcol_engine::formats;
@@ -51,7 +34,7 @@ static KEEP_PLAN_FFI: [wcol_plan::plan::host_ffi::FfiSymbol;
 
 pub use error::{WcolError, WcolResult};
 
-// Pipeline: decode → WCOL stream → ops → encode (see docs/ARCHITECTURE.md).
+// Pipeline: decode → WCOL stream → ops → encode (see docs/architecture.md).
 pub use exec::runtime::{
     drive_operator, encode_data_batch_projection, encode_frame, open_wcol_plan,
     partial_state_from_wcs_bytes, partial_state_to_wcs_bytes, AggregateOp, FilterOp, FinalizeOp,

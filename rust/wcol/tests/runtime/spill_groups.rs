@@ -1,5 +1,4 @@
-//! Append-only GROUP BY spill (native SQLite). Default suite target: **≤10s** (`npm run test:spill-rust`).
-//! Streaming finalize + high-card plateau: `npm run test:spill-rust-stress` (ignored, slow).
+//! Append-only GROUP BY spill (native SQLite): `cargo test -p wcol --features native`.
 
 use std::path::PathBuf;
 
@@ -274,7 +273,7 @@ fn flush_reset_survives_dictionary_keys() {
 #[test]
 fn spill_hot_key_merge_across_sql_pages() {
     let hot = PartialKeyPart::Int(42);
-    let key_blob = encode_canonical_key(&[hot.clone()]).unwrap();
+    let key_blob = encode_canonical_key(std::slice::from_ref(&hot)).unwrap();
     let mut store = FileAppendSpillStore::open(spill_db_path("hot-key")).unwrap();
     store.begin().unwrap();
     let partial_aggs = vec![PartialAggSpec { kind: 0, column: 0 }];

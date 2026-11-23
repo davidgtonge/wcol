@@ -25,11 +25,14 @@ use crate::stream::DictionaryValues;
 
 const PUMP_BUDGET: usize = 256;
 
+/// Complete WCS frames waiting for the graph, tagged with their input port.
+type PendingFrames = VecDeque<(u32, CompleteFrame)>;
+
 enum GraphHostIngress {
     HostParquet,
     WcsRowBatches {
         ports: Vec<WcsPort>,
-        pending: VecDeque<(u32, CompleteFrame)>,
+        pending: PendingFrames,
         input_ended: bool,
         next_fresh_scope: u32,
         dicts: HashMap<(u32, u32), DictionaryValues>,
@@ -37,7 +40,7 @@ enum GraphHostIngress {
     /// Worker PWCL partial streams merged with [`ReduceOp`].
     WcsPartialReduce {
         ports: Vec<WcsPort>,
-        pending: VecDeque<(u32, CompleteFrame)>,
+        pending: PendingFrames,
         input_ended: bool,
     },
 }
@@ -339,7 +342,7 @@ impl GraphHost {
                 let input = self.input.readable();
                 let eof = self.input.is_closed() && input.is_empty();
                 let input_len = input.len();
-                let mut out = self.output.writable();
+                let out = self.output.writable();
                 if out.is_empty() {
                     if self.expose_spill_exec() {
                         return Action::SpillExec;
@@ -349,15 +352,13 @@ impl GraphHost {
                 let out_len = out.len();
                 let finalize = self.core.finalize_mode();
                 let step = match &mut self.core.ingress {
-                    GraphHostIngress::HostParquet => {
-                        self.core.poll_host_parquet(input, eof, &mut out)
-                    }
-                    GraphHostIngress::WcsRowBatches { .. } => self.core.poll_wcs_rows(&mut out),
+                    GraphHostIngress::HostParquet => self.core.poll_host_parquet(input, eof, out),
+                    GraphHostIngress::WcsRowBatches { .. } => self.core.poll_wcs_rows(out),
                     GraphHostIngress::WcsPartialReduce { .. } if finalize => {
-                        self.core.poll_wcs_finalize(&mut out)
+                        self.core.poll_wcs_finalize(out)
                     }
                     GraphHostIngress::WcsPartialReduce { .. } => {
-                        self.core.poll_wcs_partial_reduce(&mut out)
+                        self.core.poll_wcs_partial_reduce(out)
                     }
                 };
                 let step = match step {

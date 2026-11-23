@@ -216,11 +216,7 @@ impl PageCompact {
         port[..n].copy_from_slice(&self.pending[..n]);
         self.pending.drain(..n);
         *io.bytes_written += n;
-        if self.pending.is_empty() {
-            Ok(StreamProgress::HaveOutput)
-        } else {
-            Ok(StreamProgress::HaveOutput)
-        }
+        Ok(StreamProgress::HaveOutput)
     }
 
     fn launch_read(&mut self, job_index: usize) -> StreamProgress {

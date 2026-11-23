@@ -1,9 +1,0 @@
-name = "wcol-r2-write"
-main = "worker.ts"
-compatibility_date = "2026-01-01"
-account_id = "b75f6e7d314cd43e8f4ccde2e08ad2d8"
-workers_dev = true
-
-[[r2_buckets]]
-binding = "OUTPUT"
-bucket_name = "wcol-hits-exports"

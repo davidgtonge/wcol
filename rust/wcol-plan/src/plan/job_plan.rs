@@ -1,4 +1,4 @@
-//! Plan a `POST /jobs` request (see `docs/COORDINATOR_JOB_API.md`) on the coordinator.
+//! Plan a `POST /jobs` request (see `docs/job-api.md`) on the coordinator.
 //!
 //! The host asks [`job_sources`] which objects to read footers from, fetches them, and calls
 //! [`plan_job`]. A `json` or `parquet` job becomes one execution graph: its root prints rows,
@@ -20,9 +20,7 @@ use crate::plan::output_plan::{
 use crate::plan::page_compaction::CompactionInputFile;
 use crate::plan::parquet_concat::{concat_parquet_row_groups, CommittedParquetShard, ConcatPolicy};
 use crate::plan::physical_plan::{OpKind, PhysicalPlannerConfig};
-use crate::plan::query_dispatch::{
-    nodes_parquet_finalize_steps, plan_query_job, Frontend, QueryDispatch,
-};
+use crate::plan::query_dispatch::{nodes_parquet_finalize_steps, plan_query_job, QueryDispatch};
 use crate::plan::result::{encode_result_columns, ResultColumn};
 use crate::plan::sql_parser::KMeansOptions;
 use crate::program::coordinator::{
@@ -139,7 +137,6 @@ pub fn plan_job(
                 config.max_nodes,
                 batch_rows,
                 &config,
-                &[Frontend::Sql],
             )?;
             if matches!(dispatch, QueryDispatch::Partial(_)) {
                 return Err("CREATE MODEL query must produce rows".into());
@@ -211,14 +208,8 @@ pub fn plan_job(
                     group_bytes: plan.metrics.estimated_group_bytes,
                 });
             }
-            let (dispatch, plan, columns) = plan_query_job(
-                sql,
-                &objects,
-                config.max_nodes,
-                batch_rows,
-                &config,
-                &[Frontend::Sql],
-            )?;
+            let (dispatch, plan, columns) =
+                plan_query_job(sql, &objects, config.max_nodes, batch_rows, &config)?;
             let mut exec = execution_plan_for(&dispatch, &plan, &config, None)?;
             // One extra row lets the JSON formatter see that the cap hid more rows.
             // A smaller SQL limit stays in place: the root fetch is min(limit, rowCap + 1).
@@ -270,7 +261,6 @@ pub fn plan_job(
                 config.max_nodes,
                 batch_rows,
                 &config,
-                &[Frontend::Sql],
             )?;
             let finalize = match &dispatch {
                 QueryDispatch::Nodes(_) => Some(nodes_parquet_finalize_steps(

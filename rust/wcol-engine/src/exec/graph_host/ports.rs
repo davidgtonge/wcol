@@ -96,7 +96,7 @@ impl GraphHost {
         if part >= fanout.egress.len() {
             return Err(WcolError::from("hash partition out of range"));
         }
-        Ok(fanout.egress[part].poll_write(dst)?)
+        fanout.egress[part].poll_write(dst)
     }
 
     /// Copy `n` ring bytes into the decoder for `port` only. Incomplete frames stay on that port.

@@ -179,7 +179,8 @@ fn filters_match_a_row_oracle() {
     }
     let batch = f_batch(&values, &nulls);
     let rows = values_of(&batch, 3);
-    let cases: &[(&str, fn(f64) -> bool)] = &[
+    type Case = (&'static str, fn(f64) -> bool);
+    let cases: &[Case] = &[
         ("SELECT COUNT(*) FROM t WHERE g > 1", |v| {
             float_key(v) > float_key(1.0)
         }),
@@ -209,7 +210,7 @@ fn filters_match_a_row_oracle() {
         ("SELECT COUNT(*) FROM t WHERE f = -1", |v| v == -1.0),
     ];
     for (sql, pred) in cases {
-        let snap = snapshot(sql, &[batch.clone()]);
+        let snap = snapshot(sql, std::slice::from_ref(&batch));
         let got = snap.groups.first().map(|g| g.stats[0].count).unwrap_or(0);
         let expect = rows.iter().filter(|v| v.is_some_and(pred)).count() as u64;
         assert_eq!(got, expect, "{sql}");
@@ -265,7 +266,7 @@ fn aggregates_match_a_row_oracle_including_shards() {
         same_f64(sum / count as f64, oracle.sum / oracle.count as f64);
         assert_eq!(stat[4].count, oracle.count);
     };
-    check(&snapshot(sql, &[whole.clone()]));
+    check(&snapshot(sql, std::slice::from_ref(&whole)));
     let merged =
         merge_partial_snapshots(&snapshot(sql, &[left]), &snapshot(sql, &[right])).unwrap();
     let (count, sum, min, max) = stat_f64(&merged.groups[0].stats[0]);
@@ -306,8 +307,8 @@ fn group_by_collapses_nan_and_signed_zero_across_shards() {
     let right = f_batch(&values[3..], &nulls[3..]);
     let sql = "SELECT g, COUNT(*) FROM t GROUP BY g";
     let merged = merge_partial_snapshots(
-        &snapshot(sql, &[left.clone()]),
-        &snapshot(sql, &[right.clone()]),
+        &snapshot(sql, std::slice::from_ref(&left)),
+        &snapshot(sql, std::slice::from_ref(&right)),
     )
     .unwrap();
     let whole = snapshot(sql, &[f_batch(&values, &nulls)]);
@@ -352,7 +353,10 @@ fn count_distinct_and_approx_share_the_float_key() {
     let values = [1.0, 1.0, -0.0, 0.0, f64::NAN, f64::NAN, f64::INFINITY];
     let nulls = [1u8, 1, 1, 1, 1, 1, 0];
     let batch = f_batch(&values, &nulls);
-    let distinct = finalized("SELECT COUNT(DISTINCT g) FROM t", &[batch.clone()]);
+    let distinct = finalized(
+        "SELECT COUNT(DISTINCT g) FROM t",
+        std::slice::from_ref(&batch),
+    );
     let mut set = BTreeSet::new();
     for (v, present) in values.iter().zip(nulls) {
         if present != 0 {
@@ -381,11 +385,9 @@ fn dictionary_floats_filter_and_aggregate_like_plain_values() {
         &[batch],
     );
     let mut oracle = Oracle::new();
-    for value in &rows {
-        if let Some(v) = value {
-            if *v != 4.0 {
-                oracle.add(*v);
-            }
+    for v in rows.iter().flatten() {
+        if *v != 4.0 {
+            oracle.add(*v);
         }
     }
     assert_eq!(snap.passed_rows, oracle.count);

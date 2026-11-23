@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use super::super::host::{await_host, HostSpillRequest, SpillProgress, SPILL_OP_RUN_READ};
 use super::super::sorted_run::RunStreamDecoder;
-use super::super::{SpillScanBatch, SpillScanResume, SpillStore};
+use super::super::{KeyedRow, SpillScanBatch, SpillScanResume, SpillStore};
 use super::codec::{encode_run_read_open, run_read_chunk, RunReadPlan};
 use super::put::PutPhase;
 use super::HostR2SortedRunStore;
@@ -184,7 +184,7 @@ impl HostR2SortedRunStore {
         &mut self,
         run_index: usize,
         record_index: u64,
-    ) -> Result<SpillProgress<Option<(i64, Vec<u8>, Vec<u8>)>>, String> {
+    ) -> Result<SpillProgress<Option<KeyedRow>>, String> {
         let meta = &self.runs[run_index];
         if record_index >= meta.record_count {
             return Ok(SpillProgress::Ready(None));
@@ -308,19 +308,14 @@ impl HostR2SortedRunStore {
                 })
                 .collect();
         }
-        loop {
-            self.reconcile_host_read()?;
-            if self.host_op_pending() {
-                return Ok(SpillProgress::AwaitHost);
-            }
-            match self.bootstrap_next_run()? {
-                SpillProgress::Ready(true) => break,
-                SpillProgress::Ready(false) | SpillProgress::AwaitHost => {
-                    return Ok(SpillProgress::AwaitHost);
-                }
-            }
+        self.reconcile_host_read()?;
+        if self.host_op_pending() {
+            return Ok(SpillProgress::AwaitHost);
         }
-        Ok(SpillProgress::Ready(()))
+        match self.bootstrap_next_run()? {
+            SpillProgress::Ready(true) => Ok(SpillProgress::Ready(())),
+            SpillProgress::Ready(false) | SpillProgress::AwaitHost => Ok(SpillProgress::AwaitHost),
+        }
     }
 
     pub(super) fn pull_ordered_batch(
@@ -351,16 +346,14 @@ impl HostR2SortedRunStore {
             }));
         }
         if self.bootstrap_run() < self.runs.len() {
-            loop {
-                self.reconcile_host_read()?;
-                if self.host_op_pending() {
+            self.reconcile_host_read()?;
+            if self.host_op_pending() {
+                return Ok(SpillProgress::AwaitHost);
+            }
+            match self.bootstrap_next_run()? {
+                SpillProgress::Ready(true) => {}
+                SpillProgress::Ready(false) | SpillProgress::AwaitHost => {
                     return Ok(SpillProgress::AwaitHost);
-                }
-                match self.bootstrap_next_run()? {
-                    SpillProgress::Ready(true) => break,
-                    SpillProgress::Ready(false) | SpillProgress::AwaitHost => {
-                        return Ok(SpillProgress::AwaitHost);
-                    }
                 }
             }
         }

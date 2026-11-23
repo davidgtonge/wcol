@@ -13,9 +13,9 @@ mod engine;
 mod http;
 mod spill;
 
+use std::fmt::Write as _;
 use std::io::Read;
 use std::path::PathBuf;
-use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -54,31 +54,6 @@ struct Job {
 struct PortStat {
     bytes: AtomicU64,
     state: AtomicU8,
-    /// Epoch ms the edge's request arrived, its first bytes arrived, and it ended (0: not yet).
-    opened_ms: AtomicU64,
-    first_ms: AtomicU64,
-    ended_ms: AtomicU64,
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-}
-
-/// `i:opened:first:ended` per input port, epoch ms, for the edge timeline.
-fn port_times(ports: &[PortStat]) -> String {
-    ports.iter().enumerate().fold(String::new(), |mut out, (i, port)| {
-        let _ = write!(
-            out,
-            "{}{i}:{}:{}:{}",
-            if out.is_empty() { "" } else { "," },
-            port.opened_ms.load(Ordering::Relaxed),
-            port.first_ms.load(Ordering::Relaxed),
-            port.ended_ms.load(Ordering::Relaxed)
-        );
-        out
-    })
 }
 
 const PORT_WAITING: u8 = 0;
@@ -91,8 +66,6 @@ const PORT_ENDED: u8 = 3;
 const PORT_ABSENT: u8 = 4;
 
 struct State {
-    /// Epoch ms each TCP connection to the reducer port was first seen in `/proc/net/tcp`.
-    connections: Mutex<std::collections::HashMap<String, u64>>,
     job: Mutex<Job>,
     status: Mutex<Status>,
     spill_dir: PathBuf,
@@ -103,17 +76,14 @@ fn main() {
     let spill_dir =
         PathBuf::from(std::env::var("SPILL_DIR").unwrap_or_else(|_| "/tmp/wcol-spill".into()));
     let state = Arc::new(State {
-        connections: Mutex::new(std::collections::HashMap::new()),
         job: Mutex::new(Job::default()),
         status: Mutex::new(Status::Idle),
         spill_dir,
     });
-    let sampler = Arc::clone(&state);
-    let port_hex = format!("{:04X}", port.parse::<u16>().unwrap_or(8080));
-    thread::spawn(move || sample_connections(&sampler, &port_hex));
-    let served = Arc::clone(&state);
-    http::serve(&format!("0.0.0.0:{port}"), move |request| handle(&served, request))
-        .expect("serve reducer port");
+    http::serve(&format!("0.0.0.0:{port}"), move |request| {
+        handle(&state, request)
+    })
+    .expect("serve reducer port");
 }
 
 fn handle(state: &Arc<State>, request: Request<'_>) -> Reply {
@@ -125,9 +95,12 @@ fn handle(state: &Arc<State>, request: Request<'_>) -> Reply {
         (Method::Post, "/stop") => std::process::exit(0),
         (Method::Post, "/start") => start(state, &url, request.body),
         (Method::Get, "/output") => output(state),
-        (Method::Put, route) if route.starts_with("/input/") => input(state, port_of(route), request.body),
+        (Method::Put, route) if route.starts_with("/input/") => {
+            input(state, port_of(route), request.body)
+        }
         (Method::Post, route) if route.starts_with("/absent/") => {
-            send(state, port_of(route), Edge::Absent).map_or_else(|e| text(400, &e), |()| text(200, "ok"))
+            send(state, port_of(route), Edge::Absent)
+                .map_or_else(|e| text(400, &e), |()| text(200, "ok"))
         }
         _ => text(404, "not found"),
     }
@@ -166,17 +139,13 @@ fn start(state: &Arc<State>, url: &str, body: &mut dyn Read) -> Reply {
         // Dropping the sender ends `GET /output` only after the status is final.
         *state.status.lock().expect("status") = match result {
             Ok(report) => Status::Done(format!(
-                "spillWritten={} spillRead={} spillRuns={} spillGroups={} peakLiveBytes={} peakRssKiB={} net={} doneMs={} conns={} edges={}",
+                "spillWritten={} spillRead={} spillRuns={} spillGroups={} peakLiveBytes={} peakRssKiB={}",
                 report.spill_written,
                 report.spill_read,
                 report.spill_runs,
                 report.spill_groups,
                 report.peak_live_bytes,
                 peak_rss_kib().map_or_else(|| "unknown".into(), |kib| kib.to_string()),
-                listen_counters(),
-                now_ms(),
-                connection_times(&state),
-                port_times(&state.job.lock().expect("job").ports)
             )),
             Err(e) => Status::Failed(e),
         };
@@ -191,7 +160,6 @@ fn input(state: &State, port: Option<usize>, reader: &mut dyn Read) -> Reply {
     };
     if let Some(stat) = state.job.lock().expect("job").ports.get(port) {
         stat.state.store(PORT_OPENED, Ordering::Relaxed);
-        stat.opened_ms.store(now_ms(), Ordering::Relaxed);
     }
     let mut buf = vec![0u8; READ_CHUNK];
     loop {
@@ -223,15 +191,10 @@ fn send(state: &State, port: Option<usize>, edge: Edge) -> Result<(), String> {
     let stat = &ports[port];
     let after = match &edge {
         Edge::Bytes(bytes) => {
-            if stat.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed) == 0 {
-                stat.first_ms.store(now_ms(), Ordering::Relaxed);
-            }
+            stat.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
             PORT_RECEIVING
         }
-        Edge::End => {
-            stat.ended_ms.store(now_ms(), Ordering::Relaxed);
-            PORT_ENDED
-        }
+        Edge::End => PORT_ENDED,
         Edge::Absent => PORT_ABSENT,
     };
     stat.state.store(PORT_BLOCKED, Ordering::Relaxed);
@@ -282,60 +245,6 @@ impl Read for ChannelReader {
     }
 }
 
-/// Diagnostic: record when each connection to the reducer port first appears, every 20 ms,
-/// to tell connections that reach the container late from requests the server reads late.
-fn sample_connections(state: &State, port_hex: &str) {
-    let local = format!(":{port_hex} ");
-    loop {
-        let now = now_ms();
-        for table in ["/proc/net/tcp", "/proc/net/tcp6"] {
-            let Ok(text) = std::fs::read_to_string(table) else { continue };
-            let mut seen = state.connections.lock().expect("connections");
-            for line in text.lines().skip(1) {
-                let fields: Vec<&str> = line.split_whitespace().collect();
-                // local_address remote_address st: a listening socket has an all-zero remote.
-                if let [_, local_addr, remote, ..] = fields.as_slice() {
-                    let listening = remote.trim_start_matches('0').starts_with(':');
-                    if !listening && format!("{local_addr} ").contains(&local) {
-                        seen.entry((*remote).to_string()).or_insert(now);
-                    }
-                }
-            }
-        }
-        thread::sleep(std::time::Duration::from_millis(20));
-    }
-}
-
-/// First-seen times of the reducer port's connections, sorted, epoch ms.
-fn connection_times(state: &State) -> String {
-    let mut times: Vec<u64> = state.connections.lock().expect("connections").values().copied().collect();
-    times.sort_unstable();
-    times.iter().map(u64::to_string).collect::<Vec<_>>().join(",")
-}
-
-/// The kernel's listen-queue counters and limits, to tell dropped connection attempts from
-/// slow ones: `name:value` pairs, or `unavailable` where the sandbox hides them.
-fn listen_counters() -> String {
-    const WANTED: [&str; 4] = ["ListenOverflows", "ListenDrops", "TCPReqQFullDrop", "TCPReqQFullDoCookies"];
-    let netstat = std::fs::read_to_string("/proc/net/netstat").unwrap_or_default();
-    let lines: Vec<&str> = netstat.lines().filter(|line| line.starts_with("TcpExt:")).collect();
-    let mut out = match lines.as_slice() {
-        [names, values] => names
-            .split_whitespace()
-            .zip(values.split_whitespace())
-            .filter(|(name, _)| WANTED.contains(name))
-            .map(|(name, value)| format!("{name}:{value}"))
-            .collect::<Vec<_>>()
-            .join(","),
-        _ => "unavailable".into(),
-    };
-    for (name, path) in [("somaxconn", "/proc/sys/net/core/somaxconn"), ("synBacklog", "/proc/sys/net/ipv4/tcp_max_syn_backlog")] {
-        let value = std::fs::read_to_string(path).map_or_else(|_| "?".into(), |v| v.trim().to_string());
-        let _ = write!(out, ",{name}:{value}");
-    }
-    out
-}
-
 /// The process's peak resident memory (`VmHWM`), where Linux reports it.
 fn peak_rss_kib() -> Option<u64> {
     std::fs::read_to_string("/proc/self/status")
@@ -359,19 +268,22 @@ fn status_text(state: &State) -> String {
         Status::Running => {
             let ports = Arc::clone(&state.job.lock().expect("job").ports);
             // Only the ports still open: `i:state:bytes`.
-            ports.iter().enumerate().fold("running".into(), |mut out, (i, port)| {
-                let open = match port.state.load(Ordering::Relaxed) {
-                    PORT_WAITING => Some("waiting"),
-                    PORT_OPENED => Some("opened"),
-                    PORT_RECEIVING => Some("receiving"),
-                    PORT_BLOCKED => Some("blocked"),
-                    _ => None,
-                };
-                if let Some(open) = open {
-                    let _ = write!(out, " {i}:{open}:{}", port.bytes.load(Ordering::Relaxed));
-                }
-                out
-            })
+            ports
+                .iter()
+                .enumerate()
+                .fold("running".into(), |mut out, (i, port)| {
+                    let open = match port.state.load(Ordering::Relaxed) {
+                        PORT_WAITING => Some("waiting"),
+                        PORT_OPENED => Some("opened"),
+                        PORT_RECEIVING => Some("receiving"),
+                        PORT_BLOCKED => Some("blocked"),
+                        _ => None,
+                    };
+                    if let Some(open) = open {
+                        let _ = write!(out, " {i}:{open}:{}", port.bytes.load(Ordering::Relaxed));
+                    }
+                    out
+                })
         }
         Status::Done(report) => format!("ok {report}"),
         Status::Failed(error) => format!("error: {error}"),

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use wcol::formats::parquet::open_plan;
 use wcol::ops::query::PartialSnapshot;
-use wcol::plan::{plan_query_dispatch, Frontend, PhysicalPlannerConfig, QueryDispatch};
+use wcol::plan::{plan_query_dispatch, PhysicalPlannerConfig, QueryDispatch};
 use wcol::stream::core::{Action, WCS_HEADER_BYTES, WCS_MAGIC};
 use wcol::stream::partials::partial_snapshot_from_state;
 use wcol::{coordinator_reduce_partials, open_wcol_plan};
@@ -39,7 +39,6 @@ fn run_file(name: &str, sql: &str, batch_rows: usize) -> PartialSnapshot {
         1,
         batch_rows as u32,
         &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
     )
     .unwrap();
     let state = match dispatch {

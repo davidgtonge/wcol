@@ -25,32 +25,27 @@ fn pump_once(
     input_eof: bool,
     outputs: &mut Vec<WcolStreamItem>,
 ) -> Result<(), String> {
-    loop {
-        let mut out_slot = None;
-        let mut io = OperatorIo {
-            input: None,
-            input_slot: Some(&mut input),
-            input_eof,
-            output: &mut out_slot,
-            host_bytes: None,
-            output_port: None,
-            bytes_written: &mut 0,
-        };
-        match op.poll(&mut io)? {
-            StreamProgress::NeedInput => return Ok(()),
-            StreamProgress::HaveOutput => {
-                if let Some(item) = out_slot.take() {
-                    outputs.push(item);
-                }
-                return Ok(());
+    let mut out_slot = None;
+    let mut io = OperatorIo {
+        input: None,
+        input_slot: Some(&mut input),
+        input_eof,
+        output: &mut out_slot,
+        host_bytes: None,
+        output_port: None,
+        bytes_written: &mut 0,
+    };
+    match op.poll(&mut io)? {
+        StreamProgress::NeedInput | StreamProgress::Finished => Ok(()),
+        StreamProgress::HaveOutput => {
+            if let Some(item) = out_slot.take() {
+                outputs.push(item);
             }
-            StreamProgress::Blocked => {
-                return Err("colocated driver hit backpressure".to_string());
-            }
-            StreamProgress::NeedHostRead { .. } => {
-                return Err("host read not supported in drive_operator".to_string());
-            }
-            StreamProgress::Finished => return Ok(()),
+            Ok(())
+        }
+        StreamProgress::Blocked => Err("colocated driver hit backpressure".to_string()),
+        StreamProgress::NeedHostRead { .. } => {
+            Err("host read not supported in drive_operator".to_string())
         }
     }
 }

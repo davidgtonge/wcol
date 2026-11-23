@@ -23,9 +23,6 @@ pub mod query_dispatch;
 pub mod range_sample;
 pub mod range_sort;
 pub mod result;
-/// DataFusion parse, optimize, and lower. Compiled only with `--features datafusion`.
-#[cfg(feature = "datafusion")]
-pub mod sql;
 pub mod sql_parser;
 pub mod to_ir;
 
@@ -88,8 +85,8 @@ pub use physical_plan::{
     TableMeta, WcolLogicalPlan, WcolPhysicalPlan,
 };
 pub use query_dispatch::{
-    catalog_from_footer, plan_execution_wire_from_logical, plan_query_dispatch,
-    plan_query_dispatch_wire, plan_query_job, Frontend, NodeProgram, QueryDispatch,
+    catalog_from_footer, plan_query_dispatch, plan_query_dispatch_wire, plan_query_job,
+    NodeProgram, QueryDispatch,
 };
 pub use stream_program::PlanCursor;
 pub use wcol_engine::exec::stream_pool::{MAX_STREAM_INPUT_PORTS, MAX_STREAM_OUTPUT_PORTS};

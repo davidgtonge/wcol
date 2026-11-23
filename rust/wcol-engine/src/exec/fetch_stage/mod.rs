@@ -226,7 +226,7 @@ impl FetchStage {
                 continue;
             }
             let fits = held + fetch.length <= self.buffer_bytes;
-            if !fits && !(demand && self.in_flight.is_empty()) {
+            if !(fits || (demand && self.in_flight.is_empty())) {
                 return None;
             }
             self.queue.remove(position);

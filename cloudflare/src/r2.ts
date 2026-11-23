@@ -50,7 +50,7 @@ export type R2OutputBucket = {
   } | null>;
   get(key: string, options?: R2GetOptions): Promise<R2ObjectBody | null>;
   head?(key: string): Promise<R2ObjectBody | null>;
-  list?(options: { prefix?: string; cursor?: string }): Promise<{
+  list?(options: { prefix?: string; cursor?: string; limit?: number }): Promise<{
     objects: { key: string; uploaded?: Date }[];
     truncated?: boolean;
     cursor?: string;
@@ -79,21 +79,15 @@ export function r2BindingSession(bucket: R2OutputBucket, key: string): R2Multipa
   };
 }
 
-export type R2BindingName = "output" | "analytics";
+/** The R2 binding a job names as `bucket`. Workers have one: `OUTPUT`. */
+export type R2BindingName = "output";
 
-export type DualR2Env = {
+export type R2Env = {
   OUTPUT?: R2OutputBucket;
-  ANALYTICS?: R2OutputBucket;
-  WCOL_COORDINATOR_TEST_HOOKS?: string;
 };
 
-export function resolveR2Bucket(env: DualR2Env, binding: R2BindingName = "output"): R2OutputBucket | undefined {
-  return binding === "analytics" ? env.ANALYTICS : env.OUTPUT;
-}
-
 export function parseR2BindingName(value: unknown): R2BindingName | null {
-  if (value === "output" || value === "analytics") return value;
-  return null;
+  return value === "output" ? value : null;
 }
 
 /** One path segment: no empty, `.` or `..` segments, so a key cannot escape its prefix. */

@@ -1,10 +1,9 @@
 /**
  * Build the node or coordinator Wasm from `rust/` with the pinned toolchain.
- * `rust/.cargo/config.toml` sets panic=abort and the getrandom cfg for wasm32.
+ * `rust/.cargo/config.toml` sets panic=abort for wasm32.
  *
  *   node scripts/build-split-wasm.mjs node
  *   node scripts/build-split-wasm.mjs coordinator
- *   node scripts/build-split-wasm.mjs coordinator --datafusion
  */
 import { execFileSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
@@ -15,21 +14,14 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rustDir = path.join(root, "rust");
 const which = process.argv[2];
-const datafusion = process.argv.includes("--datafusion");
 
 if (which !== "node" && which !== "coordinator") {
-  console.error("usage: build-split-wasm.mjs node|coordinator [--datafusion]");
-  process.exit(2);
-}
-if (which === "node" && datafusion) {
-  console.error("node wasm has no datafusion feature");
+  console.error("usage: build-split-wasm.mjs node|coordinator");
   process.exit(2);
 }
 
 const pkg = which === "node" ? "wcol-node-wasm" : "wcol-coordinator-wasm";
 const artifact = which === "node" ? "wcol_node.wasm" : "wcol_coordinator.wasm";
-const features = datafusion ? ["--features", "datafusion"] : [];
-const destName = datafusion ? "wcol_coordinator_datafusion.wasm" : artifact;
 
 const cargo = [
   "build",
@@ -39,20 +31,16 @@ const cargo = [
   "wasm32-unknown-unknown",
   "--release",
   "--offline",
-  ...features,
 ];
+// wasm-opt rewrites the release artifact in place.
 const built = path.join(rustDir, "target/wasm32-unknown-unknown/release", artifact);
-const optOut = path.join(rustDir, "target/wasm32-unknown-unknown/release", destName);
-const savedDefault = `${built}.default-saved`;
-if (destName !== artifact && fs.existsSync(built)) {
-  fs.copyFileSync(built, savedDefault);
-}
+const optOut = built;
 execFileSync("cargo", cargo, {
   cwd: rustDir,
   stdio: "inherit",
   env: {
     ...process.env,
-    RUSTFLAGS: '-C panic=abort -C target-feature=+simd128 --cfg getrandom_backend="custom"',
+    RUSTFLAGS: '-C panic=abort -C target-feature=+simd128',
   },
 });
 const optTemp = `${optOut}.opt`;
@@ -74,20 +62,15 @@ execFileSync(
   { stdio: "inherit" },
 );
 fs.renameSync(optTemp, optOut);
-if (destName !== artifact && fs.existsSync(savedDefault)) {
-  fs.copyFileSync(savedDefault, built);
-  fs.unlinkSync(savedDefault);
-}
 
 const bytes = fs.readFileSync(optOut);
 const gzipped = gzipSync(bytes).byteLength;
 const exports = wasmExportNames(bytes);
 console.log(
   JSON.stringify({
-    artifact: destName,
+    artifact,
     bytes: bytes.byteLength,
     gzipped,
-    datafusion,
   }),
 );
 

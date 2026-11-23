@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      # compact-parquet-thrift is a path dependency next to this repository.
+      - uses: actions/checkout@v4
+        with:
+          path: wcol
+      - uses: actions/checkout@v4
+        with:
+          repository: davidgtonge/compact-parquet-thrift
+          path: compact-parquet-thrift
+
+      - name: Rust toolchain
+        working-directory: wcol/rust
+        # rust-toolchain.toml pins the version; rustup installs it on first use.
+        run: |
+          rustup show active-toolchain
+          rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wcol/rust
+      - name: Binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: wcol/package-lock.json
+
+      - name: Rust format and lint
+        working-directory: wcol
+        run: npm run lint:rust
+      - name: Rust tests
+        working-directory: wcol
+        run: npm run test:rust
+
+      - name: Install
+        working-directory: wcol
+        run: npm ci
+      - name: Build Wasm and Workers
+        working-directory: wcol
+        run: |
+          (cd rust && cargo fetch)
+          npm run build
+      - name: Typecheck
+        working-directory: wcol
+        run: npm run typecheck
+      - name: Tests
+        working-directory: wcol
+        run: npm test

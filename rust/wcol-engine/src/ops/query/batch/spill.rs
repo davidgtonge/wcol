@@ -20,7 +20,9 @@ impl BatchQuery {
 
     /// The spill's resident memory budget, if group spill is on.
     pub(crate) fn spill_budget_bytes(&self) -> Option<u64> {
-        self.spill.as_ref().map(group_spill::GroupSpill::combined_budget_bytes)
+        self.spill
+            .as_ref()
+            .map(group_spill::GroupSpill::combined_budget_bytes)
     }
 
     pub(crate) fn ingest_spill_host_read(&mut self) -> Result<(), String> {

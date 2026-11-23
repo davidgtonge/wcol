@@ -9,7 +9,7 @@ use wcol::open_wcol_plan;
 use wcol::plan::late_rows::{plan_late_pick, plan_late_read, LateRead, LateRowsConfig};
 use wcol::plan::result::{i64_column_values, partial_json, rows_by_id_json, rows_json};
 use wcol::plan::{
-    execution_plan_from_dispatch, plan_query_job, ExecutionPlan, Frontend, PhysicalPlannerConfig,
+    execution_plan_from_dispatch, plan_query_job, ExecutionPlan, PhysicalPlannerConfig,
     QueryDispatch, RootOutputKind,
 };
 use wcol::stream::core::Action;
@@ -101,15 +101,8 @@ fn job_json(sql: &str, nodes: u32) -> String {
         min_bytes_per_node: 1,
         ..PhysicalPlannerConfig::for_coordinator(nodes)
     };
-    let (dispatch, plan, columns) = plan_query_job(
-        sql,
-        &[("t", &footer)],
-        nodes,
-        1024,
-        &config,
-        &[Frontend::Sql],
-    )
-    .unwrap();
+    let (dispatch, plan, columns) =
+        plan_query_job(sql, &[("t", &footer)], nodes, 1024, &config).unwrap();
     if let QueryDispatch::Partial(partial) = &dispatch {
         return partial_json(&columns, partial).unwrap();
     }
@@ -223,15 +216,8 @@ fn one_pass_json(name: &str, sql: &str, nodes: u32) -> String {
         min_bytes_per_node: 1,
         ..PhysicalPlannerConfig::for_coordinator(nodes)
     };
-    let (dispatch, plan, columns) = plan_query_job(
-        sql,
-        &[("t", &footer)],
-        nodes,
-        1024,
-        &config,
-        &[Frontend::Sql],
-    )
-    .unwrap();
+    let (dispatch, plan, columns) =
+        plan_query_job(sql, &[("t", &footer)], nodes, 1024, &config).unwrap();
     assert!(
         plan_late_pick(sql, &[("t", &footer)], 1024, &config)
             .unwrap()
@@ -338,8 +324,7 @@ fn finalizer_fails_when_a_producer_never_finishes() {
         ..PhysicalPlannerConfig::for_coordinator(4)
     };
     let sql = "SELECT d, COUNT(*) FROM t GROUP BY d";
-    let (dispatch, plan, _) =
-        plan_query_job(sql, &[("t", &footer)], 4, 1024, &config, &[Frontend::Sql]).unwrap();
+    let (dispatch, plan, _) = plan_query_job(sql, &[("t", &footer)], 4, 1024, &config).unwrap();
     let ExecutionPlan::Graph {
         tasks,
         edges,

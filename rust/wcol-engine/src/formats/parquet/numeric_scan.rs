@@ -12,6 +12,9 @@ use super::page_scratch::PageScratch;
 use super::schema::Leaf;
 use super::Error;
 
+/// `(values, nulls)` copied out of one decoded batch.
+pub type OwnedValues<T> = (Vec<T>, Vec<u8>);
+
 pub struct NumericBatch<'a> {
     pub values: &'a [i64],
     pub nulls: &'a [u8],
@@ -733,10 +736,7 @@ impl NumericScan {
         }))
     }
 
-    pub fn next_dict_owned(
-        &mut self,
-        max_rows: usize,
-    ) -> Result<Option<(Vec<u32>, Vec<u8>)>, Error> {
+    pub fn next_dict_owned(&mut self, max_rows: usize) -> Result<Option<OwnedValues<u32>>, Error> {
         let Some(batch) = self.next_dict_batch(max_rows)? else {
             return Ok(None);
         };
@@ -747,7 +747,7 @@ impl NumericScan {
         Ok(Some((ids, nulls)))
     }
 
-    pub fn next_owned(&mut self, max_rows: usize) -> Result<Option<(Vec<i64>, Vec<u8>)>, Error> {
+    pub fn next_owned(&mut self, max_rows: usize) -> Result<Option<OwnedValues<i64>>, Error> {
         let Some(batch) = self.next_batch(max_rows)? else {
             return Ok(None);
         };
@@ -1024,16 +1024,15 @@ impl NumericScan {
         &mut self,
         header: PageHeader,
         spec: ColumnSpec,
-        body_start: usize,
-        body_end: usize,
+        body: std::ops::Range<usize>,
         is_dict: bool,
         emit_budget: usize,
         scratch: &mut PageScratch,
     ) -> Result<bool, Error> {
         use super::page_cursor::PageCursor;
         let cursor = PageCursor::new(header, spec, &self.limits)?;
-        let body = &self.compressed[body_start..body_end];
-        let plain = inflate_page_body(header.clone(), spec, self.codec, body, scratch)?;
+        let body_end = body.end;
+        let plain = inflate_page_body(header, spec, self.codec, &self.compressed[body], scratch)?;
         self.read_at = body_end;
         self.try_compact();
         self.replay.snappy_page_inflates = self.replay.snappy_page_inflates.saturating_add(1);
@@ -1135,7 +1134,7 @@ impl NumericScan {
             spec = spec.with_dictionary(len);
         }
         let is_dict = header.page_type == Some(2);
-        let layout = page_layout(header.clone(), spec).map_err(Error::Page)?;
+        let layout = page_layout(header, spec).map_err(Error::Page)?;
         let dictionary_data_page = !is_dict && !self.dict.is_empty();
         let encoding_supported = page_values == 0
             || owned_cursor_supports_data_page(physical, layout.encoding, dictionary_data_page);
@@ -1152,8 +1151,7 @@ impl NumericScan {
             match self.begin_owned_page(
                 header,
                 spec,
-                body_start,
-                body_end,
+                body_start..body_end,
                 is_dict,
                 emit_budget,
                 scratch,

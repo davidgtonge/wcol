@@ -168,7 +168,7 @@ fn push_aggregate_column(
     let integer = stats
         .iter()
         .find(|stat| stat.count > 0)
-        .map_or(true, |stat| stat.flags & 1 != 0);
+        .is_none_or(|stat| stat.flags & 1 != 0);
     if count_kind {
         let values = stats
             .iter()

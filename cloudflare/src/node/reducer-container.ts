@@ -35,22 +35,15 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
   private readonly opened = new Set<number>();
   private expectedScans = 0;
   private started = gate();
-  /** Edge uploads to the container that have not finished, for the abort log. */
-  private readonly uploading = new Set<number>();
   /** Set when this object stops its own container, whose SIGKILL (exit 137) is then expected. */
   private stopping = false;
-  /** Per scan edge: when its accept arrived, when the reducer had started, when its upload ended (epoch ms). */
-  private readonly edgeTimes = new Map<number, [number, number, number]>();
   private slot = -1;
-  private jobId = "";
-  private readyAt = 0;
   private instance: ContainerInstance = DEFAULT_CONTAINER_INSTANCE;
   /** How long the container took to answer, from `start`. */
   private readyMs = 0;
 
   async prepareReducer(params: PrepareReducerParams): Promise<PrepareReducerHandle> {
     this.slot = params.slot;
-    this.jobId = params.jobId;
     try {
       await this.startContainer(params.containerInstance ?? DEFAULT_CONTAINER_INSTANCE);
       await this.reducerCall(`/start?inputs=${params.expectedScans}`, {
@@ -80,14 +73,9 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
   }
 
   async acceptScanEdge(params: AcceptScanEdgeParams): Promise<{ accepted: true }> {
-    const arrived = Date.now();
     await this.started.promise;
-    const gated = Date.now();
     this.opened.add(params.scanIndex);
-    const scan = params.scanIndex;
-    this.uploading.add(scan);
-    await this.reducerCall(`/input/${scan}`, { method: "PUT", body: params.stream }).finally(() => this.uploading.delete(scan));
-    this.edgeTimes.set(scan, [arrived, gated, Date.now()]);
+    await this.reducerCall(`/input/${params.scanIndex}`, { method: "PUT", body: params.stream });
     return { accepted: true };
   }
 
@@ -104,10 +92,6 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
 
   async abortHashAttempt(params: HashAttemptParams & { error?: string }): Promise<void> {
     this.started.fail(new Error(`attempt aborted: ${params.error ?? "no reason"}`));
-    if (this.ctx.container?.running) {
-      const status = await this.reducerCall("/status").catch((e: unknown) => `unreachable: ${String(e)}`);
-      console.log(JSON.stringify({ event: "container_reducer_abort", status, uploading: [...this.uploading] }));
-    }
     await this.shutDown();
   }
 
@@ -156,10 +140,9 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
       }
       await new Promise((resolve) => setTimeout(resolve, READY_POLL_MS));
     }
-    this.readyAt = Date.now();
     this.instance = instance;
-    this.readyMs = this.readyAt - startedAt;
-    console.log(JSON.stringify({ event: "container_reducer_ready", slot: this.slot, at: this.readyAt, instance, ms: this.readyAt - startedAt }));
+    this.readyMs = Date.now() - startedAt;
+    console.log(JSON.stringify({ event: "container_reducer_ready", slot: this.slot, instance, ms: this.readyMs }));
   }
 
   private async markAbsent(scanIndex: number): Promise<void> {
@@ -169,9 +152,8 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
   }
 
   /**
-   * The reducer's output. The request is opened, not awaited: its headers arrive with the
-   * first output bytes, after every scan has sent, so waiting here would hold the scans back.
-   * Once the output ends the reducer's status decides success, then the container stops.
+   * The reducer's output, streamed as the finalizer reads it. Once it ends the reducer's
+   * status decides success, then the container stops.
    */
   private output(): ReadableStream<Uint8Array> {
     const response = this.reducerFetch("/output");
@@ -187,10 +169,7 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
           }
           const status = await this.reducerCall("/status");
           if (!status.startsWith("ok")) throw new Error(`container reducer: ${status}`);
-          const timing = { slot: this.slot, readyAt: this.readyAt, status, doEdges: Object.fromEntries(this.edgeTimes) };
-          console.log(JSON.stringify({ event: "container_reducer_done", ...timing }));
-          // Diagnostic: tail drops events at this fan-out, so each reducer also files its edge timeline.
-          await this.env.OUTPUT?.put(`_diag/${this.jobId}/reducer-${this.slot}.json`, JSON.stringify(timing));
+          console.log(JSON.stringify({ event: "container_reducer_done", slot: this.slot, status }));
           controller.close();
         } catch (error) {
           controller.error(error);

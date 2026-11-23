@@ -144,7 +144,8 @@ fn partial_rows_go_where_their_raw_rows_go() {
         offset: 0,
     }];
     // (group by, aggregates, exchange keys as (partial key position, source column)).
-    let shapes: Vec<(&[u32], &[AggExpr], Vec<(usize, u32)>)> = vec![
+    type Shape<'a> = (&'a [u32], &'a [AggExpr], Vec<(usize, u32)>);
+    let shapes: Vec<Shape<'_>> = vec![
         (&[0], &count, vec![(0, 0)]),
         (&[1], &count, vec![(0, 1)]),
         (&[3], &count, vec![(0, 3)]),

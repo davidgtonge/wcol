@@ -16,7 +16,7 @@ use wcol::ir::ColumnKind;
 use wcol::ops::ParquetSourceOp;
 use wcol::plan::physical_plan::OpKind;
 use wcol::plan::{
-    plan_query_dispatch, Frontend, IngestMemoryProfile, PhysicalPlannerConfig, WcolPhysicalPlan,
+    plan_query_dispatch, IngestMemoryProfile, PhysicalPlannerConfig, WcolPhysicalPlan,
 };
 use wcol::stream::partials::{partial_snapshot_from_state, PartialStateWcol};
 use wcol::{ingest_groups_from_plan, CatalogColumn, GraphPump, IngestGroup, LinearColocatedGraph};
@@ -207,7 +207,6 @@ fn run_planned(
         nodes,
         batch_rows as u32,
         &config,
-        &[Frontend::Sql],
     )?;
     let programs = match dispatch {
         QueryDispatch::Partial(partial) => return partial_state_from_wire_payload(&partial),
@@ -322,7 +321,6 @@ fn main() -> Result<(), String> {
             1,
             args.batch_rows as u32,
             &PhysicalPlannerConfig::default(),
-            &[Frontend::Sql],
         ) {
             Ok((_, physical)) => physical,
             Err(err) => {

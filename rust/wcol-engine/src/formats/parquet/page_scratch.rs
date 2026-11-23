@@ -21,8 +21,7 @@ impl PageScratch {
         let codec_total = limits
             .budget
             .codec_scratch_bytes
-            .min(MAX_CODEC_SCRATCH)
-            .max(64 * 1024);
+            .clamp(64 * 1024, MAX_CODEC_SCRATCH);
         // Keep the same cap the streaming Snappy scratch used, so a page that used to
         // exceed that budget still fails here.
         let ring = 64 * 1024;

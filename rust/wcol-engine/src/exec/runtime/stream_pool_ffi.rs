@@ -1,4 +1,14 @@
 //! Wasm FFI for stream-pool mailboxes (up to 100 ingress / 100 egress).
+//!
+//! # Safety
+//!
+//! Every export shares one contract: a `*mut StreamPoolHandle` is null or a live handle from
+//! `wcs_sp_open_*` that has not been passed to `wcs_sp_close`, and every `(ptr, len)` pair
+//! names `len` readable (or, for slots, writable) bytes in Wasm memory. The host is
+//! single-threaded and never calls into a handle re-entrantly.
+
+// The shared contract above covers each `unsafe extern "C"` export.
+#![allow(clippy::missing_safety_doc)]
 
 use std::ptr;
 use std::slice;

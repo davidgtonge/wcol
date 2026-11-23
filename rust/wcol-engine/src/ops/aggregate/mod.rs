@@ -186,7 +186,11 @@ impl AggregateOp {
 
     /// Answer from footer metadata: `rows` for `COUNT(*)`, `bounds` (one per aggregate) for
     /// `MIN`/`MAX`. See [`BatchQuery::add_metadata`].
-    pub fn apply_metadata(&mut self, rows: u64, bounds: &[Option<(i64, i64)>]) -> Result<(), String> {
+    pub fn apply_metadata(
+        &mut self,
+        rows: u64,
+        bounds: &[Option<(i64, i64)>],
+    ) -> Result<(), String> {
         self.query.add_metadata(rows, bounds)
     }
 

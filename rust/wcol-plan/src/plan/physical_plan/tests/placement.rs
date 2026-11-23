@@ -155,7 +155,7 @@ fn each_scan_node_reads_one_object_of_a_split_table() {
         placed.values().all(|objects| objects.len() == 1),
         "{placed:?}"
     );
-    let rows: u64 = plan.logical_reads.iter().count() as u64;
+    let rows: u64 = plan.logical_reads.len() as u64;
     assert_eq!(rows, 12);
     // As many nodes as objects: one each.
     let plan = lower_to_physical(&logical, &split_catalog(4, 2), &nodes(4), &config).unwrap();
@@ -326,8 +326,13 @@ fn min_max_need_bounds_on_every_chunk() {
                 .collect(),
         );
         meta.leaf_physical = vec![1];
-        lower_to_physical(&min_max, &meta, &nodes(2), &PhysicalPlannerConfig::default())
-            .unwrap()
+        lower_to_physical(
+            &min_max,
+            &meta,
+            &nodes(2),
+            &PhysicalPlannerConfig::default(),
+        )
+        .unwrap()
     };
     let both = plan_with([Some((5, 9)), Some((-3, 7))]);
     assert!(matches!(

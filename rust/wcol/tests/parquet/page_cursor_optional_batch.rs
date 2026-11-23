@@ -53,8 +53,7 @@ fn page_cursor_optional_four_rows_batch_three() {
     let spec = ColumnSpec::flat(Physical::Int64, SNAPPY).optional();
     let limits = ScanLimits::for_batch_rows(3);
     let mut scratch = PageScratch::for_limits(&limits);
-    let plain =
-        inflate_page_body(header.clone(), spec, chunk.codec, page_body, &mut scratch).unwrap();
+    let plain = inflate_page_body(header, spec, chunk.codec, page_body, &mut scratch).unwrap();
     let mut cursor = PageCursor::new(header, spec, &limits).unwrap();
     let mut events: Vec<(bool, Option<i64>)> = Vec::new();
     let step0 = cursor

@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type { DualR2Env } from "../r2.ts";
+import type { R2Env } from "../r2.ts";
 import { createRouter } from "../router.ts";
 import { liveSnapshot } from "./live-status.ts";
 import { graphJobStatus, isGraphJob, recoverGraphJob, submitGraphJob } from "./submit.ts";
@@ -15,15 +15,13 @@ function json(body: unknown, status = 200): Response {
 
 export { parseHostExecutionHints, readJobRecord } from "./record.ts";
 
-export type ShardCoordinatorEnv = DualR2Env &
+export type ShardCoordinatorEnv = R2Env &
   GraphJobEnv & {
     WCOL_NODE: DurableObjectNamespace;
   };
 
-const JOB_API_FORMATS = new Set(["json", "parquet", "concat"]);
-
 /**
- * One coordinator per job: plans the `POST /jobs` body (docs/COORDINATOR_JOB_API.md) and runs
+ * One coordinator per job: plans the `POST /jobs` body (docs/job-api.md) and runs
  * it as a graph on node Durable Objects. Its storage is bounded status records (I11).
  */
 export class WcolCoordinator extends DurableObject<ShardCoordinatorEnv> {
@@ -43,21 +41,13 @@ export class WcolCoordinator extends DurableObject<ShardCoordinatorEnv> {
       const text = await request.text();
       const body = JSON.parse(text) as {
         jobId?: string;
-        sql?: string;
-        output?: { format?: string };
         failFirstAttemptTaskId?: string;
         testHold?: boolean;
         testCrashBeforeComplete?: boolean;
       };
       if (!body.jobId) return json({ error: "jobId required" }, 400);
-      const isModelRequest = /^\s*CREATE\s+MODEL\b/i.test(body.sql ?? "");
-      if (!isModelRequest && !JOB_API_FORMATS.has(body.output?.format ?? "")) {
-        return json(
-          { error: "this job kind was removed: send a job API body (docs/COORDINATOR_JOB_API.md)" },
-          410,
-        );
-      }
-      // Test hook: the first attempt of task `n<id>` fails mid-stream.
+      // Fault injection for retry tests: the first attempt of task `n<id>` fails mid-stream.
+      // It affects only the caller's own job, so it is not behind WCOL_JOB_TEST_HOOKS.
       const fail = body.failFirstAttemptTaskId;
       const failTaskId = fail?.startsWith("n") ? Number(fail.slice(1)) : undefined;
       const hooks = this.env.WCOL_JOB_TEST_HOOKS === "1";

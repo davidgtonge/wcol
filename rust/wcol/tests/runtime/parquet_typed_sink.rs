@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
 use wcol::exec::operator::{Operator, OperatorIo, StreamProgress, WcolStreamItem};
 use wcol::formats::parquet::{
-    open_plan, ParquetDecode, ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn,
+    open_plan, ParquetDecode, ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn, RowGroupSpec,
 };
 use wcol::ops::query::CatalogColumn;
 use wcol::plan::sql_parser::ColumnKind;
@@ -201,7 +201,7 @@ fn cell_at(col: &WcolColumn<'_>, row: usize) -> Cell {
     }
 }
 
-fn read_back(path: &PathBuf, dict_columns: &HashSet<u32>) -> Vec<Vec<Cell>> {
+fn read_back(path: &Path, dict_columns: &HashSet<u32>) -> Vec<Vec<Cell>> {
     let (mut file, plan) = open_plan(path).unwrap();
     let catalog: Vec<CatalogColumn> = plan
         .leaves
@@ -219,7 +219,7 @@ fn read_back(path: &PathBuf, dict_columns: &HashSet<u32>) -> Vec<Vec<Cell>> {
             max_rep: leaf.max_rep,
         })
         .collect();
-    let mut by_group: Vec<(u32, u64, Vec<(u32, u64, i32, u32)>)> = Vec::new();
+    let mut by_group: Vec<RowGroupSpec> = Vec::new();
     for chunk in &plan.chunks {
         if by_group
             .last()
@@ -258,7 +258,7 @@ fn read_back(path: &PathBuf, dict_columns: &HashSet<u32>) -> Vec<Vec<Cell>> {
                     );
                 }
                 for row in 0..view.row_count {
-                    columns[column as usize].push(cell_at(&col, row));
+                    columns[column as usize].push(cell_at(col, row));
                 }
             }
             continue;
@@ -315,7 +315,7 @@ fn duckdb_csv(sql: &str) -> Option<String> {
     None
 }
 
-fn duckdb_column(path: &PathBuf, name: &str, float: bool) -> Option<Vec<String>> {
+fn duckdb_column(path: &Path, name: &str, float: bool) -> Option<Vec<String>> {
     let body = if float {
         format!(
             "CASE \
@@ -372,7 +372,7 @@ fn typed_sink_round_trips_every_physical_type() {
     assert_eq!(groups.iter().filter(|group| **group == 1).count(), 11);
     assert!(plan.chunks.iter().all(|chunk| chunk.rows == 2));
     for chunk in &plan.chunks {
-        let dictionary = matches!(chunk.leaf, 8 | 9 | 10);
+        let dictionary = matches!(chunk.leaf, 8..=10);
         assert_eq!(chunk.has_dictionary, dictionary, "leaf {}", chunk.leaf);
     }
 

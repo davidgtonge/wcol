@@ -45,4 +45,4 @@ pub use sorted_run::{
 };
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub use store::FileAppendSpillStore;
-pub use store::{SpillScanBatch, SpillScanResume, SpillStore};
+pub use store::{KeyPayload, KeyedRow, SpillScanBatch, SpillScanResume, SpillStore};

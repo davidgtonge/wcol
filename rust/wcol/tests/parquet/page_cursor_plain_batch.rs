@@ -51,8 +51,7 @@ fn page_cursor_plain_nine_values_three_per_step() {
     let spec = ColumnSpec::flat(Physical::Int64, SNAPPY);
     let limits = ScanLimits::for_batch_rows(3);
     let mut scratch = PageScratch::for_limits(&limits);
-    let plain =
-        inflate_page_body(header.clone(), spec, chunk.codec, page_body, &mut scratch).unwrap();
+    let plain = inflate_page_body(header, spec, chunk.codec, page_body, &mut scratch).unwrap();
     let mut cursor = PageCursor::new(header, spec, &limits).unwrap();
     let mut out = Vec::new();
     for step_num in 0..4 {

@@ -48,14 +48,10 @@ bucket_name = "wcol-hits-exports"
 tag = "v1"
 new_sqlite_classes = ["WcolCoordinator"]
 
-# Experiment: let all scan tasks run together. WCOL_MAX_ACTIVE_INGRESS is also the scan start window.
 # Every job attempt runs on fresh `graph:{job}:a{attempt}:s{slot}` objects. A fixed pool of
 # reused names was tried and removed: Cloudflare kept reused objects in the isolates they
 # already lived in, so each run packed the same work into fewer isolates (249, 235, 215
 # over three ladder runs) and more of it failed as "overloaded" or out of memory.
-# Opt in: WCOL_EDGE_BYTES = "r2" to put payload bytes in R2 (RPC still carries signals).
-# Opt in: WCOL_EDGE_SIGNALS = "coordinator" to route those signals here (requires r2).
-# Default is point-to-point RPC streams.
 [vars]
 # New coordinators and nodes are created in the data bucket's region (wcol-hits-exports: EEUR).
 WCOL_DO_LOCATION_HINT = "eeur"

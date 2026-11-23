@@ -219,7 +219,7 @@ impl GraphHostCore {
                         ..Default::default()
                     });
                 }
-                return Ok(Progress::with_read_at(ticket, source, offset, length));
+                Ok(Progress::with_read_at(ticket, source, offset, length))
             }
             GraphPump::AwaitHost => {
                 let input_consumed = consumed - slice.len();
@@ -231,9 +231,7 @@ impl GraphHostCore {
                 })
             }
             GraphPump::Progress => unreachable!("drive_ingest loops through Progress"),
-            GraphPump::RowsReady => {
-                return Err(WcolError::from("aggregate graph queued a row batch"));
-            }
+            GraphPump::RowsReady => Err(WcolError::from("aggregate graph queued a row batch")),
             GraphPump::Done => {
                 let input_consumed = consumed - slice.len();
                 let produced = self.emit_partial_frame(output)?;

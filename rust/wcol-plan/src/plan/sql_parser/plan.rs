@@ -485,16 +485,16 @@ fn aggregate_matches_expr<'a>(
     if aggregate.column != Some(column) || aggregate.offset != offset {
         return false;
     }
-    match (func, distinct, aggregate.kind) {
-        (AggFn::Count, true, AggKind::CountDistinct) => true,
-        (AggFn::Count, false, AggKind::Count) => true,
-        (AggFn::Sum, _, AggKind::Sum) => true,
-        (AggFn::Avg, _, AggKind::Avg) => true,
-        (AggFn::Min, _, AggKind::Min) => true,
-        (AggFn::Max, _, AggKind::Max) => true,
-        (AggFn::ApproxDistinct, _, AggKind::ApproxDistinct) => true,
-        _ => false,
-    }
+    matches!(
+        (func, distinct, aggregate.kind),
+        (AggFn::Count, true, AggKind::CountDistinct)
+            | (AggFn::Count, false, AggKind::Count)
+            | (AggFn::Sum, _, AggKind::Sum)
+            | (AggFn::Avg, _, AggKind::Avg)
+            | (AggFn::Min, _, AggKind::Min)
+            | (AggFn::Max, _, AggKind::Max)
+            | (AggFn::ApproxDistinct, _, AggKind::ApproxDistinct)
+    )
 }
 
 fn collect_filters<'a>(

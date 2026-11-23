@@ -4,42 +4,8 @@ import { streamWasmImports } from "./wasm-imports.ts";
 export type { PhaseMark } from "./wasm-imports.ts";
 export { setPhaseSink, streamWasmImports } from "./wasm-imports.ts";
 
-let wasmPromise: Promise<WcolStreamWasm> | null = null;
-
-
 function nodeSpecifier(name: string): string {
   return ["node", name].join(":");
-}
-
-/** Node host: read the release artifact. Durable Objects call [`setStreamWasm`] instead. */
-export async function loadStreamWasm(): Promise<WcolStreamWasm> {
-  if (!wasmPromise) {
-    const fs = (await import(nodeSpecifier("fs"))) as {
-      existsSync(path: string): boolean;
-      readFileSync(path: string): Uint8Array;
-    };
-    const path = (await import(nodeSpecifier("path"))) as {
-      join(...parts: string[]): string;
-      resolve(...parts: string[]): string;
-      dirname(path: string): string;
-    };
-    const url = (await import(nodeSpecifier("url"))) as {
-      fileURLToPath(url: string): string;
-    };
-    const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "../../..");
-    const candidates = [
-      path.join(root, "rust/target/wasm32-unknown-unknown/release/wcol.wasm"),
-      path.join(root, "rust/target/wasm32-unknown-unknown/release/wcol_stream_operators.wasm"),
-    ];
-    const found = candidates.find((candidate) => fs.existsSync(candidate));
-    if (!found) {
-      throw new Error(
-        "stream wasm not found; build with: cargo build -p wcol --target wasm32-unknown-unknown --release",
-      );
-    }
-    wasmPromise = instantiateWithTrace(fs.readFileSync(found));
-  }
-  return wasmPromise;
 }
 
 let nodeWasmPromise: Promise<WcolStreamWasm> | null = null;
@@ -110,14 +76,10 @@ export function instantiateNodeWasm(): Promise<WcolStreamWasm> {
   return instantiateRelease("wcol_node.wasm");
 }
 
-/** Coordinator Wasm, default build without DataFusion (`npm run build:coordinator-wasm`). */
+/** Coordinator Wasm (`npm run build:coordinator-wasm`). */
 export function loadCoordinatorWasm(): Promise<WcolStreamWasm> {
   coordinatorWasmPromise ??= instantiateRelease("wcol_coordinator.wasm");
   return coordinatorWasmPromise;
-}
-
-export function setStreamWasm(wasm: Uint8Array | WebAssembly.Module): void {
-  wasmPromise = instantiateWithTrace(wasm);
 }
 
 /** Wasm32 linear-memory offsets from FFI are unsigned; JS number can look negative above 2GiB. */

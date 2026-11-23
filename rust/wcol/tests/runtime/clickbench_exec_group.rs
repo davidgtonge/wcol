@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use wcol::plan::catalog_from_footer;
 
 use wcol::ops::query::{finalize_groups, PartialKeyPart};
-use wcol::plan::{plan_query_dispatch, Frontend, PhysicalPlannerConfig, QueryDispatch};
+use wcol::plan::{plan_query_dispatch, PhysicalPlannerConfig, QueryDispatch};
 use wcol::stream::core::{Action, WCS_HEADER_BYTES, WCS_MAGIC};
 use wcol::stream::partials::partial_snapshot_from_wire;
 use wcol::{open_plan, open_wcol_plan, CatalogColumn, Plan};
@@ -118,7 +118,6 @@ fn assert_query_matches(
         1,
         batch_rows,
         &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
     )
     .unwrap();
     let got = match dispatch {

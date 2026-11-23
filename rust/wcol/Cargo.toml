@@ -18,27 +18,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# DataFusion's uuid needs some randomness source on wasm32. Only linked with `--features datafusion`.
-# `getrandom_backend="custom"` (see `.cargo/config.toml`) keeps this off the JS imports the
-# stream host does not provide.
-uuid = { version = "1", features = ["rng-getrandom"], optional = true }
-getrandom = { version = "0.3", optional = true }
-
 [dev-dependencies]
 compact-parquet-thrift = { path = "../../../compact-parquet-thrift" }
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(getrandom_backend, values("custom"))'] }
 
 [features]
 default = []
 alloc-track-native = ["wcol-engine/alloc-track-native"]
 memory-plateau = ["alloc-track-native", "wcol-engine/memory-plateau"]
 native = []
-# Opt-in DataFusion SQL frontend (`plan::sql` in `wcol-plan`). Our parser is always compiled.
-# Ordinary `cargo build` / `cargo test` / `cargo check` do not pass this flag.
-datafusion = ["wcol-plan/datafusion", "dep:uuid", "dep:getrandom"]
 
 [[test]]
 name = "pipeline_json"

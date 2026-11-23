@@ -27,13 +27,19 @@ pub(super) fn build_ops(
     units: &[Unit],
     nodes: &[NodeId],
     fetches: &[FetchRequest],
-    row_topk: Option<(Vec<SortKey>, u64)>,
-    export_row_group_rows: Option<u32>,
-    partition_columns: &[u32],
-    hash: &HashAggregateConfig,
+    config: &PhysicalPlannerConfig,
     estimated_groups: u64,
     metadata: &ParquetMetadataCatalog,
 ) -> Result<(Vec<Operator>, u32), PlanError> {
+    let export_row_group_rows = config.parquet_row_group_rows;
+    let partition_columns = config.partition_columns.as_slice();
+    let hash = &config.hash_aggregate;
+    // A node's rows are final only for a plain row scan. Below a join or an aggregate a
+    // per-node top-k would drop rows that still have to be matched or grouped.
+    let row_topk = match (&shape.input, &shape.aggregate) {
+        (Input::Scan(_), None) => row_topk_spec(&shape.after),
+        _ => None,
+    };
     let (local_export, coordinator_export) =
         export_placement(shape, export_row_group_rows, !partition_columns.is_empty())?;
     let source_rows = units

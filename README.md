@@ -1,123 +1,89 @@
-# wcol
+# WCOL
 
-**Rust-first stream work:** see [WORKING_ON.md](./WORKING_ON.md). Legacy TS graph execution and old docs live under [archive/](./archive/README.md).
+Distributed SQL over Parquet on Cloudflare. A Rust engine, compiled to Wasm, runs inside Workers and Durable Objects. Native Rust reducers run in Cloudflare Containers when a query's group state is too large for Durable Objects.
 
-**Columnar storage for the browser and native** — explore whether you can match Parquet-class compression with a Wasm decoder small enough to ship in a web page, and run DuckDB-style analytical queries across multiple workers.
+It runs ClickBench (100M rows, one 14.8 GB Parquet file in R2) with nothing running between queries. Each job wakes the Durable Objects it needs. They hibernate when the job ends, and any containers are destroyed.
 
-## The idea
+```text
+POST /jobs ─► coordinator DO ─► plans the SQL into a graph of tasks
+                    │
+                    ├─► scan DOs        read Parquet from R2 by range, filter, partially aggregate
+                    │        │ hash-partitioned streams (DO RPC)
+                    ├─► reducer DOs     merge groups; spill sorted runs to R2
+                    │   or containers   native reducer, up to the instance's memory, local-disk spill
+                    │        │
+                    └─► finalizer       sort / limit / format, in the coordinator
+```
 
-I wanted to see if I could build a columnar format that:
+## What is here
 
-1. **Compresses like Parquet** — dictionary encoding, typed pages, LZ4 chunk compression, range-friendly layout for HTTP `Range` reads.
-2. **Decodes in a tiny Wasm module** — design target **&lt;100 KB gzipped** over the wire. With `npm run build:wasm:size` the SIMD decoder is **~77 KB gzipped** (~196 KB raw). The default release build trades size for speed (**~117 KB gzipped**, ~335 KB raw).
-3. **Queries like DuckDB** — filters, group-by, aggregates, top-K, late `SELECT` projection over millions of rows without loading everything into JS heap.
-4. **Scales across processes** — browser `Worker` pool for chunk-parallel scans; native thread pool in `wcol-cli` for the same plan on disk.
+| Path | What it is |
+|---|---|
+| `rust/wcol-engine` | Execution engine: Parquet decode, columnar batches, operators, the graph host that runs a task's fragment, spill |
+| `rust/wcol-plan` | SQL parser, logical and physical planner, job planning. Runs in the coordinator |
+| `rust/wcol` | Facade over the two, and the Rust test suite |
+| `rust/wcol-node-wasm` | Wasm for scan and reducer Durable Objects (no planner) |
+| `rust/wcol-coordinator-wasm` | Wasm for the coordinator: planning and the finalizer |
+| `rust/wcol-reducer` | Native hash reducer served over HTTP, for container reducers |
+| `src/runtime` | TypeScript host: feeds bytes and streams to the Wasm and runs the task graph. No SQL or column logic |
+| `cloudflare/src` | The Workers: the coordinator and node Durable Objects, the container reducer class, the HTTP API |
+| `cloudflare/console` | A browser console: submit queries, watch the graph run, see bytes and cost |
+| `tests` | TypeScript tests, run against the release Wasm |
+| `scripts` | Build, deploy and benchmark scripts |
+| `docs` | [Architecture](docs/architecture.md), [job API](docs/job-api.md), [container reducers](docs/containers.md), [console](docs/console.md), [ClickBench results](docs/clickbench-results.md), [comparison with Athena](docs/clickbench-vs-athena.md), and [illustrated explainers](docs/explainers/index.html) |
 
-**wcol** is the result: a `.wcol` file format (v7), Rust encoder/decoder, a ~30 KB JS orchestration layer, and optional apps on top.
+Parquet's Thrift metadata and page decoding come from [`compact-parquet-thrift`](https://github.com/davidgtonge/compact-parquet-thrift). It is a path dependency: clone it next to this repository.
 
-## Monorepo layout
+```text
+parent/
+├── compact-parquet-thrift/
+└── wcol/
+```
 
-| Path | Required | What it is |
-|------|----------|------------|
-| `rust/wcol` | yes | Engine: Parquet → WCS stream → GraphHost operators, distributed plans (Cloudflare Wasm) |
-| `archive/rust/wcol-file` | archived | `.wcol` v7 file engine (decode, encode, file query kernels) |
-| `archive/rust/wcol-wasm` | archived | Browser Wasm cdylib (re-exports `wcol_file::decode`) |
-| `archive/rust/wcol-cli` | archived | `convert`, `query`, `bench`, DuckDB parity, `parquet` inspect |
-| `src/` | yes | JS runtime — `WcolFile`, worker pool, `QueryPlan` |
-| `apps/explorer/` | **optional** | Crates.io explorer demo (Preact + `wcol-engine`) |
-| `engine-shell/` | explorer only | Git submodule for the demo worker scaffold |
+## Build and test
 
-You do **not** need `apps/explorer` or `engine-shell` to use the columnar runtime or CLI.
-
-## Quick start (runtime only)
+You need Node 22, the Rust toolchain pinned in `rust/rust-toolchain.toml` (rustup installs it), the `wasm32-unknown-unknown` target, and `wasm-opt` from Binaryen.
 
 ```bash
-git clone https://github.com/davidgtonge/wcol.git
-cd wcol
 npm install
-npm run build          # Wasm + browser bundle → dist/browser/
+npm run build          # both Wasm modules, then both Worker bundles
+npm test               # TypeScript tests
+npm run test:rust      # Rust tests
+npm run typecheck
+npm run lint:rust      # rustfmt and clippy
 ```
 
-```js
-import { WcolFile, buildPlan } from "./dist/browser/main.js";
+`npm run test:slow` runs the long spill tests. `npm run clickbench:local` runs ClickBench queries on Miniflare against a local Parquet file.
 
-const file = await WcolFile.open("https://example.com/data.wcol");
-const result = await file.query(
-  buildPlan({
-    filters: [{ column: "country", op: "==", value: "US" }],
-    aggregates: [{ column: "price", op: "sum" }],
-    limit: 100,
-  }),
-  { workers: 4 },
-);
-```
+## Deploy to Cloudflare
 
-## CLI (native, multi-worker)
+You need a Cloudflare account with Workers Paid (Durable Objects with SQLite storage, and Containers), an R2 bucket, and Docker to build the reducer image.
+
+1. Set `bucket_name` under `[[r2_buckets]]` in `cloudflare/wrangler.toml` and `cloudflare/wrangler.node.toml`, and upload your Parquet file to it.
+2. `npm run build:reducer` cross-compiles the native reducer for the container image.
+3. `npm run deploy` deploys the node Worker, then the coordinator Worker, and waits for the rollout.
+4. Optional: `npx wrangler secret put WCOL_API_TOKEN --config cloudflare/wrangler.toml` makes `/jobs` require `Authorization: Bearer <token>`.
+
+The coordinator's URL serves the console at `/`. A job is a single request:
 
 ```bash
-cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- convert data/hits.parquet -o data/hits.wcol
-cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- query --file data/hits.wcol \
-  --sql "SELECT COUNT(*) FROM hits;" --workers 4 --format summary
-cargo run --manifest-path archive/rust/Cargo.toml -p wcol-cli -- parquet data/hits.parquet --column downloads
+curl -X POST "$WCOL_BASE_URL/jobs" \
+  -H "authorization: Bearer $WCOL_API_TOKEN" \
+  -d '{
+    "sources": { "hits": { "bucket": "output", "key": "hits.parquet" } },
+    "sql": "SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10",
+    "output": { "format": "json" }
+  }'
 ```
 
-## Optional explorer demo
+`npm run clickbench:cloudflare` runs the ClickBench ladder against a deployment and checks answers against DuckDB. See the script's header for its options.
 
-Interactive workspace over [crates.io](https://crates.io/data-access) dumps — query builder, charts, crate detail, saved views.
+## Status
 
-```bash
-git clone --recurse-submodules https://github.com/davidgtonge/wcol.git
-cd wcol
-npm install
-npm run build -w @wcol/explorer
-npm run serve -w @wcol/explorer   # http://localhost:5173
-```
+WCOL is a research project, not a product. It plans one source table per query: joins, window functions and a few ClickBench queries (Q18, Q35, Q42) are not supported. The results so far are in [docs/clickbench-results.md](docs/clickbench-results.md).
 
-**Live demo:** https://davidgtonge.github.io/wcol/ (built from `apps/explorer` in CI)
-
-Bundled demo datasets (~50 MB) ship in `apps/explorer/demo/data/`. Larger crates.io tables can be encoded locally under `data/` — see [apps/explorer/demo/data/README.md](apps/explorer/demo/data/README.md).
-
-GitHub Pages builds with the **speed** Wasm profile (`npm run build:wasm:speed`) for faster queries in the browser.
-
-## Architecture (summary)
-
-```txt
-JS (src/runtime)     — byte I/O, chunk queue, worker pool, result merge
-       ↓ QueryPlan
-Wasm (wcol-decoder)  — page decode, filters, group-by, aggregates
-```
-
-- **One query at a time per open file** — plan handle lifecycle is explicit.
-- **Parallel when safe** — multiple workers scan disjoint chunks; reducer merges partial aggregates.
-- **Worker failure → local fallback** when workers were auto-detected.
-
-The same kernels also run as a streaming graph: partial aggregates are reduced as chunks finish, and a second mode emits projected columnar batches. Browser edges use `MessageChannel` credits. A Cloudflare Durable Object can host each node and pull framed byte streams from its upstreams. See [docs/STREAM.md](docs/STREAM.md) and [docs/OPERATORS.md](docs/OPERATORS.md).
-
-Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FORMAT.md](docs/FORMAT.md).
-
-## Comparisons
-
-| | Parquet / DuckDB | wcol |
-|--|------------------|------|
-| **Storage** | baseline | **59–73%** of Parquet size on crates + ClickBench subsets ([details](docs/COMPARISONS.md#storage-parquet-vs-wcol)) |
-| **Native query speed** (500k ClickBench rows) | DuckDB in-process on Parquet | **~2–3× faster** on filter/group-by; DuckDB faster on exact `COUNT(DISTINCT)` ([details](docs/COMPARISONS.md#query-speed-duckdb-native-vs-wcol-native)) |
-| **In-browser engine** | duckdb-wasm ~**6.9 MB** gz | Wasm **77–114 KB** gz + ~14 KB JS ([details](docs/COMPARISONS.md#decoder--query-engine-size-duckdb-wasm-vs-wcol-wasm)) |
-
-Reproduce locally: `npm run compare` (needs `data/` fixtures and `cargo build -p wcol-cli --release --manifest-path archive/rust/Cargo.toml`).
-
-## Tests
-
-```bash
-npm run check:rust     # cargo check all core crates
-npm run test           # JS runtime + plan unit tests
-npm run test -w @wcol/explorer   # explorer query catalog (uses committed demo/data fixtures)
-```
-
-## Related
-
-- [query-predicate](https://github.com/davidgtonge/query-predicate) — Mongo-style filter predicates
-- [engine-shell](https://github.com/davidgtonge/engine-shell) — only used by `apps/explorer`
+Contributors, human or AI, should read [AGENTS.md](AGENTS.md), which sets out how the code is meant to be structured.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT

@@ -3,21 +3,13 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
-use wcol::plan::{plan_query_dispatch, Frontend, PhysicalPlannerConfig, QueryDispatch};
+use wcol::plan::{plan_query_dispatch, PhysicalPlannerConfig, QueryDispatch};
 use wcol::stream::core::{Action, WCS_HEADER_BYTES, WCS_MAGIC};
 use wcol::{open_plan, open_wcol_plan, partial_first_sum_i, Plan};
 
 fn node_program(sql: &str, plan: &Plan) -> Vec<u8> {
-    let (dispatch, _) = plan_query_dispatch(
-        sql,
-        "flat",
-        plan,
-        1,
-        4,
-        &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
-    )
-    .unwrap();
+    let (dispatch, _) =
+        plan_query_dispatch(sql, "flat", plan, 1, 4, &PhysicalPlannerConfig::default()).unwrap();
     match dispatch {
         QueryDispatch::Nodes(programs) => {
             assert_eq!(programs.len(), 1);

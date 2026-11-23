@@ -30,8 +30,7 @@ fn tiny_chunks_cost_their_requests_not_just_their_bytes() {
     );
     // Placement, shaped like full-hits Q1: 40 row groups whose column compressed to
     // almost nothing, then 4 full ones. Each unit is one request.
-    let sizes: Vec<u64> = std::iter::repeat(100u64)
-        .take(40)
+    let sizes: Vec<u64> = std::iter::repeat_n(100u64, 40)
         .chain([2 << 20; 4])
         .collect();
     let requests_per_node = |weights: &[u64]| {

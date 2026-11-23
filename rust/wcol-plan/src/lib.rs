@@ -1,7 +1,4 @@
 //! Coordinator planner. Depends on `wcol-engine`. The engine does not depend on this crate.
-//!
-//! The hand parser (`plan::sql_parser`) is always compiled. DataFusion (`plan::sql`) is
-//! `--features datafusion` only.
 
 #![deny(unused, dead_code)]
 

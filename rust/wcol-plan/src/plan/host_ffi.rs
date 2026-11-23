@@ -1,4 +1,13 @@
 //! Coordinator FFI. SQL enters here, not in the engine.
+//!
+//! # Safety
+//!
+//! Every export shares one contract: each `(ptr, len)` pair names `len` valid bytes in Wasm
+//! memory (writable for output buffers), and the host is single-threaded and never calls in
+//! re-entrantly.
+
+// The shared contract above covers each `unsafe extern "C"` export.
+#![allow(clippy::missing_safety_doc)]
 
 use std::cell::RefCell;
 use std::slice;

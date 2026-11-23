@@ -16,8 +16,8 @@ pub use coordinator::{
 };
 pub use fragment::{
     decode_node_fragment, encode_hash_reducer_program, encode_node_fragment,
-    encode_node_fragment_program, FragmentError, FragmentStep, FragmentTail, NodeFragment,
-    PartitionInput,
+    encode_node_fragment_program, FragmentError, FragmentStep, FragmentTail, HashReducerSpec,
+    NodeFragment, PartitionInput,
 };
 pub use ingest::{
     decode_groups_from_ingest, dict_columns_from_ingest_groups, ingest_groups_from_plan,

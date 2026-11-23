@@ -54,12 +54,10 @@ enum Driver {
         cursor: usize,
     },
     Graph {
-        host: WcolSession,
+        host: Box<WcolSession>,
         finished: bool,
-        read_at_ticket: u32,
-        read_at_source: u16,
-        read_at_offset: u64,
-        read_at_len: u32,
+        /// Exposed ReadAt `(ticket, source, offset, len)`; all zero when none is pending.
+        read_at: (u32, u16, u64, u32),
     },
 }
 
@@ -104,12 +102,9 @@ impl StreamPoolSession {
             input_bytes,
             output_bytes,
             Driver::Graph {
-                host,
+                host: Box::new(host),
                 finished: false,
-                read_at_ticket: 0,
-                read_at_source: 0,
-                read_at_offset: 0,
-                read_at_len: 0,
+                read_at: (0, 0, 0, 0),
             },
         )
     }
@@ -344,20 +339,14 @@ impl StreamPoolSession {
             Driver::Graph {
                 host,
                 finished,
-                read_at_ticket,
-                read_at_source,
-                read_at_offset,
-                read_at_len,
+                read_at,
             } => Self::step_graph_ports(
                 &mut self.inputs,
                 &mut self.outputs,
                 &mut self.error,
                 host,
                 finished,
-                read_at_ticket,
-                read_at_source,
-                read_at_offset,
-                read_at_len,
+                read_at,
                 max_work as usize,
             ),
         };
@@ -479,10 +468,7 @@ impl StreamPoolSession {
         error: &mut Option<WcolError>,
         host: &mut WcolSession,
         finished: &mut bool,
-        read_at_ticket: &mut u32,
-        read_at_source: &mut u16,
-        read_at_offset: &mut u64,
-        read_at_len: &mut u32,
+        read_at: &mut (u32, u16, u64, u32),
         max_work: usize,
     ) -> (u32, bool) {
         let mut work: u32 = 0;
@@ -561,11 +547,7 @@ impl StreamPoolSession {
                     break;
                 }
                 Action::ReadAt => {
-                    let (t, s, o, l) = host.read_at();
-                    *read_at_ticket = t;
-                    *read_at_source = s;
-                    *read_at_offset = o;
-                    *read_at_len = l;
+                    *read_at = host.read_at();
                     break;
                 }
                 Action::SpillExec => return (work, true),
@@ -655,18 +637,7 @@ impl StreamPoolSession {
 
     pub fn read_at(&self) -> (u32, u16, u64, u32) {
         match &self.driver {
-            Driver::Graph {
-                read_at_ticket,
-                read_at_source,
-                read_at_offset,
-                read_at_len,
-                ..
-            } => (
-                *read_at_ticket,
-                *read_at_source,
-                *read_at_offset,
-                *read_at_len,
-            ),
+            Driver::Graph { read_at, .. } => *read_at,
             Driver::Echo { .. } => (0, 0, 0, 0),
         }
     }
@@ -690,18 +661,8 @@ impl StreamPoolSession {
     /// The host has taken the exposed ReadAt; clear the slot so stepping can expose the
     /// next one while earlier reads are still in flight (bounded by the plan's fetch depth).
     pub fn take_read_at(&mut self) {
-        if let Driver::Graph {
-            read_at_ticket,
-            read_at_source,
-            read_at_offset,
-            read_at_len,
-            ..
-        } = &mut self.driver
-        {
-            *read_at_ticket = 0;
-            *read_at_source = 0;
-            *read_at_offset = 0;
-            *read_at_len = 0;
+        if let Driver::Graph { read_at, .. } = &mut self.driver {
+            *read_at = (0, 0, 0, 0);
         }
     }
 

@@ -20,7 +20,7 @@ fn hits_path() -> PathBuf {
 }
 
 fn metadata_catalog(footer: &wcol::formats::parquet::schema::Plan) -> ParquetMetadataCatalog {
-    ParquetMetadataCatalog::from_footer("hits", "hits_subset_500k.parquet", &footer)
+    ParquetMetadataCatalog::from_footer("hits", "hits_subset_500k.parquet", footer)
 }
 
 fn hits_columns(

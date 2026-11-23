@@ -18,6 +18,9 @@ pub enum DictEntries {
     },
 }
 
+/// `(offsets, bytes)` of a byte-array dictionary; see [`DictEntries::Bytes`].
+pub type ByteEntries<'a> = (&'a Arc<Vec<u32>>, &'a Arc<Vec<u8>>);
+
 /// One installed dictionary for a `(dict_scope, column_id)` pair.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DictionaryValues {
@@ -41,7 +44,7 @@ impl DictionaryValues {
         }
     }
 
-    pub fn byte_entries(&self) -> Option<(&Arc<Vec<u32>>, &Arc<Vec<u8>>)> {
+    pub fn byte_entries(&self) -> Option<ByteEntries<'_>> {
         match &self.entries {
             DictEntries::Int(_) | DictEntries::Float(_) => None,
             DictEntries::Bytes { offsets, bytes } => Some((offsets, bytes)),

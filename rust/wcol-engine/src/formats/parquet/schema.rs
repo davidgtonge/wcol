@@ -176,11 +176,14 @@ pub fn leaf_int_bounds(plan: &Plan) -> (Vec<Option<i64>>, Vec<Option<i64>>) {
     (mins, maxs)
 }
 
+/// One optional byte bound per leaf.
+pub type LeafByteBounds = Vec<Option<Vec<u8>>>;
+
 /// Global lexicographic min/max per leaf from footer chunk statistics, when present.
-pub fn leaf_byte_bounds(plan: &Plan) -> (Vec<Option<Vec<u8>>>, Vec<Option<Vec<u8>>>) {
+pub fn leaf_byte_bounds(plan: &Plan) -> (LeafByteBounds, LeafByteBounds) {
     let count = plan.leaves.len();
-    let mut mins: Vec<Option<Vec<u8>>> = vec![None; count];
-    let mut maxs: Vec<Option<Vec<u8>>> = vec![None; count];
+    let mut mins: LeafByteBounds = vec![None; count];
+    let mut maxs: LeafByteBounds = vec![None; count];
     for chunk in &plan.chunks {
         let index = chunk.leaf as usize;
         if index >= count {

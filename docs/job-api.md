@@ -1,0 +1,102 @@
+# Job API
+
+Everything goes through one route. `POST /jobs` takes a job, and `GET /jobs/{jobId}` reports on it. When the Worker has a `WCOL_API_TOKEN` secret, both routes need `Authorization: Bearer <token>`.
+
+## Routes
+
+| Route | Answer |
+|---|---|
+| `POST /jobs` | A `json` job that finishes within the sync budget returns its result. Any other job returns `202` with `{ "jobId": ... }` |
+| `GET /jobs/{jobId}` | State (`running`, `complete`, `failed`), attempts, node count, timings and bytes read; plus the result, manifest key or output key once complete |
+| `GET /jobs/{jobId}/live` | A snapshot of the running graph: tasks, edges, bytes and data centres. The console polls this |
+| `GET /version` | The deploy id. The deploy script waits for it to change |
+| `GET /` | The [console](console.md) |
+
+The sync budget is `WCOL_JOB_SYNC_MS` (10 s by default). With `0`, every job is asynchronous.
+
+## Request
+
+```json
+{
+  "idempotencyKey": "client-token",
+  "sources": { "hits": { "bucket": "output", "key": "hits.parquet" } },
+  "sql": "SELECT CounterID, COUNT(*) AS c FROM hits GROUP BY CounterID ORDER BY c DESC LIMIT 20",
+  "output": { "format": "json", "rowCap": 1000 }
+}
+```
+
+- `sources` maps each table name to one object. It can be `{ "bucket", "key" }`, `{ "bucket", "keys": [...] }` (several objects with one schema, read as one table), or a URL. A prefix or a glob is not a source. `bucket` names an R2 binding: Workers have one, `output`.
+- `sql` is optional for a Parquet export. Without it, the export copies every row and column. `FROM` must name a table in `sources`. A job reads one table: joins are not supported yet.
+- `idempotencyKey` is optional. A repeated key returns the first job instead of starting another.
+
+### Tuning
+
+These are optional. Without them, the planner and the coordinator decide.
+
+| Field | Meaning |
+|---|---|
+| `maxNodes` | The most scan tasks (default `WCOL_MAX_NODES`, 32) |
+| `hashReducers` | A fixed reducer count, instead of the planner's estimate |
+| `reducers` | `"auto"` (default), `"node"` or `"container"`: where hash reducers run |
+| `reducerInstance` | The container instance type: `lite`, `basic` (default), `standard-1` to `standard-4` |
+| `targetGroupBytes` | A reducer's group table size before it spills (16 MiB on nodes; on containers, the instance's memory less 128 MiB) |
+| `groupSpill` | `false` makes a reducer fail at its hard limit instead of spilling |
+
+With `"reducers": "auto"`, the coordinator compares the planner's estimate of group state with what node reducers can hold in memory (128 of them × 16 MiB). It sends larger aggregates to 64 `basic` containers. See [containers](containers.md).
+
+## Outputs
+
+### `json`
+
+```json
+{ "format": "json", "rowCap": 1000 }
+```
+
+Returns rows. Without a `LIMIT`, the coordinator stops at `rowCap`.
+
+### `parquet`
+
+```json
+{
+  "format": "parquet",
+  "bucket": "output",
+  "prefix": "exports/hits/",
+  "targetFileBytes": 536870912,
+  "targetRowGroupRows": 65536
+}
+```
+
+Writes Parquet parts under `prefix`, and then commits them by publishing `<prefix>_manifest.json`. A scan, filter or projection writes one part per scan task. An aggregate, sort or limit writes one file from the finalizer. `targetFileBytes` (default 512 MiB) guides the number of writers and is not a maximum. `partitionBy` is parsed and validated but not executed yet.
+
+### `concat`
+
+```json
+{
+  "output": { "format": "concat", "bucket": "output", "key": "hits/merged.parquet" },
+  "inputs": [
+    { "bucket": "output", "key": "hits/part-0.parquet" },
+    { "bucket": "output", "key": "hits/part-1.parquet" }
+  ]
+}
+```
+
+Copies the inputs' row groups into one file without decoding them. It takes no `sources` or `sql`. An input with `"rowGroups": [start, end]` copies only that range, which splits a file. `scripts/cf-partition-hits.ts` uses this to split `hits.parquet` into parts.
+
+### `CREATE MODEL`
+
+```json
+{
+  "sources": { "customers": { "bucket": "output", "key": "customers.parquet" } },
+  "sql": "CREATE MODEL segments OPTIONS (model_type = 'kmeans', num_clusters = 12) AS SELECT income, spending FROM customers"
+}
+```
+
+Trains k-means over numeric columns. Each scan loads its partition once and keeps it resident. The coordinator then runs the rounds, and commits each one so that a retry resumes from the last committed round. The model is written to `_models/{name}/model.json`. Options are `num_clusters` (32), `max_iterations` (100), `seed` (42) and `tolerance` (1e-4). `WCOL_RESIDENT_MEMORY_BYTES` on the node Worker caps a partition's feature storage (40 MiB by default).
+
+## Attempts and output keys
+
+Each attempt writes under `_jobs/<jobId>/...`, keyed by task and attempt, so a retry never overwrites the attempt before it. Publishing the result record or the manifest is the commit. Readers should read the manifest, and ignore `_jobs/`. Superseded attempts' objects are not cleaned up yet.
+
+## Errors
+
+Planning errors (unsupported SQL, an unknown table or column, an invalid body) return `400` with `{ "error": ... }`, and the job is not retried. Execution errors are retried as new attempts, up to three. A job that still fails reports `failed` with the last error; a synchronous `json` request that fails gets `500` with `{ "jobId", "error" }`.

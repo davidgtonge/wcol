@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{SpillScanBatch, SpillScanResume, SpillStore};
+use super::{KeyPayload, SpillScanBatch, SpillScanResume, SpillStore};
 
 /// Host suspension is a normal progress state. `Err` is only a real failure.
 #[derive(Debug)]
@@ -319,7 +319,7 @@ impl SpillStore for HostSpillStore {
         let session = self.bridge.borrow().session;
         let mut bridge = self.bridge.borrow_mut();
         await_host(
-            &mut *bridge,
+            &mut bridge,
             HostSpillRequest {
                 op: SPILL_OP_APPEND,
                 session,
@@ -407,7 +407,7 @@ pub fn encode_append_batch(out: &mut Vec<u8>, rows: &[(Vec<u8>, Vec<u8>)]) -> Re
     Ok(())
 }
 
-pub fn decode_append_batch(bytes: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, String> {
+pub fn decode_append_batch(bytes: &[u8]) -> Result<Vec<KeyPayload>, String> {
     if bytes.is_empty() {
         return Ok(Vec::new());
     }

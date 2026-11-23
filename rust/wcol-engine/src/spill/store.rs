@@ -29,9 +29,15 @@ pub struct SpillScanResume {
     pub seq: i64,
 }
 
+/// `(seq, key, payload)` of one spilled row.
+pub type KeyedRow = (i64, Vec<u8>, Vec<u8>);
+
+/// `(key, payload)` of one row in an append batch.
+pub type KeyPayload = (Vec<u8>, Vec<u8>);
+
 #[derive(Clone, Debug)]
 pub struct SpillScanBatch {
-    pub rows: Vec<(i64, Vec<u8>, Vec<u8>)>,
+    pub rows: Vec<KeyedRow>,
     /// No further rows after this batch (empty batch implies exhausted).
     pub exhausted: bool,
 }

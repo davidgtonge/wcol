@@ -1,5 +1,5 @@
 /** The R2 records a node task leaves for the coordinator: errors, progress, timing, traces. */
-import { type DualR2Env } from "../r2.ts";
+import { type R2Env } from "../r2.ts";
 import { type IsolateProgress, type RunTaskParams, type TaskTimingRecord } from "./types.ts";
 
 export function traceObjectKey(jobId: string, taskId: number): string {
@@ -23,7 +23,7 @@ export function admitObjectKey(jobId: string, attempt: number, taskId: number): 
 }
 
 export async function recordTaskError(
-  env: DualR2Env,
+  env: R2Env,
   jobId: string,
   attempt: number,
   taskId: number,
@@ -43,7 +43,7 @@ export async function recordTaskError(
 }
 
 export async function writeIsolateProgress(
-  env: DualR2Env,
+  env: R2Env,
   jobId: string,
   attempt: number,
   taskId: number,
@@ -53,7 +53,7 @@ export async function writeIsolateProgress(
   await env.OUTPUT.put(progressObjectKey(jobId, attempt, taskId), JSON.stringify(snapshot));
 }
 
-export async function writeTaskTiming(env: DualR2Env, params: RunTaskParams, record: TaskTimingRecord): Promise<void> {
+export async function writeTaskTiming(env: R2Env, params: RunTaskParams, record: TaskTimingRecord): Promise<void> {
   if (!env.OUTPUT) return;
   await env.OUTPUT.put(slotsObjectKey(params.jobId, params.executionAttempt, params.taskId), JSON.stringify(record));
 }

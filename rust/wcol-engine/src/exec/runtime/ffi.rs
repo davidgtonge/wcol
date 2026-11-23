@@ -1,4 +1,14 @@
 //! Wasm ABI for the production operator bundle (same surface as `wcol-stream-core`).
+//!
+//! # Safety
+//!
+//! Every export shares one contract: each `(ptr, len)` pair names `len` valid bytes in Wasm
+//! memory, a pointer passed to `wcs_dealloc` came from `wcs_alloc` with the same length, a
+//! handle pointer is null or live (not yet closed), and the host is single-threaded and never
+//! calls in re-entrantly.
+
+// The shared contract above covers each `unsafe extern "C"` export.
+#![allow(clippy::missing_safety_doc)]
 
 use std::alloc::{alloc, dealloc, Layout};
 #[cfg(feature = "coordinator-iterative-ffi")]

@@ -11,8 +11,8 @@ use wcol::exec::operators::{RowBatchWcsEgress, RowBatchWcsIngress};
 use wcol::formats::parquet::{open_plan, ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn};
 use wcol::open_wcol_plan;
 use wcol::plan::{
-    encode_coordinator_program, plan_query_dispatch, Frontend, OpKind, PhysicalPlannerConfig,
-    QueryDispatch, SortTarget, WcolPhysicalPlan,
+    encode_coordinator_program, plan_query_dispatch, OpKind, PhysicalPlannerConfig, QueryDispatch,
+    SortTarget, WcolPhysicalPlan,
 };
 use wcol::stream::core::{Action, WCS_HEADER_BYTES, WCS_MAGIC, WCS_MAX_PAYLOAD};
 use wcol::stream::{DictEntries, DictionaryValues, OwnedWcolBatch, WcolColumn};
@@ -249,7 +249,6 @@ fn execute(path: &Path, sql: &str, nodes: u32, reverse_nodes: bool) -> Ran {
         nodes,
         BATCH_ROWS,
         &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
     )
     .unwrap();
     let QueryDispatch::Rows {

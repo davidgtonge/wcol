@@ -15,7 +15,7 @@ mod page_cursor;
 mod page_scratch;
 mod replay_metrics;
 
-pub use batch_decode::{ParquetDecode, HOST_READ_LIMIT};
+pub use batch_decode::{ChunkSpec, ParquetDecode, RowGroupSpec, HOST_READ_LIMIT};
 pub use decode::{DecodeProgress, ScanLimits};
 pub use dictionary::chunk_has_dictionary_page;
 pub use encode::{ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn};
@@ -151,7 +151,7 @@ pub fn aggregate_column(path: &std::path::Path, name: &str) -> Result<Agg, Error
         .position(|leaf| leaf.name == name)
         .ok_or(Error::Message("column not found"))?;
     let leaf = plan.leaves[leaf_index].clone();
-    if !matches!(leaf.physical, 0 | 1 | 2) {
+    if !matches!(leaf.physical, 0..=2) {
         return Err(Error::Message(
             "aggregate_column scans boolean, int32, and int64 columns",
         ));

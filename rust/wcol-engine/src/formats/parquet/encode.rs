@@ -1529,7 +1529,7 @@ fn cell_payload(
 }
 
 fn split_bytes(offsets: &[u32], bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-    if offsets.len() < 1 {
+    if offsets.is_empty() {
         return Err("dictionary offsets are empty".to_string());
     }
     let mut out = Vec::with_capacity(offsets.len() - 1);

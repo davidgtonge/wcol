@@ -80,9 +80,7 @@ impl GraphHostCore {
         self.spill_drive.chunks_finished = true;
     }
 
-    pub(super) fn wcs_ports_pending(
-        &mut self,
-    ) -> Option<(&mut Vec<WcsPort>, &mut VecDeque<(u32, CompleteFrame)>)> {
+    pub(super) fn wcs_ports_pending(&mut self) -> Option<(&mut Vec<WcsPort>, &mut PendingFrames)> {
         match &mut self.ingress {
             GraphHostIngress::WcsRowBatches { ports, pending, .. }
             | GraphHostIngress::WcsPartialReduce { ports, pending, .. } => Some((ports, pending)),

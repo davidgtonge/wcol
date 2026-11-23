@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::error::{WcolError, WcolResult};
 use crate::formats::parquet::schema::Plan;
+use crate::formats::parquet::RowGroupSpec;
 
 /// Decode memory caps (Wasm-safe; no env).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -55,9 +56,7 @@ pub fn dict_columns_from_ingest_groups(groups: &[IngestGroup]) -> HashSet<u32> {
     out
 }
 
-pub fn decode_groups_from_ingest(
-    groups: &[IngestGroup],
-) -> Vec<(u32, u64, Vec<(u32, u64, i32, u32)>)> {
+pub fn decode_groups_from_ingest(groups: &[IngestGroup]) -> Vec<RowGroupSpec> {
     groups
         .iter()
         .map(|group| {
@@ -95,16 +94,15 @@ pub fn ingest_groups_from_plan(plan: &Plan, column_ids: &[u32]) -> Vec<IngestGro
             .filter(|c| c.row_group as usize == row_group)
         {
             rows = chunk.rows.max(0) as u64;
-            if column_ids.is_empty() || column_ids.contains(&chunk.leaf) {
-                if !column_ids.is_empty() {
-                    chunks.push(IngestGroupChunk {
-                        column: chunk.leaf,
-                        offset: chunk.start,
-                        codec: chunk.codec,
-                        length: chunk.compressed_size as u32,
-                        dict_encoded: chunk.has_dictionary,
-                    });
-                }
+            if (column_ids.is_empty() || column_ids.contains(&chunk.leaf)) && !column_ids.is_empty()
+            {
+                chunks.push(IngestGroupChunk {
+                    column: chunk.leaf,
+                    offset: chunk.start,
+                    codec: chunk.codec,
+                    length: chunk.compressed_size as u32,
+                    dict_encoded: chunk.has_dictionary,
+                });
             }
         }
         out.push(IngestGroup {

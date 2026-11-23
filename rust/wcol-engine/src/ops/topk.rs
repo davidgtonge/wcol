@@ -96,7 +96,7 @@ impl TopKOp {
         let mask = batch.effective_selection_mask();
         for row in 0..view.row_count {
             if mask.is_selected(row) {
-                self.offer(batch, &view.columns, row)?;
+                self.offer(batch, view.columns, row)?;
             }
         }
         Ok(())

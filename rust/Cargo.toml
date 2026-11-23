@@ -1,20 +1,12 @@
 [workspace]
 members = [
-  "df-planner",
-  "df-planner-wasm",
   "wcol",
   "wcol-engine",
   "wcol-plan",
-  "wcol-synth-groupby",
-  "wcol-sql",
-  "wcol-sql-wasm",
   "wcol-node-wasm",
   "wcol-coordinator-wasm",
   "wcol-reducer",
 ]
-# DataFusion crates are not built by a bare `cargo build` / `cargo test` / `cargo check`.
-# Opt in with `-p df-planner`, `-p wcol-sql --features datafusion`, or `-p wcol --features datafusion`.
-default-members = ["wcol", "wcol-synth-groupby"]
 resolver = "2"
 
 # Shipped Wasm (Cloudflare worker) and native CLI benchmarks: whole-program optimisation.
@@ -22,15 +14,3 @@ resolver = "2"
 lto = "fat"
 codegen-units = 1
 strip = true
-
-# Smallest logical-planner wasm baseline (slower compile).
-[profile.wasm-size]
-inherits = "release"
-opt-level = "z"
-
-[patch.crates-io]
-# Planner-only wasm: drop IPC spill codecs (zstd/lz4) from datafusion-common's arrow-ipc dep.
-datafusion-common = { path = "patches/datafusion-common" }
-datafusion-sql = { path = "patches/datafusion-sql" }
-# DataFusion enables arrow without default-features = false; unified features still pull csv/ipc/json.
-arrow = { path = "patches/arrow" }

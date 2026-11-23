@@ -5,7 +5,7 @@ use wcol::exec::operator::{Operator, OperatorIo, StreamProgress, WcolStreamItem}
 use wcol::exec::operators::RowBatchWcsIngress;
 use wcol::formats::parquet::{open_plan, ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn};
 use wcol::open_wcol_plan;
-use wcol::plan::{plan_query_dispatch, Frontend, PhysicalPlannerConfig, QueryDispatch};
+use wcol::plan::{plan_query_dispatch, PhysicalPlannerConfig, QueryDispatch};
 use wcol::stream::core::Action;
 use wcol::stream::{OwnedWcolBatch, WcolColumn};
 
@@ -183,7 +183,6 @@ fn dispatch(sql: &str, file: &[u8], nodes: u32) -> QueryDispatch {
         nodes,
         8,
         &PhysicalPlannerConfig::default(),
-        &[Frontend::Sql],
     )
     .unwrap()
     .0

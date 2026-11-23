@@ -1,6 +1,6 @@
 //! Columnar execution engine.
 //!
-//! Plans, SQL text, and DataFusion stay in `wcol-plan`. This crate runs IR and the
+//! Plans and SQL text stay in `wcol-plan`. This crate runs IR and the
 //! fragment / PWCL / WCS wire formats.
 
 #![deny(unused, dead_code)]

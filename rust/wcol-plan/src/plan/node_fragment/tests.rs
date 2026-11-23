@@ -138,16 +138,8 @@ fn whole_group_distinct_is_ranked_on_reducers() {
     let mut config = crate::plan::PhysicalPlannerConfig::for_coordinator(32);
     config.hash_aggregate.reducers = Some(64);
     let rank = |sql: &str| {
-        let (_, plan) = crate::plan::plan_query_dispatch(
-            sql,
-            "hits",
-            &footer,
-            32,
-            1024,
-            &config,
-            &[crate::plan::Frontend::Sql],
-        )
-        .unwrap();
+        let (_, plan) =
+            crate::plan::plan_query_dispatch(sql, "hits", &footer, 32, 1024, &config).unwrap();
         rank_count_aggregate(&plan)
     };
     assert_eq!(

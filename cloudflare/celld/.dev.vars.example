@@ -1,7 +1,0 @@
-# Copied to .dev.vars by celld:dev when that file is missing.
-# Overrides wrangler.jsonc vars. celld deploy does not read this file.
-
-WCOL_JOB_TEST_HOOKS=1
-WCOL_DISPATCH_TRACE=1
-WCOL_JOB_SYNC_MS=0
-WCOL_BUFFER_SCAN_EDGES=1

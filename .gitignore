@@ -1,20 +1,11 @@
-# Data (regenerate locally — see README)
+# Data
 *.sav
 *.parquet
 # Small regression fixture written by DuckDB (see rust/wcol/tests/runtime/duckdb_fixture.rs).
 !tests/fixtures/duckdb_rle_padding.parquet
 !tests/fixtures/duckdb_nulls.parquet
 !tests/fixtures/legacy_encodings.parquet
-*.wcol
 /data/
-apps/explorer/demo/data/*.wcol
-!apps/explorer/demo/data/crates_categories.wcol
-!apps/explorer/demo/data/crate_maintainers.wcol
-!apps/explorer/demo/data/trends_crate_downloads_30d.wcol
-!apps/explorer/demo/data/trends_serde_version_downloads.wcol
-!apps/explorer/demo/data/hits_subset_500k.wcol
-apps/explorer/dist/
-apps/explorer/pkg/
 
 # Dependencies & build
 node_modules/
@@ -23,18 +14,11 @@ dist/
 pkg/
 pkg-web/
 .wrangler/
-.celld/
-archive/rust/wcol-wasm/pkg/
 *.wasm
 *.zip
 *.tsbuildinfo
 
-# Engine-shell submodule build
-engine-shell/node_modules/
-engine-shell/target/
-
-# Archive & perf (local benchmarks only)
-archive/
+# Local benchmarks
 perf/
 .cursor/
 
@@ -83,12 +67,12 @@ docs/tasks/
 *.sql
 next-steps.md
 
-# Publish tooling (local only)
-scripts/create-publish-history.sh
-
-*.zip
-
 # Container reducer build outputs
 /cloudflare/reducer/bin/
 /rust/target-linux/
 /cloudflare/.api-token
+
+# Local-only leftovers from earlier layouts
+/archive/
+/cloudflare/celld/
+/scripts/create-publish-history.sh

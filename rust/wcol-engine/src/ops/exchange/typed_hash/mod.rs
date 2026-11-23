@@ -10,7 +10,7 @@ use crate::stream::batch::{WcolBatch, WcolColumn};
 /// Supported exchange hash version (mixed into the XXH3 seed).
 pub const WCOL_EXCHANGE_HASH_VERSION_DEFAULT: u32 = 1;
 
-const HASH_SEED_BASE: u64 = 0x5743_4f4c_5f4558; // "WCOL_EX"
+const HASH_SEED_BASE: u64 = 0x0057_434f_4c5f_4558; // "WCOL_EX"
 
 const TAG_NULL: u8 = 0;
 const TAG_I64: u8 = 1;

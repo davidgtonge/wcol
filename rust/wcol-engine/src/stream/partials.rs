@@ -126,8 +126,8 @@ pub fn partial_state_concat(
     if left.row_count == 0 {
         return Ok(right);
     }
-    let rows = left.row_count as usize;
-    let add = right.row_count as usize;
+    let rows = left.row_count;
+    let add = right.row_count;
     for col in &mut left.columns {
         let extra = find_column(&right, col.id)?;
         col.values.extend_from_slice(&extra.values);
@@ -878,7 +878,7 @@ fn read_stat_row(fields: &[&[i64]; STAT_FIELDS_PER_AGG as usize], row: usize) ->
     }
 }
 
-fn find_column<'a>(state: &'a PartialStateWcol, id: u32) -> Result<&'a PartialColumn, String> {
+fn find_column(state: &PartialStateWcol, id: u32) -> Result<&PartialColumn, String> {
     state
         .columns
         .iter()

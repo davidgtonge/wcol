@@ -24,6 +24,12 @@ enum Phase {
     Between,
 }
 
+impl Default for WcsIngress {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WcsIngress {
     pub fn new() -> Self {
         Self {

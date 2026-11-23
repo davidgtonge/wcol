@@ -3,7 +3,7 @@ import type { ReducerRuntime } from "../node/session.ts";
 import { parseReducerRequest, type ReducerRequest } from "./reducer-choice.ts";
 import type { JobSourceLocation } from "../../../src/runtime/coordinator/plan-dispatch.ts";
 import type { GraphJobSource, GraphTaskEnv } from "../node/node.ts";
-import type { DualR2Env, R2OutputBucket } from "../r2.ts";
+import type { R2Env, R2OutputBucket } from "../r2.ts";
 
 /** Durable Object values stay small. Payloads move on the WCS stream, not in storage. */
 export const MAX_DO_VALUE_BYTES = 64 * 1024;
@@ -91,8 +91,6 @@ export type GraphJobEnv = GraphTaskEnv & {
   WCOL_MAX_ACTIVE_SCANS?: string;
   /** Shared incoming buffer budget per consumer isolate (default 2 MiB). */
   WCOL_INGRESS_BYTES?: string;
-  /** `r2` is rejected. Unset keeps point-to-point RPC streams. */
-  WCOL_EDGE_BYTES?: string;
   WCOL_JSON_MAX_BYTES?: string;
   WCOL_DISPATCH_TRACE?: string;
   WCOL_JOB_TEST_HOOKS?: string;

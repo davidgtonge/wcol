@@ -161,12 +161,6 @@ pub fn lower_to_physical(
     let (fetches, piece_lists) = coalesce(&logical_reads, nodes, config)?;
     let logical_reads = attach_pieces(logical_reads, piece_lists)?;
     let metrics = metrics_of(&logical_reads, &fetches, nodes)?;
-    // A node's rows are final only for a plain row scan. Below a join or an aggregate a
-    // per-node top-k would drop rows that still have to be matched or grouped.
-    let row_topk = match (&shape.input, &shape.aggregate) {
-        (Input::Scan(_), None) => row_topk_spec(&shape.after),
-        _ => None,
-    };
     let source_rows = units
         .iter()
         .fold(0u64, |sum, unit| sum.saturating_add(unit.rows));
@@ -182,10 +176,7 @@ pub fn lower_to_physical(
         &units,
         nodes,
         &fetches,
-        row_topk,
-        config.parquet_row_group_rows,
-        &config.partition_columns,
-        &config.hash_aggregate,
+        config,
         estimated_groups,
         metadata,
     )?;

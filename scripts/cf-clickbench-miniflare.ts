@@ -7,8 +7,8 @@
  * no hash edges fails, even when its rows match. An ungrouped `approx_count_distinct`
  * stays on gather. Queries the planner cannot partition still run.
  *
- *   npm run test:clickbench-miniflare
- *   CLICKBENCH_ONLY=Q15 npm run test:clickbench-miniflare
+ *   npm run clickbench:local
+ *   CLICKBENCH_ONLY=Q15 npm run clickbench:local
  */
 
 import { createServer } from "node:http";
@@ -271,7 +271,7 @@ function miniflare(): Miniflare {
           WCOL_COORDINATOR: { className: "WcolCoordinator", useSQLite: true },
           WCOL_NODE: { className: "WcolNode", scriptName: "wcol-node", useSQLite: true },
         },
-        r2Buckets: ["OUTPUT", "ANALYTICS"],
+        r2Buckets: ["OUTPUT"],
       },
       {
         name: "wcol-node",
@@ -286,7 +286,7 @@ function miniflare(): Miniflare {
           // Hash scans claim their units on the job's coordinator, as in wrangler.node.toml.
           WCOL_COORDINATOR: { className: "WcolCoordinator", scriptName: "wcol-coordinator" },
         },
-        r2Buckets: ["OUTPUT", "ANALYTICS"],
+        r2Buckets: ["OUTPUT"],
       },
     ],
   });

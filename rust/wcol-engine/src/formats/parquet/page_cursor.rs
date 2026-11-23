@@ -137,7 +137,7 @@ pub struct ActivePlainPage {
 
 impl PageCursor {
     pub fn new(header: PageHeader, spec: ColumnSpec, limits: &ScanLimits) -> Result<Self, Error> {
-        let layout = page_layout(header, spec).map_err(|e| Error::Page(e))?;
+        let layout = page_layout(header, spec).map_err(Error::Page)?;
         if layout.count > limits.max_page_values {
             return Err(Error::Message(
                 "parquet page exceeds configured value budget",

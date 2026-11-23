@@ -38,7 +38,7 @@ pub struct PhysicalPlannerConfig {
 /// Memory budget for a hash-partitioned `GROUP BY`. The planner picks a power-of-two
 /// reducer count from these numbers and does not change it at runtime.
 ///
-/// Production default is **16 MiB flush / 32 MiB hard** (see `docs/HASH_GROUP_BUDGET.md`).
+/// Production default is **16 MiB flush / 32 MiB hard**.
 /// After a pressure flush, empty-table retained capacity is reclaimed to an 8 MiB
 /// low-water mark so it cannot sit above the flush lock.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -309,7 +309,7 @@ fn empty_table_stays_under_flush_threshold_after_pressure_flush() {
         "empty table retained {retained} bytes above the 8 MiB low-water mark"
     );
     assert!(
-        peak >= FLUSH_THRESHOLD && peak <= HARD_CEILING,
+        (FLUSH_THRESHOLD..=HARD_CEILING).contains(&peak),
         "peak group memory {peak} never crossed the flush lock"
     );
 }

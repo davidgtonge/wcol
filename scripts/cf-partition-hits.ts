@@ -179,7 +179,7 @@ if (base) {
       { type: "CompiledWasm" as const, path: path.join(distDir, wasm) },
     ],
     compatibilityDate: "2026-01-01",
-    r2Buckets: ["OUTPUT", "ANALYTICS"],
+    r2Buckets: ["OUTPUT"],
     ...extra,
   });
   const mf = new Miniflare({

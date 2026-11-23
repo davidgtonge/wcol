@@ -105,8 +105,8 @@ fn cases() -> Vec<SortCase> {
         skewed.push((Some(0), Some(index as i64)));
     }
     for key in 1..40 {
-        skewed.push((Some(key), Some(10_000 + key as i64)));
-        skewed.push((Some(key), Some(20_000 + key as i64)));
+        skewed.push((Some(key), Some(10_000 + key)));
+        skewed.push((Some(key), Some(20_000 + key)));
     }
     skewed.push((None, Some(30_000)));
     skewed.push((None, Some(30_001)));

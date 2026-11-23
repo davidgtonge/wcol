@@ -426,9 +426,8 @@ fn take_u8(bytes: &[u8], at: &mut usize) -> Result<u8, String> {
         .get(*at)
         .copied()
         .ok_or_else(|| "truncated PWCL header".to_string())
-        .map(|b| {
+        .inspect(|_b| {
             *at += 1;
-            b
         })
 }
 

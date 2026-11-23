@@ -1,6 +1,6 @@
 # `wcol-engine` source layout
 
-This crate is the **columnar execution engine** for WCOL. SQL parsing, logical planning, and DataFusion live in **`wcol-plan`**. Everything under `src/` runs **owned IR**, **wire programs** (node/coordinator fragments, PWCL partial state, WCS1 byte streams), and **host I/O**—not SQL text.
+This crate is the **columnar execution engine** for WCOL. SQL parsing and logical planning live in **`wcol-plan`**. Everything under `src/` runs **owned IR**, **wire programs** (node/coordinator fragments, PWCL partial state, WCS1 byte streams), and **host I/O**—not SQL text.
 
 Public surface is declared in [`lib.rs`](lib.rs): `error`, `exec`, `formats`, `ir`, `ops`, `program`, `spill`, and `stream`.
 
@@ -66,7 +66,7 @@ Owned values that **operators and batch kernels** consume. The planner converts 
 
 ## `program/` — wire contract (node + coordinator)
 
-No SQL and no DataFusion. Encodes what each **worker** and the **coordinator** need as binary programs.
+No SQL. Encodes what each **worker** and the **coordinator** need as binary programs.
 
 | File | Role |
 |------|------|
@@ -244,9 +244,7 @@ When in-memory aggregation exceeds budget, partial groups flush to **sorted runs
 
 ## Related docs (outside `src/`)
 
-- `wcol/docs/COLOCATED_MEMORY.md` — fused operators and edge materialization.
-- `wcol/docs/BOUNDED_MEMORY.md` — decode/spill memory budgets (referenced from Parquet modules).
-- `wcol/docs/R2_GROUP_SPILL.md` — R2 sorted-run spill from the stream-pool side channel.
+- `docs/architecture.md`: how tasks, transport, memory and spill fit together.
 
 ---
 

@@ -47,11 +47,8 @@ describe("job path boundaries (I11, I12, I14, I15)", () => {
     }
   });
 
-  it("has one job entry point: the retired routes answer 410", () => {
+  it("has one job entry point", () => {
     const worker = read("cloudflare/src/worker.ts");
-    for (const route of ["/row-export", "/page-compact", "/export", "/compact", "/distributed"]) {
-      assert.ok(worker.includes(`"${route}"`), `${route} is not in the retired list`);
-    }
     for (const handler of ["handleRowExportJob", "handlePageCompactJob", "handleShardRequest", "handleStreamTaskStart"]) {
       assert.ok(!worker.includes(handler), `worker still routes to ${handler}`);
     }

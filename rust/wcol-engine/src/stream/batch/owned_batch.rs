@@ -3,6 +3,17 @@ use super::wcol_batch::{DictEntries, DictionaryValues, WcolBatch, WcolColumn};
 use crate::error::{WcolError, WcolResult};
 use crate::stream::partials::{PartialSketchColumn, PartialStateSchemaV1, PartialStringKeyColumn};
 
+/// `(column, values, nulls)` of one i64 column moved out of a batch.
+pub type I64Column = (u32, Vec<i64>, Vec<u8>);
+
+/// `(column, offsets, bytes, nulls)` of a UTF-8 column, borrowed for appending.
+type Utf8ColumnMut<'a> = (
+    &'a mut u32,
+    &'a mut Vec<u32>,
+    &'a mut Vec<u8>,
+    &'a mut Vec<u8>,
+);
+
 #[derive(Clone)]
 enum OwnedColumn {
     I64 {
@@ -266,7 +277,7 @@ impl OwnedWcolBatch {
     }
 
     /// All columns must be i64 (partial-state batches never use dictionary columns).
-    pub fn export_i64_columns(&self) -> Result<Vec<(u32, Vec<i64>, Vec<u8>)>, String> {
+    pub fn export_i64_columns(&self) -> Result<Vec<I64Column>, String> {
         let mut out = Vec::with_capacity(self.columns.len());
         for col in &self.columns {
             match col {
@@ -309,13 +320,13 @@ impl OwnedWcolBatch {
     /// Move out a partial batch's columns and sketches.
     pub fn into_partial_columns(
         mut self,
-    ) -> Result<(Vec<(u32, Vec<i64>, Vec<u8>)>, Vec<PartialSketchColumn>), String> {
+    ) -> Result<(Vec<I64Column>, Vec<PartialSketchColumn>), String> {
         let sketches = std::mem::take(&mut self.partial_sketches);
         Ok((self.into_i64_columns()?, sketches))
     }
 
     /// Like [`Self::export_i64_columns`] but moves the columns out.
-    pub fn into_i64_columns(self) -> Result<Vec<(u32, Vec<i64>, Vec<u8>)>, String> {
+    pub fn into_i64_columns(self) -> Result<Vec<I64Column>, String> {
         let mut out = Vec::with_capacity(self.columns.len());
         for col in self.columns {
             match col {
@@ -507,10 +518,7 @@ impl OwnedWcolBatch {
         None
     }
 
-    fn column_mut_utf8(
-        &mut self,
-        column: u32,
-    ) -> Option<(&mut u32, &mut Vec<u32>, &mut Vec<u8>, &mut Vec<u8>)> {
+    fn column_mut_utf8(&mut self, column: u32) -> Option<Utf8ColumnMut<'_>> {
         for col in &mut self.columns {
             if let OwnedColumn::Utf8 {
                 column: id,

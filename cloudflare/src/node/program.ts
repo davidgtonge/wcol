@@ -7,7 +7,7 @@ import { isolateId } from "../colo.ts";
 import { createHostBytes } from "../../../src/runtime/host/host-bytes.ts";
 import { createIsolatePeak, isolateLoad, joinIsolate } from "./isolate-load.ts";
 import { type StreamPool } from "../../../src/runtime/host/stream-pool.ts";
-import { parseR2BindingName, resolveR2Bucket, validateObjectKey, type DualR2Env } from "../r2.ts";
+import { parseR2BindingName, validateObjectKey, type R2Env, type R2OutputBucket } from "../r2.ts";
 import { type NodeWasm } from "./session.ts";
 import {
   type GraphJobSource,
@@ -29,32 +29,11 @@ export function eventLoopYield(): Promise<void> {
   });
 }
 
-function spillRunCapFrom(env: { WCOL_SPILL_RUN_CAP?: string }): number | undefined {
-  const parsed = Number(env.WCOL_SPILL_RUN_CAP);
-  return Number.isInteger(parsed) && parsed >= 1 ? parsed : undefined;
-}
-
-function spillCapMessage(
-  rows: NonNullable<IsolateProgress["spillBoundaries"]>,
-  wasmBuild: string | undefined,
-): string {
-  const warm = rows[Math.min(2, rows.length - 1)]!;
-  const last = rows[rows.length - 1]!;
-  const growth = Math.round((last.liveAfter - warm.liveAfter) / Math.max(1, last.run - warm.run));
-  return (
-    `spill run cap ${rows.length}: perRunLiveGrowthPostWarm=${growth} ` +
-    `liveAfter=${warm.liveAfter}->${last.liveAfter} ` +
-    `rustInflight=${last.rustInflightSpillBytes} ` +
-    `wasm=${wasmBuild ?? ""}`
-  );
-}
-
-export function r2Bucket(env: DualR2Env, name: string) {
+export function r2Bucket(env: R2Env, name: string) {
   const binding = parseR2BindingName(name);
   if (!binding) throw new Error(`unknown bucket ${name}`);
-  const bucket = resolveR2Bucket(env, binding);
-  if (!bucket) throw new Error(`R2 binding ${binding} is missing`);
-  return bucket;
+  if (!env.OUTPUT) throw new Error(`R2 binding ${binding} is missing`);
+  return env.OUTPUT;
 }
 
 type SourceReader = {
@@ -90,7 +69,7 @@ function byteStream(): TransformStream<Uint8Array, Uint8Array> {
 
 export function streamed(
   waitUntil: (promise: Promise<unknown>) => void,
-  meta: { env: DualR2Env; wasm: NodeWasm; jobId: string; attempt: number; taskId: number; slot: number },
+  meta: { env: R2Env; wasm: NodeWasm; jobId: string; attempt: number; taskId: number; slot: number },
   run: (write: (chunk: Uint8Array) => Promise<void>, chunks: () => number) => Promise<void>,
   onDone?: () => void,
   ownsSession: () => boolean = () => true,
@@ -252,10 +231,6 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
           spillPeakLiveBytes: info.spillPeakLiveBytes,
           spillPeakInternerBytes: info.spillPeakInternerBytes,
         });
-        const cap = spillRunCapFrom(env);
-        if (cap && spillBoundaries.length >= cap) {
-          throw new Error(spillCapMessage(spillBoundaries, env.WCOL_NODE_WASM_BUILD));
-        }
       },
       host: {
         readAt: readSource,
@@ -362,7 +337,7 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
   }
 }
 
-export function outputBucketFor(env: GraphTaskEnv, bindingName: string): ReturnType<typeof resolveR2Bucket> {
+export function outputBucketFor(env: GraphTaskEnv, bindingName: string): R2OutputBucket {
   if (bindingName) return r2Bucket(env, bindingName);
   if (!env.OUTPUT) throw new Error("R2 output binding is missing");
   return env.OUTPUT;

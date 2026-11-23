@@ -1,5 +1,0 @@
-.celld/
-.dev.vars
-coordinator-worker.js
-node-worker.js
-*.wasm

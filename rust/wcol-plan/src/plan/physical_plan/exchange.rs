@@ -9,6 +9,9 @@ pub(super) fn is_exchange(kind: &OpKind) -> bool {
     )
 }
 
+/// `(sort keys, partitions, split points)` of a range exchange.
+pub(super) type RangeExchange = (Vec<SortKey>, u32, Vec<Vec<Scalar>>);
+
 pub(super) fn range_exchange_for(
     shape: &Shape,
     node_count: usize,
@@ -16,7 +19,7 @@ pub(super) fn range_exchange_for(
     coordinator_parquet: bool,
     estimated_sort_bytes: u64,
     metadata: &ParquetMetadataCatalog,
-) -> Result<Option<(Vec<SortKey>, u32, Vec<Vec<Scalar>>)>, PlanError> {
+) -> Result<Option<RangeExchange>, PlanError> {
     if node_count < 2 {
         return Ok(None);
     }

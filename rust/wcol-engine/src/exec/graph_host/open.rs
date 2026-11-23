@@ -147,7 +147,7 @@ impl GraphHost {
         ingress: GraphHostIngress,
         capacity: usize,
     ) -> WcolResult<Self> {
-        if capacity < 64 || capacity > 1024 * 1024 {
+        if !(64..=1024 * 1024).contains(&capacity) {
             return Err(WcolError::from("invalid ring capacity"));
         }
         crate::exec::mem_growth::reset_baseline();

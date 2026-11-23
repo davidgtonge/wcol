@@ -165,7 +165,7 @@ mod tests {
             month: 7,
             day: 2,
         };
-        writer.push_row(&[first.clone()], 10).unwrap();
+        writer.push_row(std::slice::from_ref(&first), 10).unwrap();
         writer.push_row(&[second], 10).unwrap();
         writer.push_row(&[first], 10).unwrap();
         assert_eq!(writer.open_partitions(), 2);
@@ -206,8 +206,10 @@ mod tests {
 
     #[test]
     fn a_large_row_flushes_a_full_part_and_keeps_the_partition() {
-        let mut config = PartitionWriterConfig::default();
-        config.max_open_partitions = 1;
+        let config = PartitionWriterConfig {
+            max_open_partitions: 1,
+            ..Default::default()
+        };
         let mut writer =
             PartitionDemux::open(config, "job", TaskId(7), 3, vec!["Day".into()]).unwrap();
         writer

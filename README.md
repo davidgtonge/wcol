@@ -62,7 +62,7 @@ You need a Cloudflare account with Workers Paid (Durable Objects with SQLite sto
 4. `npx wrangler login`, then `npm run deploy`, which deploys the node Worker, then the coordinator Worker, and waits for the rollout.
 5. Optional: `npx wrangler secret put WCOL_API_TOKEN --config cloudflare/wrangler.toml` makes `/jobs` require `Authorization: Bearer <token>`.
 
-The coordinator's URL serves the console at `/`. A job is a single request. `"bucket": "output"` names the Workers' R2 binding, not the bucket itself:
+The coordinator's URL serves the console at `/`. Without a token, the console replays recorded runs of some ClickBench queries instead of starting jobs; `scripts/record-console-runs.ts` records them into `cloudflare/console/recordings/`, and the next deploy serves them. A job is a single request. `"bucket": "output"` names the Workers' R2 binding, not the bucket itself:
 
 ```bash
 curl -X POST "$WCOL_BASE_URL/jobs" \

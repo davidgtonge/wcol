@@ -3,6 +3,9 @@ import { WcolCoordinator, type ShardCoordinatorEnv } from "./coordinator/coordin
 import { doLocation } from "./node/session.ts";
 import consoleHtml from "../dist/console.html";
 
+/** Recorded console runs by query name, bundled by `scripts/build-workers.ts`. */
+declare const __RECORDINGS__: Readonly<Record<string, string>>;
+
 export { WcolNode } from "./node/node.ts";
 export { WcolCoordinator };
 
@@ -54,6 +57,13 @@ export default {
     try {
       if (url.pathname === "/" && request.method === "GET") {
         return new Response(consoleHtml, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" } });
+      }
+      // Public: visitors without a token replay these instead of running jobs.
+      const recording = /^\/recordings\/([^/]+)\.json$/.exec(url.pathname);
+      if (recording && request.method === "GET") {
+        const text = Object.hasOwn(__RECORDINGS__, recording[1]!) ? __RECORDINGS__[recording[1]!] : undefined;
+        if (text === undefined) return json({ error: "not found" }, 404);
+        return new Response(text, { headers: { "content-type": "application/json", "cache-control": "public, max-age=300" } });
       }
       if (url.pathname.startsWith("/jobs") && !apiAuthorized(env, request)) {
         return json({ error: "unauthorized: send Authorization: Bearer <WCOL_API_TOKEN>" }, 401);

@@ -68,7 +68,7 @@ function nodeEntry(_profile: NodeWorkerProfile): string {
   return path.join(ROOT, "cloudflare/src/node/entry.ts");
 }
 
-async function bundle(entry: string, outfile: string): Promise<void> {
+async function bundle(entry: string, outfile: string, define: Record<string, string> = {}): Promise<void> {
   await esbuild.build({
     entryPoints: [entry],
     outfile,
@@ -78,6 +78,7 @@ async function bundle(entry: string, outfile: string): Promise<void> {
     target: "es2022",
     logLevel: "warning",
     loader: { ".wcol": "binary", ".html": "text" },
+    define,
     plugins: [bundlePlugin()],
   });
   const bundled = fs.readFileSync(outfile, "utf8").replaceAll("import(", "unavailableImport(");
@@ -135,6 +136,18 @@ export async function reportNodeWorkerBundle(profile: NodeWorkerProfile): Promis
 
 export const consoleOut = path.join(distDir, "console.html");
 
+/** Recorded console runs (`scripts/record-console-runs.ts`), by query name, as JSON text. */
+function recordings(): Record<string, string> {
+  const dir = path.join(ROOT, "cloudflare/console/recordings");
+  if (!fs.existsSync(dir)) return {};
+  return Object.fromEntries(
+    fs
+      .readdirSync(dir)
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => [path.basename(file, ".json"), fs.readFileSync(path.join(dir, file), "utf8")]),
+  );
+}
+
 /** The console page (`cloudflare/console`): its script bundled into the HTML, one file. */
 async function buildConsole(): Promise<void> {
   const built = await esbuild.build({
@@ -146,7 +159,10 @@ async function buildConsole(): Promise<void> {
     target: "es2022",
     minify: true,
     logLevel: "warning",
-    define: { __CLICKBENCH__: JSON.stringify(clickbenchQueries(ROOT)) },
+    define: {
+      __CLICKBENCH__: JSON.stringify(clickbenchQueries(ROOT)),
+      __RECORDED_QUERIES__: JSON.stringify(Object.keys(recordings())),
+    },
   });
   const script = built.outputFiles[0]!.text.replaceAll("</script", "<\\/script");
   const page = fs.readFileSync(path.join(ROOT, "cloudflare/console/index.html"), "utf8");
@@ -158,7 +174,9 @@ export async function buildWorkers(nodeProfile: NodeWorkerProfile = "prod"): Pro
   fs.mkdirSync(distDir, { recursive: true });
   await buildConsole();
   await bundle(nodeEntry(nodeProfile), nodeOut);
-  await bundle(path.join(ROOT, "cloudflare/src/coordinator/entry.ts"), coordinatorOut);
+  await bundle(path.join(ROOT, "cloudflare/src/coordinator/entry.ts"), coordinatorOut, {
+    __RECORDINGS__: JSON.stringify(recordings()),
+  });
   fs.copyFileSync(
     path.join(ROOT, "rust/target/wasm32-unknown-unknown/release/wcol_node.wasm"),
     path.join(distDir, "wcol_node.wasm"),

@@ -2,7 +2,8 @@
  * The WCOL console. Submits a query, polls `GET /jobs/:id/live` for the job's snapshot, and
  * draws the view of it at the moment shown: live while the job runs, or any moment of a
  * finished job (replay). The view, its cost and its findings are the coordinator's own pure
- * functions (`live.ts`, `live-findings.ts`), bundled into this page.
+ * functions (`live.ts`, `live-findings.ts`), bundled into this page. Without a token, Run
+ * plays a recorded run of the chosen ClickBench query (`GET /recordings/:name.json`).
  */
 import { findings } from "../src/coordinator/live-findings.ts";
 import { inputAt, liveJobView, type LiveJobView, type LiveSnapshot } from "../src/coordinator/live.ts";
@@ -18,6 +19,8 @@ const FRAME_MS = 80;
 /** The supported ClickBench queries, injected by the build (`scripts/clickbench-catalog.ts`). */
 declare const __CLICKBENCH__: readonly { name: string; sql: string }[];
 const DEFAULT_QUERY = "Q32";
+/** ClickBench queries with a recorded run, injected by the build. */
+declare const __RECORDED_QUERIES__: readonly string[];
 
 const ui = {
   sql: element<HTMLTextAreaElement>("sql"),
@@ -72,6 +75,8 @@ const view = {
   submitted: { sql: "", label: "" },
   recorded: new Set<string>(),
   runs: loadRuns() as Run[],
+  /** A recorded run being played: its rows and findings wait for the end, like a live run's. */
+  recording: null as { recordedAt: string; revealed: boolean } | null,
 };
 
 const ended = (snapshot: LiveSnapshot) => snapshot.state === "completed" || snapshot.state === "failed";
@@ -113,7 +118,15 @@ function frame(time: number): void {
   if (!snapshot || time - lastFrame < FRAME_MS) return;
   lastFrame = time;
   const at = moment(snapshot);
-  if (view.playing && at >= snapshot.now) setPlaying(false);
+  if (view.playing && at >= snapshot.now) {
+    // Rest on the end; otherwise the view would fall back to the moment shown before playing.
+    view.at = snapshot.now;
+    setPlaying(false);
+  }
+  if (view.recording && !view.recording.revealed && at >= snapshot.now) {
+    view.recording.revealed = true;
+    onSnapshot(snapshot);
+  }
   const current = liveJobView(inputAt(snapshot, at));
   // A live job runs on between polls: the clock keeps time, the view waits for the next poll.
   const shownMs = Math.max(current.elapsedMs, at - snapshot.startedAt);
@@ -145,9 +158,12 @@ requestAnimationFrame(frame);
 function onSnapshot(snapshot: LiveSnapshot): void {
   view.snapshot = snapshot;
   view.fetchedAt = Date.now();
-  ui.state.textContent = snapshot.state;
-  ui.state.className = `pill ${snapshot.state}`;
-  ui.job.textContent = `${snapshot.jobId}${snapshot.attempt > 1 ? ` · attempt ${snapshot.attempt}` : ""}`;
+  const playing = view.recording !== null && !view.recording.revealed;
+  ui.state.textContent = playing ? "running" : snapshot.state;
+  ui.state.className = `pill ${playing ? "running" : snapshot.state}`;
+  ui.job.textContent = view.recording
+    ? `recorded run · ${new Date(view.recording.recordedAt).toLocaleString()}`
+    : `${snapshot.jobId}${snapshot.attempt > 1 ? ` · attempt ${snapshot.attempt}` : ""}`;
   const reducerCount = snapshot.graph.tasks.filter((task) => task.role === "reducer").length;
   const where = snapshot.reducers.runtime === "container" ? `containers (${snapshot.reducers.instance ?? "?"})` : "Durable Objects";
   ui.reason.textContent =
@@ -158,6 +174,7 @@ function onSnapshot(snapshot: LiveSnapshot): void {
         : "No reducers: scans send partial results straight to the coordinator.";
   ui.error.classList.toggle("hidden", !snapshot.error);
   ui.error.textContent = snapshot.error ?? "";
+  if (playing) return;
   if (ended(snapshot)) {
     finalView = liveJobView(inputAt(snapshot, snapshot.now));
     renderFindings(ui.findings, findings(finalView));
@@ -262,6 +279,7 @@ function reset(): void {
   view.selected = null;
   view.postedResult = null;
   view.submitted = { sql: "", label: "" };
+  view.recording = null;
   finalView = null;
   setPlaying(false);
   ui.error.classList.add("hidden");
@@ -292,7 +310,37 @@ function jobBody(): Record<string, unknown> {
   };
 }
 
+/** The recorded ClickBench query whose SQL is in the editor, if any. */
+function recordedQuery(): string | undefined {
+  const sql = ui.sql.value.trim().replace(/;$/, "");
+  const preset = __CLICKBENCH__.find((query) => query.sql === sql);
+  return preset && __RECORDED_QUERIES__.includes(preset.name) ? preset.name : undefined;
+}
+
+/** Play a recorded run from its start, at the speed it ran. */
+async function replayRecording(name: string): Promise<void> {
+  reset();
+  try {
+    const response = await fetch(`/recordings/${encodeURIComponent(name)}.json`);
+    if (!response.ok) throw new Error(`recording ${name}: ${response.status}`);
+    const recording = (await response.json()) as { recordedAt: string; snapshot: LiveSnapshot; result: Result | null };
+    view.recording = { recordedAt: recording.recordedAt, revealed: false };
+    view.postedResult = recording.result;
+    view.playedFrom = { wall: Date.now(), at: recording.snapshot.startedAt };
+    view.follow = false;
+    setPlaying(true);
+    onSnapshot(recording.snapshot);
+  } catch (error) {
+    showError(error);
+  }
+}
+
 async function run(): Promise<void> {
+  if (!ui.token.value) {
+    const recorded = recordedQuery();
+    if (recorded) return replayRecording(recorded);
+    return showError(new Error("Running your own SQL needs an API token. Pick a ClickBench query marked “recorded” to replay a real run."));
+  }
   ui.run.disabled = true;
   reset();
   ui.state.textContent = "submitting";
@@ -345,7 +393,8 @@ async function open(jobId: string): Promise<void> {
 
 const shorten = (sql: string) => (sql.length > 70 ? `${sql.slice(0, 67)}…` : sql);
 for (const query of __CLICKBENCH__) {
-  ui.preset.append(new Option(`${query.name} · ${shorten(query.sql)}`, query.sql, false, query.name === DEFAULT_QUERY));
+  const recorded = __RECORDED_QUERIES__.includes(query.name) ? " · recorded" : "";
+  ui.preset.append(new Option(`${query.name}${recorded} · ${shorten(query.sql)}`, query.sql, false, query.name === DEFAULT_QUERY));
 }
 ui.sql.value = ui.preset.value;
 ui.preset.addEventListener("change", () => {

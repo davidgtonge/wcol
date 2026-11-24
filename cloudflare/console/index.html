@@ -83,6 +83,18 @@
   .result { overflow: auto; max-height: 320px; }
   .error { color: var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; font-family: var(--mono); font-size: 12px; margin-top: 8px; }
   .hidden { display: none !important; }
+  h2 input[type=search] { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 13px; width: 200px; }
+  .picker { position: relative; max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; padding: 4px; }
+  .picker .group { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 600; padding: 8px 8px 4px; }
+  .query-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 1px 10px; align-items: baseline; width: 100%; text-align: left;
+    padding: 6px 8px; border: 0; border-radius: 6px; background: none; }
+  .query-row:hover { background: var(--bg); }
+  .query-row.selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .query-row.locked { opacity: .6; }
+  .query-row .about { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .query-row .sql { grid-column: 2 / 4; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 600px) { .query-row .about { white-space: normal; } h2 input[type=search] { width: 140px; } }
+  .badge { font-size: 11px; font-weight: 600; color: var(--ok); background: var(--ok-soft); padding: 1px 8px; border-radius: 999px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .funnel-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 120px; gap: 10px; align-items: center; margin: 8px 0; }
   .funnel-label small, .funnel-value small { display: block; color: var(--muted); font-size: 11px; }
   .funnel-bar { height: 16px; background: var(--bg); border-radius: 4px; overflow: hidden; }
@@ -120,10 +132,10 @@
 <main>
   <div>
     <section>
-      <h2>Query</h2>
-      <textarea id="sql" spellcheck="false"></textarea>
+      <h2>Query <span class="spacer"></span><input id="filter" type="search" placeholder="Filter queries" aria-label="Filter queries"></h2>
+      <div class="picker" id="picker" role="listbox" aria-label="ClickBench queries"></div>
+      <textarea id="sql" spellcheck="false" aria-label="SQL"></textarea>
       <div class="controls">
-        <label class="wide">ClickBench query <select id="preset"></select></label>
         <label>Reducers on <select id="reducers">
           <option value="auto">auto</option><option value="node">Durable Objects</option><option value="container">containers</option>
         </select></label>

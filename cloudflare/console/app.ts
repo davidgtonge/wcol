@@ -10,6 +10,7 @@ import { inputAt, liveJobView, type LiveJobView, type LiveSnapshot } from "../sr
 import { element, escape, palette, seconds, taskName } from "./format.ts";
 import { loadRuns, recordRun, renderHistory, type Run } from "./history.ts";
 import { renderMap } from "./map.ts";
+import { renderPicker, type Recorded } from "./picker.ts";
 import { drawMatrix, type MatrixHit, type MatrixMode } from "./matrix.ts";
 import { hoverText, renderCost, renderDetail, renderFindings, renderFunnel, renderResult, renderStats, type Result } from "./panels.ts";
 import { drawTimeline, type TimelineHit } from "./timeline.ts";
@@ -20,11 +21,12 @@ const FRAME_MS = 80;
 declare const __CLICKBENCH__: readonly { name: string; sql: string }[];
 const DEFAULT_QUERY = "Q32";
 /** ClickBench queries with a recorded run, injected by the build. */
-declare const __RECORDED_QUERIES__: readonly string[];
+declare const __RECORDED_QUERIES__: readonly Recorded[];
 
 const ui = {
   sql: element<HTMLTextAreaElement>("sql"),
-  preset: element<HTMLSelectElement>("preset"),
+  picker: element<HTMLDivElement>("picker"),
+  filter: element<HTMLInputElement>("filter"),
   reducers: element<HTMLSelectElement>("reducers"),
   instance: element<HTMLSelectElement>("instance"),
   count: element<HTMLSelectElement>("count"),
@@ -314,7 +316,7 @@ function jobBody(): Record<string, unknown> {
 function recordedQuery(): string | undefined {
   const sql = ui.sql.value.trim().replace(/;$/, "");
   const preset = __CLICKBENCH__.find((query) => query.sql === sql);
-  return preset && __RECORDED_QUERIES__.includes(preset.name) ? preset.name : undefined;
+  return preset && __RECORDED_QUERIES__.some((run) => run.name === preset.name) ? preset.name : undefined;
 }
 
 /** Play a recorded run from its start, at the speed it ran. */
@@ -339,7 +341,7 @@ async function run(): Promise<void> {
   if (!ui.token.value) {
     const recorded = recordedQuery();
     if (recorded) return replayRecording(recorded);
-    return showError(new Error("Running your own SQL needs an API token. Pick a ClickBench query marked “recorded” to replay a real run."));
+    return showError(new Error("Live runs need an API token. The recorded queries at the top of the list replay real runs without one."));
   }
   ui.run.disabled = true;
   reset();
@@ -391,18 +393,34 @@ async function open(jobId: string): Promise<void> {
 
 // --- query controls -----------------------------------------------------------------------------
 
-const shorten = (sql: string) => (sql.length > 70 ? `${sql.slice(0, 67)}…` : sql);
-for (const query of __CLICKBENCH__) {
-  const recorded = __RECORDED_QUERIES__.includes(query.name) ? " · recorded" : "";
-  ui.preset.append(new Option(`${query.name}${recorded} · ${shorten(query.sql)}`, query.sql, false, query.name === DEFAULT_QUERY));
-}
-ui.sql.value = ui.preset.value;
-ui.preset.addEventListener("change", () => {
-  ui.sql.value = ui.preset.value;
+/** The catalog query whose SQL is in the editor, if the editor holds one unchanged. */
+const editorQuery = () => __CLICKBENCH__.find((query) => query.sql === ui.sql.value.trim().replace(/;$/, ""))?.name;
+
+function refreshQueryControls(): void {
+  renderPicker(
+    ui.picker,
+    { queries: __CLICKBENCH__, recorded: __RECORDED_QUERIES__, selected: editorQuery(), filter: ui.filter.value.trim(), hasToken: Boolean(ui.token.value) },
+    pick,
+  );
+  ui.run.textContent = !ui.token.value && recordedQuery() ? "Replay run" : "Run";
   renderHistory(ui.history, view.runs, ui.sql.value.trim(), (jobId) => void open(jobId));
-});
+}
+
+function pick(name: string): void {
+  const query = __CLICKBENCH__.find((candidate) => candidate.name === name);
+  if (!query) return;
+  ui.sql.value = query.sql;
+  refreshQueryControls();
+}
+
+// A visitor without a token starts on a recorded run, so Run shows something at once.
+const start = __RECORDED_QUERIES__.some((run) => run.name === DEFAULT_QUERY) ? DEFAULT_QUERY : __RECORDED_QUERIES__[0]?.name;
+ui.sql.value = __CLICKBENCH__.find((query) => query.name === (start ?? DEFAULT_QUERY))?.sql ?? "";
+ui.filter.addEventListener("input", refreshQueryControls);
+ui.sql.addEventListener("input", refreshQueryControls);
+ui.token.addEventListener("input", refreshQueryControls);
 ui.run.addEventListener("click", () => void run());
 ui.sql.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void run();
 });
-renderHistory(ui.history, view.runs, ui.sql.value.trim(), (jobId) => void open(jobId));
+refreshQueryControls();

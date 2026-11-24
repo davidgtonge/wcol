@@ -134,6 +134,14 @@ export async function reportNodeWorkerBundle(profile: NodeWorkerProfile): Promis
   };
 }
 
+/** What the console's query list shows for each recording: how long it ran, how many tasks. */
+function recordedSummaries(): { name: string; ms: number; tasks: number }[] {
+  return Object.entries(recordings()).map(([name, text]) => {
+    const { snapshot } = JSON.parse(text) as { snapshot: { startedAt: number; now: number; graph: { tasks: unknown[] } } };
+    return { name, ms: snapshot.now - snapshot.startedAt, tasks: snapshot.graph.tasks.length };
+  });
+}
+
 export const consoleOut = path.join(distDir, "console.html");
 
 /** Recorded console runs (`scripts/record-console-runs.ts`), by query name, as JSON text. */
@@ -161,7 +169,7 @@ async function buildConsole(): Promise<void> {
     logLevel: "warning",
     define: {
       __CLICKBENCH__: JSON.stringify(clickbenchQueries(ROOT)),
-      __RECORDED_QUERIES__: JSON.stringify(Object.keys(recordings())),
+      __RECORDED_QUERIES__: JSON.stringify(recordedSummaries()),
     },
   });
   const script = built.outputFiles[0]!.text.replaceAll("</script", "<\\/script");

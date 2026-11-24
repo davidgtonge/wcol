@@ -1,5 +1,8 @@
 //! Distributed row-group jobs with string `GROUP BY` keys (coordinator `ReduceOp`).
 
+#[path = "../common/claims.rs"]
+mod claims;
+
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -50,8 +53,12 @@ fn partial_payloads(wire: &[u8]) -> Vec<&[u8]> {
 }
 
 /// One node's whole partial: its frames decoded and merged.
-fn node_partial(path: &Path, program: &[u8]) -> wcol::stream::partials::PartialStateWcol {
-    let wire = run_wire_program(path, program);
+fn node_partial(
+    path: &Path,
+    program: &[u8],
+    own_units: &[u32],
+) -> wcol::stream::partials::PartialStateWcol {
+    let wire = run_wire_program(path, program, own_units);
     let frames: Vec<_> = partial_payloads(&wire)
         .into_iter()
         .map(|payload| partial_state_from_wcs_bytes(payload).expect("decode node partial"))
@@ -60,14 +67,21 @@ fn node_partial(path: &Path, program: &[u8]) -> wcol::stream::partials::PartialS
     coordinator_reduce_partials(frames).expect("merge node partial frames")
 }
 
-fn run_wire_program(path: &Path, program: &[u8]) -> Vec<u8> {
+fn run_wire_program(path: &Path, program: &[u8], own_units: &[u32]) -> Vec<u8> {
+    let mut claims = claims::Claims::new(own_units);
     let mut file = std::fs::File::open(path).unwrap();
     let mut pipe = open_wcol_plan(program, 512 * 1024).unwrap();
     let mut out = Vec::new();
     for _ in 0..500_000 {
         match pipe.poll() {
             Action::ReadAt => {
-                let (ticket, _source, offset, len) = pipe.read_at();
+                let (ticket, source, offset, len) = pipe.read_at();
+                if let Some(unit) = claims.answer(source) {
+                    pipe.input()[..4].copy_from_slice(&unit);
+                    pipe.commit_input(4).unwrap();
+                    pipe.complete_read(ticket).unwrap();
+                    continue;
+                }
                 let mut bytes = vec![0u8; len as usize];
                 file.seek(SeekFrom::Start(offset)).unwrap();
                 file.read_exact(&mut bytes).unwrap();
@@ -134,10 +148,15 @@ fn distributed_string_group_by_matches_monolithic_on_hits_slice() {
     .unwrap();
     let mono_partial = match mono {
         QueryDispatch::Partial(bytes) => bytes,
-        QueryDispatch::Nodes(programs) => {
-            wcol::partial_state_to_wcs_bytes(&node_partial(&path, &programs[0].program))
-                .expect("encode one-node partial")
-        }
+        QueryDispatch::Nodes(programs) => wcol::partial_state_to_wcs_bytes(&node_partial(
+            &path,
+            &programs[0].program,
+            programs[0]
+                .work
+                .as_ref()
+                .map_or(&[][..], |work| &work.own_units),
+        ))
+        .expect("encode one-node partial"),
         QueryDispatch::Rows { .. } | QueryDispatch::Parquet(_) => {
             panic!("a GROUP BY is an aggregate")
         }
@@ -158,7 +177,13 @@ fn distributed_string_group_by_matches_monolithic_on_hits_slice() {
 
     let worker_partials: Vec<_> = programs
         .iter()
-        .map(|node| node_partial(&path, &node.program))
+        .map(|node| {
+            node_partial(
+                &path,
+                &node.program,
+                node.work.as_ref().map_or(&[][..], |work| &work.own_units),
+            )
+        })
         .collect();
 
     let merged = coordinator_reduce_partials(worker_partials).expect("coordinator reduce");

@@ -285,8 +285,8 @@ const hitsSource = hitsParts
 const failTask = process.env.FAIL_TASK;
 /** Scan count override (the coordinator defaults to WCOL_MAX_NODES). */
 const maxNodes = process.env.MAX_NODES ? Number(process.env.MAX_NODES) : undefined;
-/** `REDUCERS=container` runs hash reducers in containers instead of node Durable Objects. */
-const reducerRuntime = process.env.REDUCERS === "container" ? "container" : undefined;
+/** `REDUCERS=container` or `REDUCERS=node` forces where hash reducers run; unset, the coordinator picks. */
+const reducerRuntime = process.env.REDUCERS === "container" || process.env.REDUCERS === "node" ? process.env.REDUCERS : undefined;
 /** `REDUCER_INSTANCE=lite` (with `REDUCERS=container`) picks the reducers' container size. */
 const reducerInstance = process.env.REDUCER_INSTANCE;
 /** How many scans may be open at once. Each reducer then holds at most this many edges. */

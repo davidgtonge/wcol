@@ -1,11 +1,12 @@
 /**
- * Run-time scan balancing. The planner gives every hash scan of a split object its own
- * queue of units (row groups whose fetches stand alone) and a catalog of all of them. A
- * scan asks for its next unit: its own first, then one stolen from the back of the
- * fullest queue in its group, so slow scans shed their tails to fast ones. The planner
- * deals units to the queues by cost, most expensive first, so every scan starts on heavy
- * work and the back of each queue is the cheapest work left. The queues live
- * on the job's coordinator, per attempt: a new attempt starts from the plan again.
+ * Run-time scan balancing. The planner gives every scan of a split object a queue of units
+ * (row groups whose fetches stand alone) and a catalog of all of them, dealing units to the
+ * queues by cost, most expensive first. A scan asks for its next unit and gets the front of
+ * the fullest queue in its group (its own on a tie): about the heaviest work left, whoever
+ * it was dealt to. Heavy units start early on whichever scan has room, and the last units
+ * handed out are the lightest, so a slow scan finishes on light work instead of the heavy
+ * front of its own queue. The queues live on the job's coordinator, per attempt: a new
+ * attempt starts from the plan again.
  */
 
 /** The Wasm scan's ReadAt source for "next unit": four bytes come back, the unit id. */
@@ -46,17 +47,15 @@ export function forgetWork(queues: WorkQueues, attempt: string): void {
   queues.delete(attempt);
 }
 
-/** The next unit for `taskId`: its own front, else the back of its group's fullest queue. */
+/** The next unit for `taskId`: the front of its group's fullest queue, its own on a tie. */
 export function nextUnit(queues: WorkQueues, attempt: string, taskId: number): number | null {
   const group = [...(queues.get(attempt)?.values() ?? [])].find((tasks) => tasks.has(taskId));
   if (!group) throw new Error(`task ${taskId} has no work queue in ${attempt}`);
-  const own = group.get(taskId)!;
-  if (own.length > 0) return own.shift()!;
-  let fullest: number[] | undefined;
+  let fullest = group.get(taskId)!;
   for (const queue of group.values()) {
-    if (queue.length > (fullest?.length ?? 0)) fullest = queue;
+    if (queue.length > fullest.length) fullest = queue;
   }
-  return fullest?.pop() ?? null;
+  return fullest.shift() ?? null;
 }
 
 type ScanReadAt = (source: number, offset: bigint | number, length: number) => Promise<Uint8Array>;

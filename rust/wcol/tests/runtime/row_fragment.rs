@@ -1,6 +1,9 @@
 //! Row queries run from the physical plan: node fragments emit typed frames, the coordinator
 //! sorts and limits them. Node programs contain no SQL.
 
+#[path = "../common/claims.rs"]
+mod claims;
+
 use wcol::exec::operator::{Operator, OperatorIo, StreamProgress, WcolStreamItem};
 use wcol::exec::operators::RowBatchWcsIngress;
 use wcol::formats::parquet::{open_plan, ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn};
@@ -63,7 +66,8 @@ fn sample_file() -> Vec<u8> {
     drive_encode(&mut enc, batch).unwrap()
 }
 
-fn run_node(program: &[u8], file: &[u8]) -> (Vec<u8>, u32, u64) {
+fn run_node(program: &[u8], own_units: &[u32], file: &[u8]) -> (Vec<u8>, u32, u64) {
+    let mut claims = claims::Claims::new(own_units);
     let mut host = open_wcol_plan(program, 64 * 1024).unwrap();
     let mut wire = Vec::new();
     let mut reads = 0u32;
@@ -71,7 +75,13 @@ fn run_node(program: &[u8], file: &[u8]) -> (Vec<u8>, u32, u64) {
     for _ in 0..100_000 {
         match host.poll() {
             Action::ReadAt => {
-                let (ticket, _, offset, len) = host.read_at();
+                let (ticket, source, offset, len) = host.read_at();
+                if let Some(unit) = claims.answer(source) {
+                    host.input()[..4].copy_from_slice(&unit);
+                    host.commit_input(4).unwrap();
+                    host.complete_read(ticket).unwrap();
+                    continue;
+                }
                 reads += 1;
                 bytes += u64::from(len);
                 let slice = &file[offset as usize..offset as usize + len as usize];
@@ -90,6 +100,15 @@ fn run_node(program: &[u8], file: &[u8]) -> (Vec<u8>, u32, u64) {
         }
     }
     panic!("node did not finish");
+}
+
+/// Reads and bytes planned across all nodes. Scans deal their units by cost at plan time, so
+/// one node's reads need not match its own figures; together they read each planned byte once.
+fn planned_reads(programs: &[wcol::plan::NodeProgram]) -> (u32, u64) {
+    (
+        programs.iter().map(|node| node.request_count).sum(),
+        programs.iter().map(|node| node.fetched_bytes).sum(),
+    )
 }
 
 fn run_coordinator(program: &[u8], wires: &[Vec<u8>]) -> Vec<u8> {
@@ -201,6 +220,7 @@ fn ordered_row_query_matches_on_one_two_and_four_nodes() {
         };
         assert!(!programs.is_empty());
         let mut wires = Vec::new();
+        let mut read = (0u32, 0u64);
         for node in &programs {
             assert!(
                 !node
@@ -210,11 +230,15 @@ fn ordered_row_query_matches_on_one_two_and_four_nodes() {
                 "node program contains SQL"
             );
             assert_eq!(node.program[5], 12, "node opcode");
-            let (wire, reads, bytes) = run_node(&node.program, &file);
-            assert_eq!(reads, node.request_count, "node {} reads", node.node.0);
-            assert_eq!(bytes, node.fetched_bytes, "node {} bytes", node.node.0);
+            let (wire, reads, bytes) = run_node(
+                &node.program,
+                node.work.as_ref().map_or(&[][..], |work| &work.own_units),
+                &file,
+            );
+            read = (read.0 + reads, read.1 + bytes);
             wires.push(wire);
         }
+        assert_eq!(read, planned_reads(&programs), "{nodes} nodes");
         assert_eq!(coordinator[5], 13, "coordinator opcode");
         assert!(
             !coordinator
@@ -238,12 +262,17 @@ fn unordered_row_query_keeps_every_matching_row() {
         panic!("expected a row dispatch");
     };
     let mut wires = Vec::new();
+    let mut read = (0u32, 0u64);
     for node in &programs {
-        let (wire, reads, bytes) = run_node(&node.program, &file);
-        assert_eq!(reads, node.request_count);
-        assert_eq!(bytes, node.fetched_bytes);
+        let (wire, reads, bytes) = run_node(
+            &node.program,
+            node.work.as_ref().map_or(&[][..], |work| &work.own_units),
+            &file,
+        );
+        read = (read.0 + reads, read.1 + bytes);
         wires.push(wire);
     }
+    assert_eq!(read, planned_reads(&programs));
     let mut values = column_ints(&run_coordinator(&coordinator, &wires));
     values.sort_unstable();
     assert_eq!(values, vec![3, 4, 5]);

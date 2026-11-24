@@ -60,7 +60,7 @@ function assertNoSqlInProgram(program: Uint8Array): void {
 }
 
 describe("queries run from the physical plan", { skip: !fs.existsSync(hits) && "hits subset missing" }, () => {
-  it("node programs carry no SQL and read exactly the planned bytes", async () => {
+  it("node programs carry no SQL and, together, read exactly the planned bytes", async () => {
     const coordinator = await loadCoordinatorWasm();
     const node = await loadNodeWasm();
     const reader = fileReader(hits);
@@ -72,11 +72,12 @@ describe("queries run from the physical plan", { skip: !fs.existsSync(hits) && "
       for (const task of dispatch.tasks) assertNoSqlInProgram(task.program);
       const workers = dispatch.tasks.filter((t) => t.id !== dispatch.rootTaskId);
       assert.ok(workers.length >= 1);
-      for (const task of workers) {
-        reader.reset();
-        await runNodeProgram(node, task.program, reader.read);
-        assert.deepEqual(reader.stats(), { calls: task.requestCount, bytes: task.fetchedBytes });
-      }
+      // Scans deal their units by cost at plan time, so one scan's reads need not match the
+      // figures planned for it; all of them together read every planned byte once.
+      reader.reset();
+      for (const task of workers) await runNodeProgram(node, task.program, reader.read, task.work?.ownUnits);
+      const sum = (pick: (task: (typeof workers)[number]) => number) => workers.reduce((total, task) => total + pick(task), 0);
+      assert.deepEqual(reader.stats(), { calls: sum((task) => task.requestCount), bytes: sum((task) => task.fetchedBytes) });
       const count = planQueryDispatch(coordinator, { sql: QUERIES[0]!, objectId: "hits", footer, nodeCount: 2 });
       assert.equal(count.kind, "metadata_partial", "COUNT(*) comes from the footer");
     } finally {

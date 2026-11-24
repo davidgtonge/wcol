@@ -2,6 +2,7 @@
 import { HttpRangeSource } from "../../../src/runtime/host/ports/http-range.ts";
 import { R2RangeSource } from "../../../src/runtime/host/ports/r2-read.ts";
 import { readMemGrowth, runWcolEngine } from "../../../src/runtime/host/run-wcol-engine.ts";
+import { claimingReadAt } from "../../../src/runtime/coordinator/unit-claims.ts";
 import { readDictTraffic } from "../../../src/runtime/host/host-types.ts";
 import { isolateId } from "../colo.ts";
 import { createHostBytes } from "../../../src/runtime/host/host-bytes.ts";
@@ -39,6 +40,16 @@ export function r2Bucket(env: R2Env, name: string) {
 type SourceReader = {
   read(offset: number, length: number): Uint8Array | Promise<Uint8Array>;
 };
+
+/** Ask the job's coordinator for a scan's next unit of work. */
+export function nextUnitFromCoordinator(env: GraphTaskEnv, jobId: string, attempt: number, taskId: number): Promise<number | null> {
+  const coordinators = env.WCOL_COORDINATOR;
+  if (!coordinators) throw new Error("scan work queues need the WCOL_COORDINATOR binding");
+  const coordinator = coordinators.get(coordinators.idFromName(jobId)) as unknown as {
+    nextUnit(params: { jobId: string; attempt: number; taskId: number }): Promise<number | null>;
+  };
+  return coordinator.nextUnit({ jobId, attempt, taskId });
+}
 
 export function sourceReader(env: GraphTaskEnv, source: GraphJobSource, etag: string | undefined): SourceReader {
   if ("url" in source) {
@@ -169,11 +180,15 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
   const isolatePeak = createIsolatePeak();
   // Taken once, at open: a task that joins later sees this one and takes its own share.
   const budgetShare = isolateLoad().tasks;
-  const readSource = (source: number, offset: number, length: number) => {
-    const reader = readers[source];
-    if (!reader) throw new Error(`ReadAt source ${source} out of range (${readers.length} sources)`);
-    return reader.read(offset, length);
-  };
+  // A scan with claim units asks for its next unit through the same ReadAt.
+  const readSource = claimingReadAt(
+    async (source, offset, length) => {
+      const reader = readers[source];
+      if (!reader) throw new Error(`ReadAt source ${source} out of range (${readers.length} sources)`);
+      return reader.read(Number(offset), length);
+    },
+    () => nextUnitFromCoordinator(env, params.jobId, params.executionAttempt, params.taskId),
+  );
   // Spill-only progress left 90s gaps after retained-capacity reclaim (few runs).
   // Heartbeat on every yield so the coordinator stall watchdog sees live work.
   const heartbeat = async (): Promise<void> => {

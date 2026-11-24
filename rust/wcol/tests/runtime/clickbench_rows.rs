@@ -1,6 +1,9 @@
 //! ClickBench row queries on the physical graph: Q19 and Q23–Q26 against the hits subset,
 //! plus the row-graph regressions those queries are meant to catch.
 
+#[path = "../common/claims.rs"]
+mod claims;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -140,7 +143,8 @@ fn assert_frames_fit(wire: &[u8]) {
     assert_eq!(at, wire.len(), "trailing bytes after WCS frames");
 }
 
-fn run_node(path: &Path, program: &[u8]) -> (Vec<u8>, u32, u64) {
+fn run_node(path: &Path, program: &[u8], own_units: &[u32]) -> (Vec<u8>, u32, u64) {
+    let mut claims = claims::Claims::new(own_units);
     let mut file = File::open(path).unwrap();
     let mut host = open_wcol_plan(program, RING).unwrap();
     let mut wire = Vec::new();
@@ -148,7 +152,13 @@ fn run_node(path: &Path, program: &[u8]) -> (Vec<u8>, u32, u64) {
     for _ in 0..5_000_000 {
         match host.poll() {
             Action::ReadAt => {
-                let (ticket, _, offset, len) = host.read_at();
+                let (ticket, source, offset, len) = host.read_at();
+                if let Some(unit) = claims.answer(source) {
+                    host.input()[..4].copy_from_slice(&unit);
+                    host.commit_input(4).unwrap();
+                    host.complete_read(ticket).unwrap();
+                    continue;
+                }
                 reads += 1;
                 bytes += u64::from(len);
                 let mut buf = vec![0u8; len as usize];
@@ -263,13 +273,27 @@ fn execute(path: &Path, sql: &str, nodes: u32, reverse_nodes: bool) -> Ran {
     }
     no_sql(&coordinator);
     let mut wires = Vec::new();
+    // Scans deal their units by cost at plan time, so one node's reads need not match the
+    // figures planned for it; all of them together read every planned byte once.
+    let (mut reads, mut bytes) = (0u32, 0u64);
     for node in &programs {
         no_sql(&node.program);
-        let (wire, reads, bytes) = run_node(path, &node.program);
-        assert_eq!(reads, node.request_count, "node {} reads", node.node.0);
-        assert_eq!(bytes, node.fetched_bytes, "node {} bytes", node.node.0);
+        let (wire, node_reads, node_bytes) = run_node(
+            path,
+            &node.program,
+            node.work.as_ref().map_or(&[][..], |work| &work.own_units),
+        );
+        reads += node_reads;
+        bytes += node_bytes;
         wires.push(wire);
     }
+    let planned_reads: u32 = programs.iter().map(|node| node.request_count).sum();
+    let planned_bytes: u64 = programs.iter().map(|node| node.fetched_bytes).sum();
+    assert_eq!(
+        (reads, bytes),
+        (planned_reads, planned_bytes),
+        "{sql}: reads and bytes"
+    );
     if reverse_nodes {
         wires.reverse();
     }

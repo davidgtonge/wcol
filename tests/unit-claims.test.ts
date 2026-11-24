@@ -19,24 +19,31 @@ const tasks = [
 ];
 
 describe("scan work queues", () => {
-  it("hands each task its own units first, in order", () => {
+  it("hands out the front of the fullest queue, the asker's own on a tie", () => {
     const queues: WorkQueues = new Map();
     const a1 = attemptKey("job", 1);
-    registerWork(queues, a1, tasks);
+    registerWork(queues, a1, [
+      { id: 0, work: { group: 0, ownUnits: [0, 2] } },
+      { id: 1, work: { group: 0, ownUnits: [1, 3] } },
+    ]);
+    // Tied: task 0 takes its own front, the heaviest work left.
     assert.equal(nextUnit(queues, a1, 0), 0);
-    assert.equal(nextUnit(queues, a1, 1), 4);
+    // Task 1's queue is now fuller, so task 0 takes its front rather than its own light unit.
     assert.equal(nextUnit(queues, a1, 0), 1);
-  });
-
-  it("steals from the back of the fullest queue in the same group only", () => {
-    const queues: WorkQueues = new Map();
-    const a1 = attemptKey("job", 1);
-    registerWork(queues, a1, tasks);
-    assert.equal(nextUnit(queues, a1, 1), 4);
     assert.equal(nextUnit(queues, a1, 1), 3);
     assert.equal(nextUnit(queues, a1, 1), 2);
-    assert.equal(nextUnit(queues, a1, 0), 0);
-    assert.equal(nextUnit(queues, a1, 0), 1);
+    assert.equal(nextUnit(queues, a1, 0), null);
+  });
+
+  it("takes from another queue when it is fuller, within the same group only", () => {
+    const queues: WorkQueues = new Map();
+    const a1 = attemptKey("job", 1);
+    registerWork(queues, a1, tasks);
+    assert.equal(nextUnit(queues, a1, 1), 0);
+    assert.equal(nextUnit(queues, a1, 1), 1);
+    assert.equal(nextUnit(queues, a1, 1), 2);
+    assert.equal(nextUnit(queues, a1, 0), 3);
+    assert.equal(nextUnit(queues, a1, 0), 4);
     assert.equal(nextUnit(queues, a1, 0), null);
     assert.equal(nextUnit(queues, a1, 1), null);
     // Group 1 kept its unit.
@@ -63,8 +70,8 @@ describe("scan work queues", () => {
     const queues: WorkQueues = new Map();
     registerWork(queues, attemptKey("job", 1), tasks);
     registerWork(queues, attemptKey("job", 2), tasks);
-    assert.equal(nextUnit(queues, attemptKey("job", 1), 1), 4);
-    assert.equal(nextUnit(queues, attemptKey("job", 2), 1), 4);
+    assert.equal(nextUnit(queues, attemptKey("job", 1), 1), 0);
+    assert.equal(nextUnit(queues, attemptKey("job", 2), 1), 0);
     forgetWork(queues, attemptKey("job", 1));
     assert.throws(() => nextUnit(queues, attemptKey("job", 1), 1));
     assert.throws(() => nextUnit(queues, attemptKey("job", 2), 3));

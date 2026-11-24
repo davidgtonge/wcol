@@ -10,6 +10,7 @@ import { attachBytesInputs } from "../host/pool-streams.ts";
 import { planQueryDispatch, type ReadAt } from "./plan-dispatch.ts";
 import type { WcolStreamWasm } from "../host/wasm-stream.ts";
 import { type LocalSpillR2, runLocalHashGraph } from "./run-local-hash-graph.ts";
+import { claimingReadAt, localWork } from "./unit-claims.ts";
 import { createMemoryR2SpillBucket } from "../../../tests/helpers/memory-r2-spill-bucket.ts";
 
 export type LocalGraphWasm = {
@@ -23,17 +24,20 @@ async function runTask(
   readAt: ReadAt | undefined,
   inputs: Uint8Array[],
   spillR2Bucket: LocalSpillR2,
+  next: () => number | null = () => null,
 ): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
+  // One source here; a scan with claim units asks for its next unit through the same ReadAt.
+  const read = readAt ? claimingReadAt(async (_source, offset, length) => readAt(Number(offset), length), next) : undefined;
   await runWcolEngine({
     wasm,
     plan: program,
     scratchBytes: 1024 * 1024,
     layout: { inputs: inputs.length, outputs: 1 },
     onPoolReady: attachBytesInputs(inputs),
-    readAt: readAt ? (_source, offset, length) => readAt(Number(offset), length) : undefined,
+    readAt: read,
     host: {
-      readAt: readAt ? (_source, offset, length) => readAt(offset, length) : undefined,
+      readAt: read,
       writePort: async (_port, chunk) => {
         parts.push(chunk);
       },
@@ -53,6 +57,8 @@ export async function runGatherGraph(
 ): Promise<Uint8Array> {
   const outputs = new Map<number, Uint8Array>();
   const pending = new Set(plan.tasks.map((task) => task.id));
+  // Tasks run one at a time here, so the first scan of a group claims every unit.
+  const nextUnit = localWork(plan.tasks);
   while (pending.size > 0) {
     const ready = plan.tasks.filter((task) => {
       if (!pending.has(task.id)) return false;
@@ -63,7 +69,9 @@ export async function runGatherGraph(
       const incoming = edgesInto(task.id, plan.edges).map((edge) => outputs.get(edge.from)!);
       const engine = task.slot === COORDINATOR_SLOT ? wasm.coordinator : wasm.node;
       try {
-        outputs.set(task.id, await runTask(engine, task.program, incoming.length ? undefined : readAt, incoming, spillR2Bucket));
+        outputs.set(task.id, await runTask(engine, task.program, incoming.length ? undefined : readAt, incoming, spillR2Bucket, () =>
+          nextUnit(task.id),
+        ));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(`task ${task.id} slot ${task.slot}: ${message}`);
@@ -129,15 +137,19 @@ export async function runNodeProgram(
   wasm: WcolStreamWasm,
   program: Uint8Array,
   readAt: ReadAt,
+  ownUnits: readonly number[] = [],
 ): Promise<void> {
+  // With no other scan to steal from, a scan runs exactly its own planned units.
+  const units = [...ownUnits];
+  const read = claimingReadAt(async (_source, offset, length) => readAt(Number(offset), length), () => units.shift() ?? null);
   await runWcolEngine({
     wasm,
     plan: program,
     scratchBytes: 256 * 1024,
     layout: { inputs: 0, outputs: 1 },
-    readAt: (_source, offset, length) => readAt(Number(offset), length),
+    readAt: read,
     host: {
-      readAt: (_source, offset, length) => readAt(offset, length),
+      readAt: read,
       writePort: async () => {},
       yield: () => new Promise((resolve) => setTimeout(resolve, 0)),
     },

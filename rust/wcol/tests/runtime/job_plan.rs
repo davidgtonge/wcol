@@ -2,6 +2,9 @@
 //! an aggregate), and concat. Exported files are read back through the engine and compared
 //! with the same query run directly.
 
+#[path = "../common/claims.rs"]
+mod claims;
+
 use std::path::PathBuf;
 
 use wcol::formats::parquet::plan_footer;
@@ -40,7 +43,8 @@ fn footer(file: &[u8]) -> JobFooter {
 }
 
 /// Run one task. `sources[i]` answers ReadAt source `i`; `input` is its edge bytes.
-fn run_task(sources: &[&[u8]], program: &[u8], wires: &[Vec<u8>]) -> Vec<u8> {
+fn run_task(sources: &[&[u8]], program: &[u8], own_units: &[u32], wires: &[Vec<u8>]) -> Vec<u8> {
+    let mut claims = claims::Claims::new(own_units);
     let mut pipe = open_wcol_plan(program, RING).unwrap();
     let mut out = Vec::new();
     let mut at = vec![0usize; wires.len()];
@@ -51,6 +55,12 @@ fn run_task(sources: &[&[u8]], program: &[u8], wires: &[Vec<u8>]) -> Vec<u8> {
         match pipe.poll() {
             Action::ReadAt => {
                 let (ticket, source, offset, len) = pipe.read_at();
+                if let Some(unit) = claims.answer(source) {
+                    pipe.input()[..4].copy_from_slice(&unit);
+                    pipe.commit_input(4).unwrap();
+                    pipe.complete_read(ticket).unwrap();
+                    continue;
+                }
                 let file = sources[source as usize];
                 let slice = &file[offset as usize..offset as usize + len as usize];
                 for part in slice.chunks(RING) {
@@ -128,17 +138,32 @@ fn run_graph(file: &[u8], exec: &ExecutionPlan) -> (RootOutputKind, Vec<Vec<u8>>
             *root_output,
             tasks
                 .iter()
-                .map(|t| run_task(&[file], &t.program, &[]))
+                .map(|t| {
+                    run_task(
+                        &[file],
+                        &t.program,
+                        t.work.as_ref().map_or(&[][..], |work| &work.own_units),
+                        &[],
+                    )
+                })
                 .collect(),
         );
     }
     let mut wires = Vec::new();
     for edge in edges.iter().filter(|e| e.to == *root_task_id) {
         let task = tasks.iter().find(|t| t.id == edge.from).unwrap();
-        wires.push(run_task(&[file], &task.program, &[]));
+        wires.push(run_task(
+            &[file],
+            &task.program,
+            task.work.as_ref().map_or(&[][..], |work| &work.own_units),
+            &[],
+        ));
     }
     let root = tasks.iter().find(|t| t.id == *root_task_id).unwrap();
-    (*root_output, vec![run_task(&[file], &root.program, &wires)])
+    (
+        *root_output,
+        vec![run_task(&[file], &root.program, &[], &wires)],
+    )
 }
 
 /// JSON for `sql` over `file` (table `t`).
@@ -369,7 +394,7 @@ fn concat_copies_every_input_into_one_file() {
         panic!("expected concat");
     };
     assert_eq!((key.as_str(), programs.len()), ("merged.parquet", 1));
-    let merged = run_task(&[input, input], &programs[0], &[]);
+    let merged = run_task(&[input, input], &programs[0], &[], &[]);
     let read = |bytes: &[u8]| -> serde_json::Value {
         serde_json::from_str(&query(bytes, "SELECT COUNT(*), SUM(p), COUNT(p) FROM t", 1)).unwrap()
     };
@@ -716,6 +741,12 @@ fn full_hits_wide_topk_reads_rows_late() {
     assert!((8..=32).contains(&scans), "{scans} read-back scans");
     let slots: std::collections::BTreeSet<_> = tasks.iter().map(|task| task.slot).collect();
     assert_eq!(slots.len(), tasks.len(), "every task has its own slot");
+    // Scans of one column group balance among themselves; each group's catalog is its own.
+    let groups: std::collections::BTreeSet<u32> = tasks
+        .iter()
+        .filter_map(|task| task.work.as_ref().map(|work| work.group))
+        .collect();
+    assert!(groups.len() > 1, "column groups share one work group");
 }
 
 /// A grouped `approx_count_distinct` charges each group a dense sketch: on the gather plan
@@ -792,10 +823,28 @@ fn shard_export_streams_the_rows_a_finalizer_merges() {
         panic!("one producer feeds the finalizer");
     };
     let producer = tasks.iter().find(|task| task.id == edge.from).unwrap();
-    let partials = run_task(&[&file], &producer.program, &[]);
+    let partials = run_task(
+        &[&file],
+        &producer.program,
+        producer
+            .work
+            .as_ref()
+            .map_or(&[][..], |work| &work.own_units),
+        &[],
+    );
     let steps = decode_coordinator_steps(&root.program[14..]).unwrap();
-    let merged = run_task(&[&file], &root.program, std::slice::from_ref(&partials));
-    let streamed = run_task(&[&file], &encode_shard_export_program(&steps), &[partials]);
+    let merged = run_task(
+        &[&file],
+        &root.program,
+        &[],
+        std::slice::from_ref(&partials),
+    );
+    let streamed = run_task(
+        &[&file],
+        &encode_shard_export_program(&steps),
+        &[],
+        &[partials],
+    );
     let rows = |parquet: &[u8]| query(parquet, "SELECT d, c, s, a FROM t ORDER BY d", 1);
     assert_eq!(rows(&streamed), rows(&merged));
     assert_eq!(

@@ -166,7 +166,12 @@ async function runAttempt(
     await rememberGraphSlots(ctx, job.jobId, prepared.graph);
     if (prepared.plan.kind !== "json") throw new Error("non-hash parquet output is not published by this host");
     if (prepared.plan.late) {
-      const text = await readLateRows(ctx, prepared, wasm, bytes, (graph) => gather(graph, undefined));
+      const text = await readLateRows(ctx, prepared, wasm, bytes, (graph) => {
+        // The read-back's scans balance their units too. The pick graph has finished, so its
+        // queues give way to these under the same attempt.
+        registerWork(ctx.work, attemptKey(job.jobId, attempt), graph.tasks);
+        return gather(graph, undefined);
+      });
       assertJsonSize(text, prepared.descriptor.byteCap);
       return { jsonText: text, outputs: [] };
     }

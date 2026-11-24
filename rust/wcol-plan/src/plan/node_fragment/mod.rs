@@ -217,26 +217,20 @@ pub fn assign_sources(
 /// What decoding one column chunk costs, for ordering scan work: `(object, row group, leaf)`.
 pub type ChunkCost<'a> = dyn Fn(&str, u32, u32) -> u64 + 'a;
 
-/// Let the hash scans of one object balance at run time. Each scan's fragment can run any
+/// Let the scans of one object balance at run time, whatever they feed (hash or range
+/// reducers, the coordinator, Parquet output). Each scan's fragment can run any
 /// unit of that object (its catalog holds them all) and names the units planned for it; the
-/// coordinator queues those per scan and hands out work, so an idle scan takes units from
-/// the back of a slower scan's queue. A unit is the row groups one scan's fetches join.
+/// coordinator queues those per scan and hands each claim the front of the fullest queue.
+/// A unit is the row groups one scan's fetches join.
 ///
 /// Queues are dealt by cost (`chunk_cost`), most expensive first and snaking across the
-/// scans, so every scan starts on one of the heaviest units and queues carry similar work.
-/// What is stolen from the back, and what any scan runs last, is the cheapest work left:
-/// no scan starts a long unit once the others are idle, and no slow scan keeps the heavy
-/// units its plan happened to hold while others steal its light ones.
+/// scans, so queue fronts are the heaviest work left: heavy units start early on whichever
+/// scan asks, and the last units handed out are the cheapest. No scan starts a long unit
+/// once the others are idle, and a slow scan does not keep the heavy units its plan held.
 pub fn add_claim_units(fragments: &mut BTreeMap<NodeId, NodeFragment>, chunk_cost: &ChunkCost) {
-    let hash_scan = |fragment: &NodeFragment| {
-        fragment
-            .steps
-            .iter()
-            .any(|step| matches!(step, FragmentStep::HashPartition { .. }))
-    };
     let mut by_object: BTreeMap<String, Vec<NodeId>> = BTreeMap::new();
     for (node, fragment) in fragments.iter() {
-        if let (true, Some(group)) = (hash_scan(fragment), fragment.decode.first()) {
+        if let Some(group) = fragment.decode.first() {
             by_object
                 .entry(group.object_id.clone())
                 .or_default()

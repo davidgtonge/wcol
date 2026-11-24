@@ -11,17 +11,7 @@ import { type PoolStats } from "../../../src/runtime/host/stream-pool.ts";
 import { reducerStub, type ReducerRuntime } from "./session.ts";
 import { type GraphTaskEnv, type RunTaskHandle, type RunTaskOnNodeOptions } from "./types.ts";
 import { traceObjectKey } from "./records.ts";
-import { eventLoopYield, sourceReader, streamed } from "./program.ts";
-
-/** Ask the job's coordinator for this scan's next unit of work. */
-function nextUnitFromCoordinator(env: GraphTaskEnv, jobId: string, attempt: number, taskId: number): Promise<number | null> {
-  const coordinators = env.WCOL_COORDINATOR;
-  if (!coordinators) throw new Error("scan work queues need the WCOL_COORDINATOR binding");
-  const coordinator = coordinators.get(coordinators.idFromName(jobId)) as unknown as {
-    nextUnit(params: { jobId: string; attempt: number; taskId: number }): Promise<number | null>;
-  };
-  return coordinator.nextUnit({ jobId, attempt, taskId });
-}
+import { eventLoopYield, nextUnitFromCoordinator, sourceReader, streamed } from "./program.ts";
 
 /** Partition id is the port. An array index is never a fallback. */
 export function destinationForPort<T extends { partition: number }>(destinations: readonly T[], port: number): T {

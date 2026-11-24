@@ -29,7 +29,7 @@ pub(super) fn build_aggregate_graph(
             program: node.program.clone(),
             request_count: node.request_count,
             fetched_bytes: node.fetched_bytes,
-            work: None,
+            work: node.work.clone(),
         });
     }
     let reduce_id = tasks.len() as u32;
@@ -297,7 +297,7 @@ pub(super) fn build_row_graph(
             program: node.program.clone(),
             request_count: node.request_count,
             fetched_bytes: node.fetched_bytes,
-            work: None,
+            work: node.work.clone(),
         });
     }
     let coord_id = tasks.len() as u32;
@@ -361,7 +361,7 @@ pub(super) fn build_parquet_parts(nodes: &[NodeProgram]) -> Result<ExecutionPlan
             program: node.program.clone(),
             request_count: node.request_count,
             fetched_bytes: node.fetched_bytes,
-            work: None,
+            work: node.work.clone(),
         })
         .collect();
     Ok(execution_graph(
@@ -396,7 +396,7 @@ pub fn build_range_sort_graph(
             program: node.program.clone(),
             request_count: node.request_count,
             fetched_bytes: node.fetched_bytes,
-            work: None,
+            work: node.work.clone(),
         });
     }
     let worker_base = tasks.len() as u32;

@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 
 use crate::formats::parquet::Plan;
-use crate::plan::execution_graph::{execution_plan_for, ExecutionPlan};
+use crate::plan::execution_graph::{execution_plan_for, ExecutionPlan, TaskWork};
 use crate::plan::logical_from_parser::logical_plan_and_output_from_footer;
 use crate::plan::physical_plan::{LogicalOp, PhysicalPlannerConfig, WcolLogicalPlan};
 use crate::plan::query_dispatch::{dispatch_prepared, same_schema, NodeProgram, QueryDispatch};
@@ -292,7 +292,7 @@ pub enum LateRead {
 }
 
 /// Scans that read the `SELECT` list back for the row ids in `picked` (the first graph's
-/// row frames), one per column group and object holding a picked row.
+/// row frames), one per column group and row group holding a picked row.
 pub fn plan_late_read(
     sql: &str,
     objects: &[(&str, &Plan)],
@@ -326,11 +326,6 @@ pub fn plan_late_read(
         .zip(&narrowed)
         .map(|((id, _), footer)| (*id, footer))
         .collect();
-    let holders = winners
-        .iter()
-        .map(|(source, _)| source)
-        .collect::<BTreeSet<_>>()
-        .len() as u32;
     let width = |column: u32| {
         narrowed
             .iter()
@@ -338,11 +333,16 @@ pub fn plan_late_read(
             .max()
             .unwrap_or(0)
     };
+    let groups = column_groups(&query.projection, width, config.late_rows.group_bytes);
+    // The job's scan budget, shared by the column groups: each group spreads its winning row
+    // groups over its share, so no scan decodes every row group holding a pick.
+    let share = (config.max_nodes / groups.len().max(1) as u32).max(1);
+    let holders = (winners.len() as u32).clamp(1, share);
     let mut group_config = config.clone();
     group_config.max_nodes = holders;
     let mut nodes: Vec<NodeProgram> = Vec::new();
     let mut last_plan = None;
-    for group in column_groups(&query.projection, width, config.late_rows.group_bytes) {
+    for (index, group) in groups.into_iter().enumerate() {
         let logical = query.read_back(&group, &ids);
         let (dispatch, plan) =
             dispatch_prepared(&logical, &narrowed, holders, batch_rows, &group_config)?;
@@ -352,10 +352,15 @@ pub fn plan_late_read(
         else {
             return Err("a late read-back is not a row query".into());
         };
-        // Every group plans nodes from 0: shift them so each scan has its own slot.
+        // Every group plans nodes from 0: shift them so each scan has its own slot. Its scans
+        // balance among themselves only: another group's units are not in their catalog.
         let base = nodes.len() as u32;
         nodes.extend(programs.into_iter().map(|program| NodeProgram {
             node: NodeId(base + program.node.0),
+            work: program.work.map(|work| TaskWork {
+                group: ((index as u32) << 16) | work.group,
+                ..work
+            }),
             ..program
         }));
         last_plan = Some(plan);

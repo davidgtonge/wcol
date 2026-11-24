@@ -5,6 +5,7 @@ import type { GraphPlan } from "../../../src/runtime/coordinator/job-replay.ts";
 import { type ObjectPart } from "../../../src/runtime/coordinator/run-hash-job.ts";
 import { type StageTimeline } from "../../../src/runtime/coordinator/stage-timeline.ts";
 import { createLimiter } from "../../../src/runtime/concurrency.ts";
+import { attemptKey, claimingReadAt, nextUnit } from "../../../src/runtime/coordinator/unit-claims.ts";
 import { concatBytes } from "../../../src/runtime/host/bytes.ts";
 import { runWcolEngine } from "../../../src/runtime/host/run-wcol-engine.ts";
 import { attachBytesInputs } from "../../../src/runtime/host/pool-streams.ts";
@@ -80,6 +81,7 @@ export async function runParquetGatherPrepared(
   const bucketName = prepared.descriptor.bucket;
   const bucket = bucketName ? r2Bucket(ctx.env, bucketName) : outputBucket(ctx.env);
   const layout = plan.output?.layout ?? "single_file";
+  const claimNext = (taskId: number) => () => nextUnit(ctx.work, attemptKey(job.jobId, attempt), taskId);
   const asParts = (taskId: number, objects: ExportObject[]): ObjectPart[] =>
     objects.map((object) => ({ ...object, parts: 1, taskId }));
   const uploadTask = async (taskId: number, slot: number, program: Uint8Array, inputs: Uint8Array[]): Promise<ObjectPart[]> => {
@@ -114,7 +116,7 @@ export async function runParquetGatherPrepared(
         host: {
           writePort: (port, chunk) => sink.writePort(port, chunk),
           yield: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
-          readAt: inputs.length ? undefined : readSources(ctx.env, prepared.descriptor.sources),
+          readAt: inputs.length ? undefined : claimingReadAt(readSources(ctx.env, prepared.descriptor.sources), claimNext(taskId)),
         },
       });
       return asParts(taskId, await sink.finish());
@@ -149,8 +151,11 @@ export async function runParquetGatherPrepared(
       } else {
         const bytes =
           task.slot === COORDINATOR_SLOT
-            ? await runGatherLocal(wasm, task.program, incoming, (source, offset, length) =>
-                readSources(ctx.env, prepared.descriptor.sources)(source, offset, length),
+            ? await runGatherLocal(
+                wasm,
+                task.program,
+                incoming,
+                claimingReadAt(readSources(ctx.env, prepared.descriptor.sources), claimNext(task.id)),
               )
             : await runRemoteGather(ctx, job, prepared, attempt, failTaskId, task, incoming, facts);
         outputs.set(task.id, bytes);
@@ -204,6 +209,7 @@ export async function runGatherPrepared(
     throw new Error("runGatherPrepared requires a graph without hash-partition edges");
   }
   const read = readSources(ctx.env, prepared.descriptor.sources);
+  const claimNext = (taskId: number) => () => nextUnit(ctx.work, attemptKey(job.jobId, attempt), taskId);
   const outputs = new Map<number, Uint8Array>();
   const pending = new Set(plan.tasks.map((task) => task.id));
   // Tasks whose producers are done are independent; run them together, bounded
@@ -215,7 +221,7 @@ export async function runGatherPrepared(
       const incoming = edgesInto(task.id, plan.edges).map((edge) => outputs.get(edge.from)!);
       const bytes = await timeline.span("gatherTask", { taskId: task.id }, () =>
         task.slot === COORDINATOR_SLOT
-          ? runGatherLocal(wasm, task.program, incoming, (source, offset, length) => read(source, offset, length))
+          ? runGatherLocal(wasm, task.program, incoming, claimingReadAt(read, claimNext(task.id)))
           : runRemoteGather(ctx, job, prepared, attempt, failTaskId, task, incoming, facts),
       );
       return [task.id, bytes] as const;

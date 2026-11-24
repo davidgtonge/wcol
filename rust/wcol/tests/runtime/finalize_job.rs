@@ -2,6 +2,9 @@
 //! them, sorts and limits the result rows in the engine, and emits row frames. The
 //! coordinator only prints those frames as JSON. Answers are DuckDB's on the same file.
 
+#[path = "../common/claims.rs"]
+mod claims;
+
 use std::path::PathBuf;
 
 use wcol::formats::parquet::open_plan;
@@ -27,7 +30,8 @@ fn fixture_named(name: &str) -> PathBuf {
 }
 
 /// Run one task to completion. `wires` are producer WCS streams, one per input port.
-fn run_task(file: &[u8], program: &[u8], wires: &[Vec<u8>]) -> Vec<u8> {
+fn run_task(file: &[u8], program: &[u8], own_units: &[u32], wires: &[Vec<u8>]) -> Vec<u8> {
+    let mut claims = claims::Claims::new(own_units);
     let mut pipe = open_wcol_plan(program, RING).unwrap();
     let mut out = Vec::new();
     let mut at = vec![0usize; wires.len()];
@@ -37,7 +41,13 @@ fn run_task(file: &[u8], program: &[u8], wires: &[Vec<u8>]) -> Vec<u8> {
     for _ in 0..1_000_000 {
         match pipe.poll() {
             Action::ReadAt => {
-                let (ticket, _source, offset, len) = pipe.read_at();
+                let (ticket, source, offset, len) = pipe.read_at();
+                if let Some(unit) = claims.answer(source) {
+                    pipe.input()[..4].copy_from_slice(&unit);
+                    pipe.commit_input(4).unwrap();
+                    pipe.complete_read(ticket).unwrap();
+                    continue;
+                }
                 let slice = &file[offset as usize..offset as usize + len as usize];
                 for part in slice.chunks(RING) {
                     pipe.input()[..part.len()].copy_from_slice(part);
@@ -155,10 +165,15 @@ fn run_graph(file: &[u8], (tasks, edges, root_task_id): &Parts) -> Vec<u8> {
     let mut wires = Vec::new();
     for edge in edges.iter().filter(|edge| edge.to == *root_task_id) {
         let task = tasks.iter().find(|task| task.id == edge.from).unwrap();
-        wires.push(run_task(file, &task.program, &[]));
+        wires.push(run_task(
+            file,
+            &task.program,
+            task.work.as_ref().map_or(&[][..], |work| &work.own_units),
+            &[],
+        ));
     }
     let root = tasks.iter().find(|task| task.id == *root_task_id).unwrap();
-    run_task(file, &root.program, &wires)
+    run_task(file, &root.program, &[], &wires)
 }
 
 fn graph_parts(exec: ExecutionPlan) -> Parts {
@@ -336,7 +351,15 @@ fn finalizer_fails_when_a_producer_never_finishes() {
     };
     let first = edges.iter().find(|edge| edge.to == root_task_id).unwrap();
     let producer = tasks.iter().find(|task| task.id == first.from).unwrap();
-    let only_one = run_task(&file, &producer.program, &[]);
+    let only_one = run_task(
+        &file,
+        &producer.program,
+        producer
+            .work
+            .as_ref()
+            .map_or(&[][..], |work| &work.own_units),
+        &[],
+    );
     let root = tasks.iter().find(|task| task.id == root_task_id).unwrap();
     let mut pipe = open_wcol_plan(&root.program, RING).unwrap();
     let mut at = 0usize;

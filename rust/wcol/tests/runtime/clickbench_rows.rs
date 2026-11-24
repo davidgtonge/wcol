@@ -1,4 +1,4 @@
-//! ClickBench row queries on the physical graph: Q19 and Q24–Q27 against the hits subset,
+//! ClickBench row queries on the physical graph: Q19 and Q23–Q26 against the hits subset,
 //! plus the row-graph regressions those queries are meant to catch.
 
 use std::fs::File;
@@ -578,7 +578,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
 
     check_ordered(
         &path,
-        "q24_google_by_time",
+        "q23_google_by_time",
         "SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10",
         "SELECT *, CAST(EventTime AS VARCHAR) FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10",
         1,
@@ -586,7 +586,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
     check_ordered(
         &path,
-        "q25_phrase_by_time",
+        "q24_phrase_by_time",
         "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10",
         "SELECT CAST(SearchPhrase AS VARCHAR), CAST(EventTime AS VARCHAR) FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10",
         1,
@@ -594,7 +594,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
     check_ordered(
         &path,
-        "q26_phrase_by_phrase",
+        "q25_phrase_by_phrase",
         "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
         "SELECT CAST(SearchPhrase AS VARCHAR), CAST(SearchPhrase AS VARCHAR) FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10",
         1,
@@ -602,7 +602,7 @@ fn clickbench_row_queries_match_duckdb_on_one_two_and_four_nodes() {
     );
     check_ordered(
         &path,
-        "q27_phrase_by_time_and_phrase",
+        "q26_phrase_by_time_and_phrase",
         "SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10",
         "SELECT CAST(SearchPhrase AS VARCHAR), CAST(EventTime AS VARCHAR), CAST(SearchPhrase AS VARCHAR) FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10",
         2,

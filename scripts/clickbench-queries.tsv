@@ -50,7 +50,7 @@ S8	SELECT COUNT(*) FROM hits WHERE URL LIKE '%'
 S9	SELECT COUNT(*) FROM hits WHERE Title LIKE '%Google%' AND URL NOT LIKE '%.google.%' AND SearchPhrase <> ''
 S10	SELECT Title, COUNT(*) FROM hits WHERE Title <> '' GROUP BY Title
 S11	SELECT COUNT(*) FROM hits WHERE URL LIKE '%a%a%a%a%a%a%q%'
-Q24	SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10;
-Q25	SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10;
-Q26	SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10;
-Q27	SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10;
+Q23	SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10;
+Q24	SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime LIMIT 10;
+Q25	SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY SearchPhrase LIMIT 10;
+Q26	SELECT SearchPhrase FROM hits WHERE SearchPhrase <> '' ORDER BY EventTime, SearchPhrase LIMIT 10;

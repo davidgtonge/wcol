@@ -633,8 +633,8 @@ fn full_hits_distinct_exchange_keys() {
     );
 }
 
-/// Q24 prints all 105 columns of its ten rows: on the full hits footer it picks rows from
-/// URL and EventTime alone, then reads the rest back in column groups. Q25–Q27 print one
+/// Q23 prints all 105 columns of its ten rows: on the full hits footer it picks rows from
+/// URL and EventTime alone, then reads the rest back in column groups. Q24–Q26 print one
 /// column and stay one pass.
 #[test]
 fn full_hits_wide_topk_reads_rows_late() {
@@ -654,7 +654,7 @@ fn full_hits_wide_topk_reads_rows_late() {
     let q24 = "SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10";
     let (_, plan, columns) = plan_late_pick(q24, &objects, 1024, &config)
         .unwrap()
-        .expect("Q24 reads its rows late");
+        .expect("Q23 reads its rows late");
     let row_id_column = columns[0].column;
     let decoded = plan
         .operators
@@ -709,7 +709,7 @@ fn full_hits_wide_topk_reads_rows_late() {
     let LateRead::Graph(ExecutionPlan::Graph { tasks, edges, .. }, columns) =
         plan_late_read(q24, &objects, &picked, 1024, &config).unwrap()
     else {
-        panic!("Q24 reads its rows back in a graph");
+        panic!("Q23 reads its rows back in a graph");
     };
     assert_eq!(columns.len(), footer.leaves.len());
     let scans = edges.len();

@@ -3,7 +3,7 @@ name = "wcol-engine"
 version = "0.1.0"
 edition = "2021"
 description = "WCOL execution engine (no SQL parser)"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 thiserror = "2"

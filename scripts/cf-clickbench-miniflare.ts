@@ -262,6 +262,7 @@ function miniflare(): Miniflare {
         ],
         compatibilityDate: "2026-01-01",
         bindings: {
+          WCOL_ALLOW_ANONYMOUS: "1",
           WCOL_MAX_NODES: MAX_NODES,
           WCOL_MAX_ACTIVE_SCANS: MAX_ACTIVE_SCANS,
           WCOL_DISPATCH_CONCURRENCY: process.env.WCOL_DISPATCH_CONCURRENCY ?? "32",

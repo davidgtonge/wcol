@@ -47,6 +47,16 @@ pub fn nan_key() -> u64 {
 }
 
 #[inline]
+/// The float a text literal names (`'NaN'`, `'inf'`, `'-Infinity'`), as DuckDB reads them.
+pub fn float_text_literal(text: &str) -> Option<f64> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "nan" => Some(f64::NAN),
+        "inf" | "+inf" | "infinity" | "+infinity" => Some(f64::INFINITY),
+        "-inf" | "-infinity" => Some(f64::NEG_INFINITY),
+        _ => None,
+    }
+}
+
 pub fn column_is_float(physical: i32) -> bool {
     matches!(physical, 4 | 5)
 }

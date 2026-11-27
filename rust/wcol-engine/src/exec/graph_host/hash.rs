@@ -122,17 +122,10 @@ impl GraphHost {
         };
         let group_budget = cur.u64()?;
         let group_spill = cur.u8()? != 0;
-        let (spill_combined, partition, spill_discard) = if group_spill {
-            let budget = cur.u64()?;
-            let partition = if cur.exhausted() { 0 } else { cur.u32()? };
-            let discard = if cur.exhausted() {
-                false
-            } else {
-                cur.u8()? != 0
-            };
-            (budget, partition, discard)
+        let (spill_combined, partition) = if group_spill {
+            (cur.u64()?, cur.u32()?)
         } else {
-            (0, 0, false)
+            (0, 0)
         };
         if !cur.exhausted() {
             return Err(WcolError::from("trailing bytes after hash reducer"));
@@ -180,15 +173,6 @@ impl GraphHost {
                 scratch_reserve_bytes: scratch,
                 ..crate::spill::SpillConfig::default()
             };
-            if spill_discard {
-                aggregate
-                    .enable_group_spill(config, Box::new(crate::spill::DiscardRunStore::new()))
-                    .map_err(WcolError::msg)?;
-                let mut host = Self::new(graph, wcs_row_batches(producer_count), capacity)?;
-                host.core.row_aggregate = Some(aggregate);
-                host.core.spill_drive.distinct = fold;
-                return Ok(host);
-            }
             let session = u64::from(partition) + 1;
             let bridge = Rc::new(RefCell::new(HostSpillBridge::new(session)));
             let store: Box<dyn crate::spill::SpillStore> =

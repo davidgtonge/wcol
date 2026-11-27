@@ -60,7 +60,7 @@ You need a Cloudflare account with Workers Paid (Durable Objects with SQLite sto
 2. `npm run build:reducer` cross-compiles the native reducer for the container image.
 3. `npm run build:wasm` if you have not already run `npm run build`. Deploy bundles the Workers itself but expects the Wasm to be built.
 4. `npx wrangler login`, then `npm run deploy`, which deploys the node Worker, then the coordinator Worker, and waits for the rollout.
-5. Optional: `npx wrangler secret put WCOL_API_TOKEN --config cloudflare/wrangler.toml` makes `/jobs` require `Authorization: Bearer <token>`.
+5. `npx wrangler secret put WCOL_API_TOKEN --config cloudflare/wrangler.toml`. `/jobs` requires `Authorization: Bearer <token>`, and refuses every job until the secret is set: one request can start hundreds of Durable Objects and containers on your account.
 
 The coordinator's URL serves the console at `/`. Without a token, the console replays recorded runs of some ClickBench queries instead of starting jobs; `scripts/record-console-runs.ts` records them into `cloudflare/console/recordings/`, and the next deploy serves them. A job is a single request. `"bucket": "output"` names the Workers' R2 binding, not the bucket itself:
 
@@ -84,4 +84,6 @@ Contributors, human or AI, should read [AGENTS.md](AGENTS.md), which sets out ho
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The code is MIT. See [LICENSE](LICENSE).
+
+The MIT licence does not cover the data. `data/hits_subset_500k.parquet` (a 500,000-row sample of the hits table) and the expected answers under `tests/fixtures/golden/` come from the [ClickBench](https://github.com/ClickHouse/ClickBench) `hits` dataset, which ClickHouse publishes from anonymised Yandex.Metrica web analytics. They are included here only for testing, under the terms the dataset is published with.

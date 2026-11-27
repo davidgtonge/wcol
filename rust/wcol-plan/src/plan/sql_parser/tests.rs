@@ -306,3 +306,41 @@ fn readme_queries_parse_count() {
         fail.len()
     );
 }
+
+#[test]
+fn rejects_malformed_string_literals() {
+    for sql in [
+        "SELECT COUNT(*) FROM hits WHERE URL = 'abc",
+        "SELECT COUNT(*) FROM hits WHERE URL = 'é",
+        "SELECT COUNT(*) FROM hits WHERE URL = '",
+        "SELECT COUNT(*) FROM hits WHERE Title = 'it''s'",
+    ] {
+        assert!(parse_sql_v0(sql).is_err(), "accepted {sql}");
+    }
+    let q = parse_sql_v0("SELECT COUNT(*) FROM hits WHERE URL = 'é'").unwrap();
+    assert!(q.where_.is_some());
+}
+
+#[test]
+fn rejects_oversized_and_deeply_nested_sql() {
+    let deep = format!(
+        "SELECT {}1{} FROM hits",
+        "(".repeat(10_000),
+        ")".repeat(10_000)
+    );
+    assert!(parse_sql_v0(&deep).is_err());
+    let negations = format!("SELECT {}1 FROM hits", "-".repeat(10_000));
+    assert!(parse_sql_v0(&negations).is_err());
+    let sums = format!("SELECT 1{} FROM hits", "+1".repeat(5_000));
+    assert!(parse_sql_v0(&sums).is_err());
+    let ands = format!(
+        "SELECT COUNT(*) FROM hits WHERE {}",
+        vec!["a = 1"; 5_000].join(" AND ")
+    );
+    assert!(parse_sql_v0(&ands).is_err());
+    let long = format!(
+        "SELECT COUNT(*) FROM hits WHERE URL = '{}'",
+        "x".repeat(70_000)
+    );
+    assert!(parse_sql_v0(&long).is_err());
+}

@@ -58,8 +58,6 @@ pub struct HashAggregateConfig {
     /// Spill overflow groups to R2 instead of hard-failing the group budget. On by
     /// default so a skewed reducer degrades to runs rather than failing the job.
     pub group_spill_enabled: bool,
-    /// In-Wasm discard sink. Proves flush-and-reset bounds isolate memory; not a query result.
-    pub spill_discard: bool,
 }
 
 impl Default for PhysicalPlannerConfig {
@@ -96,7 +94,6 @@ impl Default for HashAggregateConfig {
             shuffle_buffer_bytes: 1024 * 1024,
             reducers: None,
             group_spill_enabled: true,
-            spill_discard: false,
         }
     }
 }

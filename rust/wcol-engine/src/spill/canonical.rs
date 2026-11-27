@@ -112,14 +112,15 @@ fn encode_part(part: &PartialKeyPart, out: &mut Vec<u8>) -> Result<(), Canonical
     Ok(())
 }
 
-/// Order-preserving byte string: incremented payload bytes, `0` terminator (`255` → `0xFF 0xFF`).
+/// Order-preserving byte string: bytes `0..=253` are stored plus one, `254` and `255` as
+/// `0xFF 0x01` and `0xFF 0x02`, then a `0` terminator. Every encoded byte before the
+/// terminator is non-zero, so a shorter key that is a prefix sorts first.
 fn encode_bytes_body(bytes: &[u8], out: &mut Vec<u8>) -> Result<(), CanonicalKeyError> {
     for &b in bytes {
-        if b == 255 {
-            out.push(0xFF);
-            out.push(0xFF);
-        } else {
-            out.push(b.wrapping_add(1));
+        match b {
+            254 => out.extend_from_slice(&[0xFF, 0x01]),
+            255 => out.extend_from_slice(&[0xFF, 0x02]),
+            _ => out.push(b + 1),
         }
     }
     out.push(0);
@@ -138,10 +139,11 @@ fn decode_bytes_body(bytes: &[u8], cursor: usize) -> Result<(Vec<u8>, usize), St
         if b == 0xFF {
             let next = *bytes.get(index).ok_or("truncated bytes key escape")?;
             index += 1;
-            if next != 0xFF {
-                return Err("invalid bytes key escape".into());
-            }
-            out.push(255);
+            out.push(match next {
+                0x01 => 254,
+                0x02 => 255,
+                _ => return Err("invalid bytes key escape".into()),
+            });
         } else {
             out.push(b - 1);
         }
@@ -199,6 +201,37 @@ mod tests {
             cmp_spill_key_parts(left, right),
             "left={left:?} right={right:?}"
         );
+    }
+
+    #[test]
+    fn byte_keys_round_trip_and_keep_order_for_every_byte_pair() {
+        let mut keys = vec![vec![]];
+        for a in 0..=255u8 {
+            keys.push(vec![a]);
+            for b in [0u8, 1, 253, 254, 255] {
+                keys.push(vec![a, b]);
+            }
+        }
+        let encoded: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|key| encode_canonical_key(&[PartialKeyPart::Bytes(key.clone())]).unwrap())
+            .collect();
+        for (key, bytes) in keys.iter().zip(&encoded) {
+            assert_eq!(
+                decode_canonical_key(bytes).unwrap(),
+                vec![PartialKeyPart::Bytes(key.clone())],
+                "{key:?}"
+            );
+        }
+        for (i, left) in keys.iter().enumerate() {
+            for (j, right) in keys.iter().enumerate() {
+                assert_eq!(
+                    encoded[i].cmp(&encoded[j]),
+                    left.cmp(right),
+                    "{left:?} {right:?}"
+                );
+            }
+        }
     }
 
     #[test]

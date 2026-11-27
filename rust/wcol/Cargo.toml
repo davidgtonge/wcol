@@ -3,7 +3,7 @@ name = "wcol"
 version = "0.1.0"
 edition = "2021"
 description = "Facade over wcol-engine and wcol-plan"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [lib]
 crate-type = ["rlib", "cdylib"]

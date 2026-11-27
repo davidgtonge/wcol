@@ -120,7 +120,6 @@ const QUERIES: &[&str] = &[
     "SELECT SUM(c), COUNT(*) FROM t WHERE c IN (1, 2, 3, 14)",
     "SELECT MIN(a), MAX(a) FROM t WHERE b < 3 AND a >= 2",
     "SELECT COUNT(*) FROM t WHERE c = 3 AND d <> 1",
-    "SELECT SUM(a) FROM t WHERE b = 'x'",
     "SELECT d, COUNT(*), SUM(a) FROM t GROUP BY d",
     "SELECT c, COUNT(*), AVG(a), COUNT(a) FROM t GROUP BY c ORDER BY COUNT(*) DESC LIMIT 3",
     "SELECT b, d, COUNT(*), MIN(c), MAX(a) FROM t WHERE a <> 0 GROUP BY b, d",
@@ -477,10 +476,6 @@ fn assert_query_matches_rows(sql: &str, input: &[OwnedWcolBatch]) {
             );
             assert!(!snap.grouped);
             assert_folded(&snap, passed, &groups, |agg, stats| assert_eq!(stats[0].count, agg.star));
-        }
-        "SELECT SUM(a) FROM t WHERE b = 'x'" => {
-            assert_eq!(snap.passed_rows, 0);
-            assert!(snap.groups.is_empty());
         }
         "SELECT d, COUNT(*), SUM(a) FROM t GROUP BY d" => {
             let (passed, groups) = fold_rows(rows.into_iter(), |r| vec![part(r[3])]);

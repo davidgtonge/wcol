@@ -1,12 +1,11 @@
 /**
- * List objects in an R2 bucket via the Cloudflare API (Wrangler OAuth token).
+ * List objects in an R2 bucket via the Cloudflare API, with the Wrangler OAuth token
+ * (macOS location) and the account in `CF_ACCOUNT_ID`.
  */
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-const DEFAULT_ACCOUNT = "b75f6e7d314cd43e8f4ccde2e08ad2d8";
 
 function wranglerConfigPath(): string {
   return path.join(os.homedir(), "Library", "Preferences", ".wrangler", "config", "default.toml");
@@ -30,7 +29,8 @@ export async function listR2Objects(
   prefix: string,
   options?: { accountId?: string; limit?: number },
 ): Promise<R2ListedObject[]> {
-  const accountId = options?.accountId ?? process.env.CF_ACCOUNT_ID ?? DEFAULT_ACCOUNT;
+  const accountId = options?.accountId ?? process.env.CF_ACCOUNT_ID;
+  if (!accountId) throw new Error("set CF_ACCOUNT_ID to the Cloudflare account that owns the bucket");
   const token = readWranglerOAuthToken();
   const limit = options?.limit ?? 1000;
   const out: R2ListedObject[] = [];
@@ -60,13 +60,4 @@ export async function listR2Objects(
     if (!cursor) break;
   }
   return out;
-}
-
-/** Hive-style day folder: firehose/2026/10/27/ */
-export function firehoseDayPrefix(date: string): string {
-  const normalized = date.replace(/-/g, "/");
-  if (!/^\d{4}\/\d{2}\/\d{2}$/.test(normalized)) {
-    throw new Error(`expected date yyyy/MM/dd or yyyy-MM-dd, got ${date}`);
-  }
-  return `firehose/${normalized}/`;
 }

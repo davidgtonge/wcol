@@ -134,7 +134,6 @@ fn hash_reducer(producers: u32) -> GraphHost {
         group_budget: 0,
         group_spill: false,
         spill_combined_budget: 0,
-        spill_discard: false,
         partition: 0,
     });
     let mut cur = PlanCursor::new(&program[6..]);
@@ -238,7 +237,6 @@ fn grouped_text_reducer(producers: u32) -> GraphHost {
         group_budget: 0,
         group_spill: false,
         spill_combined_budget: 0,
-        spill_discard: false,
         partition: 0,
     });
     let mut cur = PlanCursor::new(&program[6..]);

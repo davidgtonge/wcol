@@ -2,16 +2,47 @@
 
 use super::*;
 
+/// SQL arrives over HTTP, and the parser and planner recurse over the tree, so input size,
+/// nesting and the number of composite nodes are all bounded to keep the Wasm stack safe.
+const MAX_SQL_BYTES: usize = 64 * 1024;
+const MAX_EXPR_DEPTH: u16 = 64;
+const MAX_EXPR_NODES: u16 = 1024;
+
 pub(super) struct Parser<'a> {
     pub(super) lx: Lexer<'a>,
     pub(super) cur: Tok<'a>,
+    depth: u16,
+    nodes: u16,
 }
 
 impl<'a> Parser<'a> {
     pub(super) fn new(input: &'a str) -> PResult<Self> {
+        if input.len() > MAX_SQL_BYTES {
+            return Err(ParseError {
+                msg: "sql is longer than 64 KiB",
+                at: MAX_SQL_BYTES,
+            });
+        }
         let mut lx = Lexer::new(input);
         let cur = lx.next()?;
-        Ok(Self { lx, cur })
+        Ok(Self {
+            lx,
+            cur,
+            depth: 0,
+            nodes: 0,
+        })
+    }
+
+    /// Counts one composite expression node (binary, unary or AND).
+    fn grow(&mut self) -> PResult<()> {
+        self.nodes += 1;
+        if self.nodes > MAX_EXPR_NODES {
+            return Err(ParseError {
+                msg: "expression is too large",
+                at: self.cur.start,
+            });
+        }
+        Ok(())
     }
 
     pub(super) fn bump(&mut self) -> PResult<()> {
@@ -285,6 +316,7 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_predicate()?;
         while self.cur.kind == TokKind::KwAnd {
             self.bump()?;
+            self.grow()?;
             let right = self.parse_predicate()?;
             left = Expr::And(Box::new(left), Box::new(right));
         }
@@ -355,8 +387,21 @@ impl<'a> Parser<'a> {
         })
     }
 
-    // Pratt parser with only + and - binary ops (left-assoc)
     pub(super) fn parse_expr_bp(&mut self, min_bp: u8) -> PResult<Expr<'a>> {
+        self.depth += 1;
+        if self.depth > MAX_EXPR_DEPTH {
+            return Err(ParseError {
+                msg: "expression is nested too deeply",
+                at: self.cur.start,
+            });
+        }
+        let expr = self.parse_binary(min_bp);
+        self.depth -= 1;
+        expr
+    }
+
+    // Pratt parser with only + and - binary ops (left-assoc)
+    fn parse_binary(&mut self, min_bp: u8) -> PResult<Expr<'a>> {
         let mut lhs = self.parse_primary()?;
 
         loop {
@@ -369,6 +414,7 @@ impl<'a> Parser<'a> {
                 break;
             }
             self.bump()?;
+            self.grow()?;
             let rhs = self.parse_expr_bp(r_bp)?;
             lhs = Expr::Binary {
                 op,
@@ -384,6 +430,7 @@ impl<'a> Parser<'a> {
         match self.cur.kind {
             TokKind::Minus => {
                 self.bump()?;
+                self.grow()?;
                 let e = self.parse_expr_bp(2)?; // binding power so -1+2 is (-1)+2
                 Ok(Expr::Binary {
                     op: BinOp::Sub,
@@ -427,13 +474,15 @@ impl<'a> Parser<'a> {
             TokKind::Str => {
                 let t = self.cur;
                 self.bump()?;
-                // Keep raw slice including quotes? We'll store inner content slice.
-                // For v0, we store without surrounding quotes, but without unescaping (small & fine).
-                let inner = if t.lex.len() >= 2 {
-                    &t.lex[1..t.lex.len() - 1]
-                } else {
-                    ""
-                };
+                // The lexer only returns closed literals, so both quotes are present.
+                let inner = &t.lex[1..t.lex.len() - 1];
+                // Literals borrow the SQL text, so an escaped quote cannot be unescaped in place.
+                if inner.contains("''") {
+                    return Err(ParseError {
+                        msg: "quotes inside string literals are not supported",
+                        at: t.start,
+                    });
+                }
                 Ok(Expr::Str(inner))
             }
 

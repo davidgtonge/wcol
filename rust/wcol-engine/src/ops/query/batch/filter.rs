@@ -13,7 +13,7 @@ use super::string_filter::{
 };
 use super::{ColRef, Cols};
 use crate::ir::{CmpOp, ColumnKind, Predicate, Scalar};
-use crate::ops::query::float_key::float_key;
+use crate::ops::query::float_key::{float_key, float_text_literal};
 use crate::ops::query::CatalogColumn;
 
 /// A predicate over integer values, compiled to exact `i64` comparisons.
@@ -306,12 +306,7 @@ fn literal_f64(value: &Scalar) -> Option<f64> {
     match value {
         Scalar::Int(v) => Some(*v as f64),
         Scalar::Number(v) => Some(*v),
-        Scalar::Text(text) => match text.trim().to_ascii_lowercase().as_str() {
-            "nan" => Some(f64::NAN),
-            "inf" | "+inf" | "infinity" | "+infinity" => Some(f64::INFINITY),
-            "-inf" | "-infinity" => Some(f64::NEG_INFINITY),
-            _ => None,
-        },
+        Scalar::Text(text) => float_text_literal(text),
     }
 }
 

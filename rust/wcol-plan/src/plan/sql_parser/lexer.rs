@@ -156,17 +156,24 @@ impl<'a> Lexer<'a> {
                 }
             }
             b'\'' => {
-                // string literal: supports '' escape
+                // String literal; `''` is a quote inside it.
+                let mut closed = false;
                 while let Some(n) = self.peek_byte() {
                     self.i += 1;
                     if n == b'\'' {
-                        // if doubled quote, continue
                         if self.peek_byte() == Some(b'\'') {
                             self.i += 1;
                             continue;
                         }
+                        closed = true;
                         break;
                     }
+                }
+                if !closed {
+                    return Err(ParseError {
+                        msg: "unterminated string literal",
+                        at: start,
+                    });
                 }
                 TokKind::Str
             }

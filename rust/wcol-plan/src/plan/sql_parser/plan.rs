@@ -1,6 +1,7 @@
 //! Query planning against a column list. No file format, dictionaries, or execution state.
 
 use super::{AggFn, BinOp, CmpOp, Expr, Ident, Query};
+use crate::ops::query::float_key::float_text_literal;
 
 pub use crate::ir::ColumnKind;
 
@@ -115,7 +116,7 @@ pub use crate::ir::MAX_GROUP_KEYS;
 pub enum PlanError {
     Unsupported,
     UnknownColumn,
-    NotIn,
+    TextForNumber,
 }
 
 pub fn plan_query<'a>(
@@ -532,7 +533,7 @@ fn collect_filters_impl<'a>(
             out.push(Filter::Compare {
                 column,
                 op,
-                value: literal_for_column(value, column, columns),
+                value: literal_for_column(value, column, columns)?,
             });
         }
         Expr::In {
@@ -545,9 +546,8 @@ fn collect_filters_impl<'a>(
             let scalars = values
                 .iter()
                 .map(|value| {
-                    expr_to_scalar(value)
-                        .map(|scalar| literal_for_column(scalar, column, columns))
-                        .ok_or(PlanError::Unsupported)
+                    let scalar = expr_to_scalar(value).ok_or(PlanError::Unsupported)?;
+                    literal_for_column(scalar, column, columns)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             out.push(Filter::In {
@@ -591,13 +591,24 @@ fn mirror(op: CmpOp) -> CmpOp {
 }
 
 /// A `'YYYY-MM-DD'` literal against a numeric column means days since 1970-01-01, the
-/// storage of Parquet `DATE` (and ClickBench `EventDate`).
-fn literal_for_column<'a>(value: Scalar<'a>, column: u32, columns: &[Column<'a>]) -> Scalar<'a> {
+/// storage of Parquet `DATE` (and ClickBench `EventDate`). `'NaN'` and `'inf'` pass through
+/// for float columns. Any other text against a number is refused: the executor cannot
+/// compare them, and would otherwise match nothing.
+fn literal_for_column<'a>(
+    value: Scalar<'a>,
+    column: u32,
+    columns: &[Column<'a>],
+) -> Result<Scalar<'a>, PlanError> {
     match value {
         Scalar::Text(text) if column_kind(column, columns) == Some(ColumnKind::Number) => {
-            date_days(text).map(Scalar::Int).unwrap_or(value)
+            if float_text_literal(text).is_some() {
+                return Ok(value);
+            }
+            date_days(text)
+                .map(Scalar::Int)
+                .ok_or(PlanError::TextForNumber)
         }
-        _ => value,
+        _ => Ok(value),
     }
 }
 
@@ -685,6 +696,22 @@ mod tests {
                 value: Scalar::Text("2013-07-01")
             }
         );
+    }
+
+    #[test]
+    fn other_text_against_a_number_is_refused() {
+        for sql in [
+            "SELECT COUNT(*) FROM hits WHERE CounterID >= '2013-07-01 00:00:00'",
+            "SELECT COUNT(*) FROM hits WHERE CounterID <> 'x'",
+            "SELECT COUNT(*) FROM hits WHERE CounterID IN (1, 'x')",
+        ] {
+            let query = parse_sql_v0(sql).unwrap();
+            assert_eq!(
+                plan_query(&query, &columns()).err(),
+                Some(PlanError::TextForNumber),
+                "{sql}"
+            );
+        }
     }
 
     #[test]

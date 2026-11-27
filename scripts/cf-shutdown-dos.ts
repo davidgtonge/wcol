@@ -1,7 +1,7 @@
 /**
  * Abort + purge Durable Objects for recent (or listed) wcol jobs.
  *
- *   WCOL_SHUTDOWN_SECRET=… npx tsx scripts/cf-shutdown-dos.ts
+ *   CF_ACCOUNT_ID=… WCOL_SHUTDOWN_SECRET=… npx tsx scripts/cf-shutdown-dos.ts
  *   WCOL_SHUTDOWN_SECRET=… npx tsx scripts/cf-shutdown-dos.ts k-abc…
  */
 

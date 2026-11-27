@@ -430,34 +430,6 @@ fn distinct_group_job_plans_hash_reducers() {
 }
 
 #[test]
-fn discard_spill_sink_encodes_on_hash_reducers() {
-    let file = fixture();
-    let body = r#"{"sources":{"t":{"key":"http://x/t.parquet"}},"sql":"SELECT d, COUNT(*) AS c FROM t GROUP BY d","output":{"format":"json"},"hashReducers":2,"spillSink":"discard","targetGroupBytes":4096}"#;
-    let (request, _) = job_sources(body).unwrap();
-    let footers = vec![footer(&file)];
-    let JobPlan::Json { exec, .. } =
-        plan_job(&request, &footers, 4, 1024, None, Some(2), body).unwrap()
-    else {
-        panic!("expected json");
-    };
-    let ExecutionPlan::Graph { tasks, .. } = exec else {
-        panic!("expected graph");
-    };
-    let reducers: Vec<_> = tasks
-        .iter()
-        .filter(|task| task.program.get(5) == Some(&OP_HASH_REDUCER))
-        .collect();
-    assert!(!reducers.is_empty(), "planned no hash reducers");
-    for task in reducers {
-        assert_eq!(
-            *task.program.last().unwrap(),
-            1,
-            "hash reducer missing discard sink flag"
-        );
-    }
-}
-
-#[test]
 fn create_model_plans_its_select_as_a_row_graph() {
     let file = fixture();
     let body = r#"{"sources":{"t":{"key":"http://x/t.parquet"}},"sql":"CREATE MODEL m OPTIONS (model_type='kmeans', num_clusters=2) AS SELECT d, p FROM t WHERE d > 0"}"#;

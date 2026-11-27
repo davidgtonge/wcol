@@ -254,10 +254,9 @@ pub struct HashReducerSpec<'a> {
     pub fetch: Option<u64>,
     pub rank: Option<u32>,
     pub group_budget: u64,
-    /// When false, the spill budget, discard flag and partition are not encoded.
+    /// When false, the spill budget and partition are not encoded.
     pub group_spill: bool,
     pub spill_combined_budget: u64,
-    pub spill_discard: bool,
     pub partition: u32,
 }
 
@@ -274,7 +273,6 @@ pub fn encode_hash_reducer_program(spec: &HashReducerSpec<'_>) -> Vec<u8> {
         group_budget,
         group_spill,
         spill_combined_budget,
-        spill_discard,
         partition,
     } = spec;
     let mut out = Vec::new();
@@ -308,8 +306,6 @@ pub fn encode_hash_reducer_program(spec: &HashReducerSpec<'_>) -> Vec<u8> {
     if group_spill {
         push_u64(&mut out, spill_combined_budget);
         push_u32(&mut out, partition);
-        // 0 = host store (SQLite/R2), 1 = in-Wasm discard sink.
-        out.push(u8::from(spill_discard));
     }
     out
 }
@@ -891,38 +887,6 @@ fn decode_step(cur: &mut &[u8]) -> Result<FragmentStep, LogicalWireError> {
         }
         _ => return Err(LogicalWireError::UnknownTag),
     })
-}
-
-#[cfg(test)]
-mod hash_reducer_wire_tests {
-    use super::{encode_hash_reducer_program, HashReducerSpec};
-
-    fn spilling(spill_discard: bool) -> Vec<u8> {
-        encode_hash_reducer_program(&HashReducerSpec {
-            producer_count: 1,
-            catalog: &[],
-            group_by: &[],
-            aggregates: &[],
-            skip: 0,
-            fetch: None,
-            rank: None,
-            group_budget: 0,
-            group_spill: true,
-            spill_combined_budget: 4096,
-            spill_discard,
-            partition: 0,
-        })
-    }
-
-    #[test]
-    fn discard_flag_is_last_byte_when_spilling() {
-        let host = spilling(false);
-        let discard = spilling(true);
-        assert_eq!(*host.last().unwrap(), 0);
-        assert_eq!(*discard.last().unwrap(), 1);
-        assert_eq!(host.len(), discard.len());
-        assert_eq!(host[..host.len() - 1], discard[..discard.len() - 1]);
-    }
 }
 
 #[cfg(test)]

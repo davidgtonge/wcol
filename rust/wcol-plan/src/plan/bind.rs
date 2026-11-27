@@ -183,7 +183,7 @@ fn plan_message(err: PlanError) -> String {
     match err {
         PlanError::Unsupported => "unsupported sql".to_string(),
         PlanError::UnknownColumn => "unknown column".to_string(),
-        PlanError::NotIn => "NOT IN is not supported".to_string(),
+        PlanError::TextForNumber => "a text literal is compared with a numeric column".to_string(),
     }
 }
 

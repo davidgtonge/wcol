@@ -1,13 +1,13 @@
 # Job API
 
-Everything goes through one route. `POST /jobs` takes a job, and `GET /jobs/{jobId}` reports on it. When the Worker has a `WCOL_API_TOKEN` secret, both routes need `Authorization: Bearer <token>`.
+Everything goes through one route. `POST /jobs` takes a job, and `GET /jobs/{jobId}` reports on it. Both routes need `Authorization: Bearer <token>` matching the Worker's `WCOL_API_TOKEN` secret; a Worker without the secret answers 401 to every job.
 
 ## Routes
 
 | Route | Answer |
 |---|---|
 | `POST /jobs` | A `json` job that finishes within the sync budget returns its result. Any other job returns `202` with `{ "jobId": ... }` |
-| `GET /jobs/{jobId}` | State (`running`, `complete`, `failed`), attempts, node count, timings and bytes read; plus the result, manifest key or output key once complete |
+| `GET /jobs/{jobId}` | State (`accepted`, `running`, `completed`, `failed`), attempts, node count, timings and bytes read; plus the result, manifest key or output key once complete |
 | `GET /jobs/{jobId}/live` | A snapshot of the running graph: tasks, edges, bytes and data centres. The console polls this |
 | `GET /version` | The deploy id. The deploy script waits for it to change |
 | `GET /` | The console |
@@ -74,20 +74,6 @@ Writes Parquet files, and then commits them by publishing `<prefix>_manifest.jso
 - It applies to a scan, filter or projection. With an aggregate, sort or limit, it is a planning error.
 - A task keeps at most 8 files open. A new value past that closes the least recently used one, and a later row with that value starts another file in the same directory. Data clustered by the partition column (dates in ClickBench's `hits`, say) writes one file per value per task; scattered values write more, smaller files. A task fails if it would write more than 4096.
 - Open files share a 16 MiB budget for rows not yet written: past it, the largest writes a row group early. Each file uploads in 5 MiB parts.
-
-### `concat`
-
-```json
-{
-  "output": { "format": "concat", "bucket": "output", "key": "hits/merged.parquet" },
-  "inputs": [
-    { "bucket": "output", "key": "hits/part-0.parquet" },
-    { "bucket": "output", "key": "hits/part-1.parquet" }
-  ]
-}
-```
-
-Copies the inputs' row groups into one file without decoding them. It takes no `sources` or `sql`. An input with `"rowGroups": [start, end]` copies only that range, which splits a file. `scripts/cf-partition-hits.ts` uses this to split `hits.parquet` into parts.
 
 ### `CREATE MODEL`
 

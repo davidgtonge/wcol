@@ -12,7 +12,7 @@ use crate::plan::sql_parser::{
 pub enum LowerQueryPlanError {
     Unsupported,
     UnknownColumn,
-    NotIn,
+    TextForNumber,
 }
 
 impl From<PlanError> for LowerQueryPlanError {
@@ -20,7 +20,7 @@ impl From<PlanError> for LowerQueryPlanError {
         match value {
             PlanError::Unsupported => Self::Unsupported,
             PlanError::UnknownColumn => Self::UnknownColumn,
-            PlanError::NotIn => Self::NotIn,
+            PlanError::TextForNumber => Self::TextForNumber,
         }
     }
 }
@@ -155,8 +155,9 @@ pub fn logical_plan_and_output_from_footer(
         PlanError::UnknownColumn => {
             "sql is not supported by the planner: unknown column".to_string()
         }
-        PlanError::NotIn => {
-            "sql is not supported by the planner: NOT IN is not supported".to_string()
+        PlanError::TextForNumber => {
+            "sql is not supported by the planner: a text literal is compared with a numeric column"
+                .to_string()
         }
     })?;
     let logical = lower_query_plan(query.from.0, &planned).map_err(|err| match err {
@@ -166,8 +167,9 @@ pub fn logical_plan_and_output_from_footer(
         LowerQueryPlanError::UnknownColumn => {
             "sql is not supported by the planner: unknown column".to_string()
         }
-        LowerQueryPlanError::NotIn => {
-            "sql is not supported by the planner: NOT IN is not supported".to_string()
+        LowerQueryPlanError::TextForNumber => {
+            "sql is not supported by the planner: a text literal is compared with a numeric column"
+                .to_string()
         }
     })?;
     Ok((logical, planned.output))

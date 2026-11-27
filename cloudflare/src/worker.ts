@@ -12,9 +12,14 @@ export { WcolCoordinator };
 export type CoordinatorEnv = ShardCoordinatorEnv & {
   WCOL_COORDINATOR: DurableObjectNamespace;
   WCOL_SHUTDOWN_SECRET?: string;
-  /** When set, `/jobs` requests need `Authorization: Bearer <token>`. The console asks for it. */
+  /** `/jobs` requests need `Authorization: Bearer <token>`. The console asks for it. */
   WCOL_API_TOKEN?: string;
+  /** `"1"` opens `/jobs` to anyone when no token is set; for local Miniflare runs only. */
+  WCOL_ALLOW_ANONYMOUS?: string;
 };
+
+/** Job ids name R2 prefixes and Durable Objects, so they stay plain. */
+const JOB_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 /** A job's coordinator Durable Object, which serves that job's `/jobs` routes. */
 function coordinatorFor(
@@ -27,9 +32,13 @@ function coordinatorFor(
   };
 }
 
-/** Whether a `/jobs` request carries the API token, compared in constant time. */
+/**
+ * Whether a `/jobs` request carries the API token, compared in constant time. A Worker
+ * without a token refuses every job unless anonymous use is switched on explicitly: one
+ * request can start hundreds of Durable Objects and containers.
+ */
 function apiAuthorized(env: CoordinatorEnv, request: Request): boolean {
-  if (!env.WCOL_API_TOKEN) return true;
+  if (!env.WCOL_API_TOKEN) return env.WCOL_ALLOW_ANONYMOUS === "1";
   const sent = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
   const encoder = new TextEncoder();
   const [a, b] = [encoder.encode(sent), encoder.encode(env.WCOL_API_TOKEN)];
@@ -69,8 +78,13 @@ export default {
         return json({ error: "unauthorized: send Authorization: Bearer <WCOL_API_TOKEN>" }, 401);
       }
       if (url.pathname === "/jobs" && request.method === "POST") {
-        const payload = (await request.json()) as { idempotencyKey?: string; jobId?: string };
-        const jobId = payload.jobId ?? (await jobIdFor(payload.idempotencyKey));
+        const payload = (await request.json().catch(() => null)) as { idempotencyKey?: string; jobId?: unknown } | null;
+        if (!payload || typeof payload !== "object") return json({ error: "body must be a JSON object" }, 400);
+        const requested = payload.jobId;
+        if (requested !== undefined && !(typeof requested === "string" && JOB_ID.test(requested))) {
+          return json({ error: "jobId must match [A-Za-z0-9_-]{1,64}" }, 400);
+        }
+        const jobId = typeof requested === "string" ? requested : await jobIdFor(payload.idempotencyKey);
         // A new job's coordinator is created here: near the bucket, with its scans.
         return coordinatorFor(env, jobId, doLocation(env)).fetch("http://do/jobs", {
           method: "POST",

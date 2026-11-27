@@ -2,6 +2,7 @@
 name = "wcol-reducer"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Native hash reducer served over HTTP, for container reducers"
 publish = false
 

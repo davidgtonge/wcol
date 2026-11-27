@@ -762,10 +762,6 @@ fn apply_planner_hints(config: &mut PhysicalPlannerConfig, body: &str) {
     if let Some(enabled) = value.get("groupSpill").and_then(|v| v.as_bool()) {
         config.hash_aggregate.group_spill_enabled = enabled;
     }
-    if value.get("spillSink").and_then(|v| v.as_str()) == Some("discard") {
-        config.hash_aggregate.group_spill_enabled = true;
-        config.hash_aggregate.spill_discard = true;
-    }
     let mut target_set = false;
     if let Some(bytes) = value.get("targetGroupBytes").and_then(|v| v.as_u64()) {
         if bytes > 0 {

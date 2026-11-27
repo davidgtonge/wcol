@@ -45,6 +45,13 @@ const output = deploy("wrangler.toml", {
 });
 const url = output.match(/https:\/\/[a-z0-9.-]+\.workers\.dev/i);
 console.log(url ? url[0] : "deployed (no workers.dev URL in output)");
+const secrets = spawnSync("npx", ["wrangler", "secret", "list", "--config", "wrangler.toml"], {
+  cwd: path.join(ROOT, "cloudflare"),
+  encoding: "utf8",
+});
+if (!secrets.stdout?.includes("WCOL_API_TOKEN")) {
+  console.warn("WCOL_API_TOKEN is not set: /jobs refuses every job until you run `npx wrangler secret put WCOL_API_TOKEN --config cloudflare/wrangler.toml`.");
+}
 if (url) await waitForRollout(url[0], deployId);
 
 /**

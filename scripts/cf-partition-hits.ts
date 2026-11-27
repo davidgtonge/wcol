@@ -185,6 +185,7 @@ if (base) {
   const mf = new Miniflare({
     workers: [
       worker("wcol-coordinator", coordinatorOut, "wcol_coordinator.wasm", {
+        bindings: { WCOL_ALLOW_ANONYMOUS: "1" },
         durableObjects: {
           WCOL_COORDINATOR: { className: "WcolCoordinator", useSQLite: true },
           WCOL_NODE: { className: "WcolNode", scriptName: "wcol-node", useSQLite: true },

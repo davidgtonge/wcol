@@ -157,6 +157,16 @@ impl PageCompact {
             }
             tag => return Err(format!("unknown page-copy footer tag {tag}")),
         };
+        // A built footer types every column as plain INT64 (see `write_footer_once`), so any other
+        // column would be mislabelled in the output. Typed inputs need a verbatim footer.
+        if matches!(footer, FooterSource::Build) {
+            if let Some(col) = catalog.iter().find(|col| col.physical != 2) {
+                return Err(format!(
+                    "page copy can only build a footer for INT64 columns; `{}` has physical type {}",
+                    col.name, col.physical
+                ));
+            }
+        }
         let footer_buf = match footer {
             FooterSource::Build => vec![0u8; FOOTER_BUDGET],
             FooterSource::Verbatim(_) => Vec::new(),

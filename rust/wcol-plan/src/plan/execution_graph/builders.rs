@@ -194,7 +194,6 @@ pub(super) fn build_hash_graph(
                     group_budget: hard,
                     group_spill: spill,
                     spill_combined_budget: if spill { target } else { 0 },
-                    spill_discard: config.hash_aggregate.spill_discard,
                     partition,
                 },
             ),

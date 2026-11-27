@@ -3,7 +3,7 @@ name = "wcol-plan"
 version = "0.1.0"
 edition = "2021"
 description = "WCOL coordinator planner (SQL parser, logical and physical planning)"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [dependencies]
 wcol-engine = { path = "../wcol-engine" }

@@ -3,7 +3,7 @@ name = "wcol-node-wasm"
 version = "0.1.0"
 edition = "2021"
 description = "Node Worker cdylib: fragment execution only. No planner, no reduce."
-license = "MIT OR Apache-2.0"
+license = "MIT"
 publish = false
 
 [lib]

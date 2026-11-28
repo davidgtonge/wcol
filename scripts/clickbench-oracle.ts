@@ -30,8 +30,25 @@ export function oracleFor(sql: string): Oracle {
     (_, head: string, date: string) => `${head}${Date.parse(`${date}T00:00:00Z`) / 86_400_000}`,
   );
   if (ordered && /\blimit\b/i.test(oracle)) oracle = withTieBreak(oracle);
-  // An order by estimates is not one DuckDB's exact counts must share.
-  return { sql: oracle, ordered: ordered && estimates.length === 0, estimates };
+  // An order by estimates is not one DuckDB's exact counts must share, and rows tied on a
+  // key that is not an output column may come in any order, so neither is checked in place.
+  const checkOrder = ordered && estimates.length === 0 && orderKeysSelected(sql);
+  return { sql: oracle, ordered: checkOrder, estimates };
+}
+
+/** Whether every top-level ORDER BY key is an output column: an ordinal, alias or item. */
+function orderKeysSelected(sql: string): boolean {
+  const order = /\border\s+by\s+([\s\S]*?)(?:\s+(?:limit|offset)\b|;|$)/i.exec(sql);
+  if (!order) return true;
+  const normal = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
+  const outputs = selectList(sql).flatMap((item) => {
+    const alias = /\s+as\s+(\w+)\s*$/i.exec(item);
+    return alias ? [normal(alias[1]!), normal(item.slice(0, alias.index))] : [normal(item)];
+  });
+  return order[1]!
+    .split(",")
+    .map((key) => normal(key.replace(/\s+(asc|desc)\s*$/i, "")))
+    .every((key) => /^\d+$/.test(key) || outputs.includes(key));
 }
 
 /** Append `, 1, 2, …, n` (every output column) to the top-level ORDER BY. */

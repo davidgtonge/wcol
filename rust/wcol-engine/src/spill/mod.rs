@@ -14,10 +14,8 @@ pub use canonical::{
 pub use discard::DiscardRunStore;
 pub use encode::{decode_partial_group_payload, encode_partial_group_payload};
 pub use host::{
-    advance_scan_resume, decode_append_batch, decode_scan_page, encode_append_batch,
-    encode_scan_page, table_name, HostSpillBridge, HostSpillRequest, HostSpillStore, SpillProgress,
-    SPILL_OP_APPEND, SPILL_OP_BEGIN, SPILL_OP_END, SPILL_OP_RUN_COMMIT, SPILL_OP_RUN_PUT,
-    SPILL_OP_RUN_READ, SPILL_OP_SCAN,
+    HostSpillBridge, HostSpillRequest, SpillProgress, SPILL_OP_RUN_COMMIT, SPILL_OP_RUN_PUT,
+    SPILL_OP_RUN_READ,
 };
 
 /// Pull [`SpillProgress::Ready`] or return [`SpillProgress::AwaitHost`] from the enclosing function.

@@ -101,35 +101,45 @@ impl<'a> PlanCursor<'a> {
         self.at >= self.bytes.len()
     }
 
+    /// A `u32` count, then that many items. Every item is at least one byte, so a count
+    /// beyond the remaining input is a corrupt plan, rejected before allocating for it.
+    pub fn list<T>(
+        &mut self,
+        mut item: impl FnMut(&mut Self) -> WcolResult<T>,
+    ) -> WcolResult<Vec<T>> {
+        let count = self.u32()? as usize;
+        if count > self.bytes.len().saturating_sub(self.at) {
+            return Err(WcolError::from("truncated plan"));
+        }
+        (0..count).map(|_| item(self)).collect()
+    }
+
     pub fn catalog(&mut self) -> WcolResult<Vec<CatalogColumn>> {
         use crate::ir::ColumnKind;
-        let count = self.u32()? as usize;
-        let mut catalog = Vec::with_capacity(count);
-        for _ in 0..count {
-            let kind = match self.u8()? {
+        self.list(|cur| {
+            let kind = match cur.u8()? {
                 0 => ColumnKind::Number,
                 1 => ColumnKind::Text,
                 _ => return Err(WcolError::from("column kind is invalid")),
             };
-            let physical = i32::from_le_bytes(self.array()?);
-            let type_length = i32::from_le_bytes(self.array()?);
-            let max_def = self.u8()?;
-            let max_rep = self.u8()?;
-            let name_len = u16::from_le_bytes(self.array()?) as usize;
-            let name_bytes = self.bytes(name_len)?;
+            let physical = i32::from_le_bytes(cur.array()?);
+            let type_length = i32::from_le_bytes(cur.array()?);
+            let max_def = cur.u8()?;
+            let max_rep = cur.u8()?;
+            let name_len = u16::from_le_bytes(cur.array()?) as usize;
+            let name_bytes = cur.bytes(name_len)?;
             let name = std::str::from_utf8(name_bytes)
                 .map_err(|_| WcolError::from("column name is not utf-8"))?
                 .to_string();
-            catalog.push(CatalogColumn {
+            Ok(CatalogColumn {
                 name,
                 kind,
                 physical,
                 type_length,
                 max_def,
                 max_rep,
-            });
-        }
-        Ok(catalog)
+            })
+        })
     }
 }
 

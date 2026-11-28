@@ -16,20 +16,14 @@ export function doLocation(env: { WCOL_DO_LOCATION_HINT?: string }): { locationH
   return { locationHint: raw as GraphDoLocationHint };
 }
 
-/** Highest aborted attempt per job this node has been told about, newest jobs last. */
+/**
+ * Highest aborted attempt per job this node has been told about. A node object is named by
+ * one job attempt (`graphSlotObjectName`), so this holds that one job.
+ */
 export type AbortedAttempts = Map<string, number>;
 
-/** Jobs remembered; an abort older than this many jobs ago no longer matters. */
-const ABORTED_JOBS_KEPT = 64;
-
 export function noteAborted(aborted: AbortedAttempts, jobId: string, attempt: number): void {
-  const previous = aborted.get(jobId) ?? 0;
-  aborted.delete(jobId);
-  aborted.set(jobId, Math.max(previous, attempt));
-  for (const oldest of aborted.keys()) {
-    if (aborted.size <= ABORTED_JOBS_KEPT) break;
-    aborted.delete(oldest);
-  }
+  aborted.set(jobId, Math.max(aborted.get(jobId) ?? 0, attempt));
 }
 
 /**

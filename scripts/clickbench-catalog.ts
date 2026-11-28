@@ -1,6 +1,6 @@
 /**
- * The ClickBench queries WCOL runs, from `scripts/clickbench-queries.tsv`. The ladder runner
- * and the console both read them here.
+ * The ClickBench queries WCOL runs, from `scripts/clickbench-queries.tsv`. The ladder, the
+ * local run and the console all read them here.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -10,8 +10,8 @@ export type CatalogQuery = { name: string; sql: string };
 /** ClickBench queries the planner does not support yet. */
 export const UNSUPPORTED = new Set(["Q18", "Q35", "Q42"]);
 
-/** Every query in the TSV the planner supports: ClickBench's `Q…` and WCOL's own. */
-export function catalogQueries(root: string): CatalogQuery[] {
+/** Every query in the TSV, supported or not: ClickBench's `Q…` and WCOL's own. */
+export function tsvQueries(root: string): CatalogQuery[] {
   return fs
     .readFileSync(path.join(root, "scripts/clickbench-queries.tsv"), "utf8")
     .split("\n")
@@ -19,8 +19,12 @@ export function catalogQueries(root: string): CatalogQuery[] {
     .map((line) => {
       const [name, sql] = line.split("\t");
       return { name: name!, sql: sql!.trim().replace(/;$/, "") };
-    })
-    .filter((query) => !UNSUPPORTED.has(query.name));
+    });
+}
+
+/** Every query in the TSV the planner supports. */
+export function catalogQueries(root: string): CatalogQuery[] {
+  return tsvQueries(root).filter((query) => !UNSUPPORTED.has(query.name));
 }
 
 /** The supported ClickBench queries alone, in ClickBench order. */

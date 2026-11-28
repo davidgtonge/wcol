@@ -151,7 +151,7 @@ fn direct_feed_includes_end() {
     batch.push_i64_column(0, vec![9], vec![1]);
     batch.set_row_count(1).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     egress.push_end().unwrap();
     let wire = egress.drain_to_vec().unwrap();
     assert!(wire.len() >= crate::stream::core::WCS_HEADER_BYTES * 2);
@@ -172,7 +172,7 @@ fn fragmented_chunks_round_trip_one_batch() {
     batch.set_row_count(3).unwrap();
 
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     egress.push_end().unwrap();
     let wire = egress.drain_to_vec().unwrap();
 

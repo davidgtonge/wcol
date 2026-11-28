@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import {
   chooseReducers,
   CONTAINER_REDUCERS,
-  containerRequestBody,
+  containerPlanKnobs,
   NODE_REDUCER_MEMORY_BYTES,
   parseReducerRequest,
 } from "../cloudflare/src/coordinator/reducer-choice.ts";
@@ -40,10 +40,10 @@ describe("reducer choice", () => {
   });
 
   it("plans container reducers with the instance's budget and the measured count", () => {
-    const planned = JSON.parse(containerRequestBody(JSON.stringify({ sql: "q" }), "basic")) as Record<string, unknown>;
+    const planned = containerPlanKnobs({}, "basic");
     assert.equal(planned.targetGroupBytes, 896 * MIB);
     assert.equal(planned.hashReducers, CONTAINER_REDUCERS);
-    const own = JSON.parse(containerRequestBody(JSON.stringify({ sql: "q", targetGroupBytes: 1024, hashReducers: 8 }), "basic")) as Record<string, unknown>;
+    const own = containerPlanKnobs({ targetGroupBytes: 1024, hashReducers: 8 }, "basic");
     assert.equal(own.targetGroupBytes, 1024);
     assert.equal(own.hashReducers, 8);
   });

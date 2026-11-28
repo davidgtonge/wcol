@@ -29,12 +29,16 @@ export type ScanEdgeSessionArgs = {
   expectedScans: number;
 };
 
+/** A scan's edge into this reducer: not yet decided, a stream, or known to carry nothing. */
+type Edge =
+  | { kind: "waiting" }
+  | { kind: "accepted"; stream: ReadableStream<Uint8Array> }
+  | { kind: "empty" };
+
 type Slot = {
-  accepted: boolean;
-  empty: boolean;
+  edge: Edge;
+  /** Set once the reducer starts waiting on this slot; never cleared. */
   consumeReady: boolean;
-  stream: ReadableStream<Uint8Array> | null;
-  failed: unknown | null;
   signal: ReturnType<typeof waiter>;
 };
 
@@ -69,15 +73,16 @@ function requireIndex(scanIndex: number, expectedScans: number): void {
 export function createReducerIngressSession(args: ScanEdgeSessionArgs): ReducerIngressSession {
   if (args.expectedScans < 1) throw new Error("expectedScans must be >= 1");
   const slots: Slot[] = Array.from({ length: args.expectedScans }, () => ({
-    accepted: false,
-    empty: false,
+    edge: { kind: "waiting" },
     consumeReady: false,
-    stream: null,
-    failed: null,
     signal: waiter(),
   }));
   let sealed = false;
-  let failed: unknown = null;
+  /** Set by `abort`; every slot fails with it from then on. */
+  let failure: { error: unknown } | undefined;
+  const throwIfFailed = (): void => {
+    if (failure) throw failure.error;
+  };
   const admissions: { scanIndex: number; enteredAt: number; outstanding: number }[] = [];
   const consumeSignals = slots.map(() => waiter());
 
@@ -91,11 +96,15 @@ export function createReducerIngressSession(args: ScanEdgeSessionArgs): ReducerI
   };
 
   const installed = (slot: Slot): ReadableStream<Uint8Array> | null => {
-    if (slot.failed) throw slot.failed;
-    if (failed) throw failed;
-    if (slot.stream) return slot.stream;
-    if (slot.empty) return emptyByteStream();
-    return null;
+    throwIfFailed();
+    switch (slot.edge.kind) {
+      case "accepted":
+        return slot.edge.stream;
+      case "empty":
+        return emptyByteStream();
+      case "waiting":
+        return null;
+    }
   };
 
   const session: ReducerIngressSession = {
@@ -114,36 +123,34 @@ export function createReducerIngressSession(args: ScanEdgeSessionArgs): ReducerI
     },
     acceptScanEdge(scanIndex, stream) {
       requireIndex(scanIndex, args.expectedScans);
-      if (failed) throw failed;
+      throwIfFailed();
       if (sealed) throw new Error("acceptScanEdge after seal");
       const slot = slots[scanIndex]!;
-      if (slot.failed) throw slot.failed;
-      if (slot.accepted) throw new Error(`duplicate acceptScanEdge for scan ${scanIndex}`);
-      if (slot.empty) throw new Error(`acceptScanEdge for completed scan ${scanIndex}`);
-      slot.accepted = true;
-      slot.stream = stream;
+      if (slot.edge.kind === "accepted") throw new Error(`duplicate acceptScanEdge for scan ${scanIndex}`);
+      if (slot.edge.kind === "empty") throw new Error(`acceptScanEdge for completed scan ${scanIndex}`);
+      slot.edge = { kind: "accepted", stream };
       admissions.push({
         scanIndex,
         enteredAt: Date.now(),
-        outstanding: slots.reduce((count, item) => count + (item.accepted ? 1 : 0), 0),
+        outstanding: slots.reduce((count, item) => count + (item.edge.kind === "accepted" ? 1 : 0), 0),
       });
       wake(slot);
       return { accepted: true as const };
     },
     completeScan(scanIndex) {
       requireIndex(scanIndex, args.expectedScans);
-      if (failed) throw failed;
+      throwIfFailed();
       const slot = slots[scanIndex]!;
-      if (slot.accepted || slot.empty) return;
-      slot.empty = true;
+      if (slot.edge.kind !== "waiting") return;
+      slot.edge = { kind: "empty" };
       wake(slot);
     },
     seal() {
-      if (failed) throw failed;
+      throwIfFailed();
       sealed = true;
       for (const slot of slots) {
-        if (!slot.accepted && !slot.empty) {
-          slot.empty = true;
+        if (slot.edge.kind === "waiting") {
+          slot.edge = { kind: "empty" };
           wake(slot);
         }
       }
@@ -152,11 +159,10 @@ export function createReducerIngressSession(args: ScanEdgeSessionArgs): ReducerI
       for (let index = 0; index < slots.length; index++) markConsumeReady(index);
     },
     abort(error) {
-      failed ??= error;
+      failure ??= { error };
       for (let index = 0; index < slots.length; index++) {
         const slot = slots[index]!;
-        slot.failed ??= error;
-        void slot.stream?.cancel(error).catch(() => undefined);
+        if (slot.edge.kind === "accepted") void slot.edge.stream.cancel(error).catch(() => undefined);
         wake(slot);
         consumeSignals[index]!.wake();
       }
@@ -165,12 +171,10 @@ export function createReducerIngressSession(args: ScanEdgeSessionArgs): ReducerI
       requireIndex(scanIndex, args.expectedScans);
       const slot = slots[scanIndex]!;
       while (!slot.consumeReady) {
-        if (failed) throw failed;
-        if (slot.failed) throw slot.failed;
+        throwIfFailed();
         await consumeSignals[scanIndex]!.wait();
       }
-      if (failed) throw failed;
-      if (slot.failed) throw slot.failed;
+      throwIfFailed();
     },
     async waitForStream(scanIndex) {
       requireIndex(scanIndex, args.expectedScans);
@@ -208,15 +212,14 @@ export function createReducerIngressSession(args: ScanEdgeSessionArgs): ReducerI
       });
     },
     acceptedScanIndexes() {
-      return slots.flatMap((slot, index) => (slot.accepted ? [index] : []));
+      return slots.flatMap((slot, index) => (slot.edge.kind === "accepted" ? [index] : []));
     },
     admissions() {
       return admissions.slice();
     },
     producedNothing(scanIndex) {
       requireIndex(scanIndex, args.expectedScans);
-      const slot = slots[scanIndex]!;
-      return slot.empty && !slot.accepted;
+      return slots[scanIndex]!.edge.kind === "empty";
     },
   };
   return session;

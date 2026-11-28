@@ -10,6 +10,7 @@ import { gzipSync } from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { NODE_ENTRY_EXPORT, PLANNER_EXPORTS, wasmExportNames } from "./node-wasm-exports.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rustDir = path.join(root, "rust");
@@ -84,18 +85,13 @@ if (which === "node") {
   // Resident K-means load/round exports add a small amount of node runtime code; raised
   // from 416,000 with the combiner and from 432,000 with the partitioned sink.
   const gzipBudget = 448_000;
-  const banned = exports.filter(
-    (name) =>
-      name === "wcol_plan_query" ||
-      name === "wcol_plan_output_ptr" ||
-      name === "wcol_columns_for_sql",
-  );
+  const banned = exports.filter((name) => PLANNER_EXPORTS.includes(name));
   if (banned.length) {
     console.error(`node wasm exports planner symbols: ${banned.join(", ")}`);
     process.exit(1);
   }
-  if (!exports.includes("wcs_sp_open_graph")) {
-    console.error("node wasm is missing wcs_sp_open_graph");
+  if (!exports.includes(NODE_ENTRY_EXPORT)) {
+    console.error(`node wasm is missing ${NODE_ENTRY_EXPORT}`);
     process.exit(1);
   }
   if (bytes.byteLength > budget || gzipped > gzipBudget) {
@@ -104,40 +100,4 @@ if (which === "node") {
     );
     process.exit(1);
   }
-}
-
-function wasmExportNames(bin) {
-  if (bin[0] !== 0 || bin[1] !== 0x61 || bin[2] !== 0x73 || bin[3] !== 0x6d) {
-    throw new Error("not a wasm module");
-  }
-  let at = 8;
-  const readUleb = () => {
-    let value = 0;
-    let shift = 0;
-    for (;;) {
-      const byte = bin[at++];
-      value |= (byte & 0x7f) << shift;
-      if ((byte & 0x80) === 0) return value;
-      shift += 7;
-    }
-  };
-  while (at < bin.length) {
-    const id = bin[at++];
-    const size = readUleb();
-    const end = at + size;
-    if (id === 7) {
-      const count = readUleb();
-      const names = [];
-      for (let i = 0; i < count; i++) {
-        const len = readUleb();
-        names.push(Buffer.from(bin.subarray(at, at + len)).toString("utf8"));
-        at += len;
-        at += 1;
-        readUleb();
-      }
-      return names;
-    }
-    at = end;
-  }
-  return [];
 }

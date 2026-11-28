@@ -5,7 +5,8 @@
  * The container app uses the `durable_object` scheduling policy, so nothing is provisioned
  * until this object starts its container. One container per reducer per attempt: it starts on
  * `prepareReducer` and is destroyed as soon as its output has been read or the attempt aborts.
- * The inactivity timeout is only a backstop for a coordinator that disappears mid-job.
+ * The inactivity timeout is a backstop for a coordinator that disappears mid-job, and the
+ * deadline alarm one for a container kept busy (and billed) by an attempt nobody ends.
  */
 import { DurableObject } from "cloudflare:workers";
 import { DEFAULT_CONTAINER_INSTANCE, type ContainerInstance } from "./containers.ts";
@@ -19,6 +20,8 @@ const REDUCER_IMAGE = "reducer";
 const READY_TIMEOUT_MS = 30_000;
 const READY_POLL_MS = 100;
 const BACKSTOP_IDLE_MS = 30_000;
+/** No reducer attempt runs this long; one still running is stopped. */
+const DEADLINE_MS = 30 * 60 * 1000;
 
 /** Settles once this attempt's reducer has started; scans may reach it before that. */
 function gate(): { promise: Promise<void>; open: () => void; fail: (error: unknown) => void } {
@@ -45,6 +48,7 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
   async prepareReducer(params: PrepareReducerParams): Promise<PrepareReducerHandle> {
     this.slot = params.slot;
     try {
+      await this.ctx.storage.setAlarm(Date.now() + DEADLINE_MS);
       await this.startContainer(params.containerInstance ?? DEFAULT_CONTAINER_INSTANCE);
       await this.reducerCall(`/start?inputs=${params.expectedScans}`, {
         method: "POST",
@@ -92,6 +96,15 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
 
   async abortHashAttempt(params: HashAttemptParams & { error?: string }): Promise<void> {
     this.started.fail(new Error(`attempt aborted: ${params.error ?? "no reason"}`));
+    await this.shutDown();
+  }
+
+  /** The deadline: whatever this reducer is doing, its container stops now. */
+  async alarm(): Promise<void> {
+    if (this.ctx.container?.running) {
+      console.warn(JSON.stringify({ event: "container_reducer_deadline", slot: this.slot, ms: DEADLINE_MS }));
+    }
+    this.started.fail(new Error(`container reducer passed its ${DEADLINE_MS} ms deadline`));
     await this.shutDown();
   }
 
@@ -152,32 +165,43 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
   }
 
   /**
-   * The reducer's output, streamed as the finalizer reads it. Once it ends the reducer's
-   * status decides success, then the container stops.
+   * The reducer's output, streamed as the finalizer reads it: one chunk per pull, so the
+   * container waits for a slow reader instead of this object buffering its output. Once it
+   * ends the reducer's status decides success; then, or on cancel, the container stops.
    */
   private output(): ReadableStream<Uint8Array> {
+    // Requested now, so the output request is open before scans are let in.
     const response = this.reducerFetch("/output");
-    return new ReadableStream<Uint8Array>({
-      start: async (controller) => {
-        try {
-          const reader = (await response).body?.getReader();
-          if (!reader) throw new Error("container reducer sent no output");
-          for (;;) {
+    response.catch(() => undefined);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    return new ReadableStream<Uint8Array>(
+      {
+        pull: async (controller) => {
+          try {
+            reader ??= (await response).body?.getReader();
+            if (!reader) throw new Error("container reducer sent no output");
             const { value, done } = await reader.read();
-            if (done) break;
-            controller.enqueue(value);
+            if (!done) {
+              controller.enqueue(value);
+              return;
+            }
+            const status = await this.reducerCall("/status");
+            if (!status.startsWith("ok")) throw new Error(`container reducer: ${status}`);
+            console.log(JSON.stringify({ event: "container_reducer_done", slot: this.slot, status }));
+            controller.close();
+            await this.shutDown();
+          } catch (error) {
+            controller.error(error);
+            await this.shutDown();
           }
-          const status = await this.reducerCall("/status");
-          if (!status.startsWith("ok")) throw new Error(`container reducer: ${status}`);
-          console.log(JSON.stringify({ event: "container_reducer_done", slot: this.slot, status }));
-          controller.close();
-        } catch (error) {
-          controller.error(error);
-        } finally {
+        },
+        cancel: async (reason) => {
+          await reader?.cancel(reason).catch(() => undefined);
           await this.shutDown();
-        }
+        },
       },
-    });
+      { highWaterMark: 0 },
+    );
   }
 
   /** Stop the container now: a running one is billed until it does. */
@@ -185,5 +209,6 @@ export class WcolReducer extends DurableObject<GraphTaskEnv> {
     const container = this.container();
     this.stopping = true;
     if (container.running) await container.destroy().catch(() => undefined);
+    await this.ctx.storage.deleteAlarm().catch(() => undefined);
   }
 }

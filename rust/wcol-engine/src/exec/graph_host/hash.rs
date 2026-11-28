@@ -89,23 +89,12 @@ impl GraphHost {
             return Err(WcolError::from("hash reducer has no scan producers"));
         }
         let catalog = cur.catalog()?;
-        let key_len = cur.u32()? as usize;
-        let mut group_by = Vec::with_capacity(key_len);
-        for _ in 0..key_len {
-            group_by.push(cur.u32()?);
-        }
+        let group_by = cur.list(PlanCursor::u32)?;
         let agg_bytes = cur.u32()? as usize;
         let mut agg_cur = cur.bytes(agg_bytes)?;
-        let agg_len = crate::program::codec::read_u32(&mut agg_cur)
-            .map_err(|err| WcolError::msg(format!("hash reducer aggregate: {err:?}")))?
-            as usize;
-        let mut aggregates = Vec::with_capacity(agg_len);
-        for _ in 0..agg_len {
-            aggregates.push(
-                crate::program::codec::decode_agg(&mut agg_cur)
-                    .map_err(|err| WcolError::msg(format!("hash reducer aggregate: {err:?}")))?,
-            );
-        }
+        let aggregates =
+            crate::program::codec::read_list(&mut agg_cur, crate::program::codec::decode_agg)
+                .map_err(|err| WcolError::msg(format!("hash reducer aggregate: {err:?}")))?;
         if !agg_cur.is_empty() {
             return Err(WcolError::from("trailing bytes in hash reducer aggregates"));
         }
@@ -340,27 +329,5 @@ impl GraphHostCore {
             return Ok(Some(n));
         }
         Ok(None)
-    }
-}
-
-pub(super) fn push_row_frame(
-    egress: &mut RowBatchWcsEgress,
-    batch: &crate::stream::OwnedWcolBatch,
-) -> WcolResult<()> {
-    match egress.push_batch(batch) {
-        Ok(()) => Ok(()),
-        Err(err) if batch.row_count() > 1 && err.as_str().contains("too large") => {
-            let mid = batch.row_count() / 2;
-            let mut left = crate::stream::OwnedWcolBatch::empty();
-            let mut right = crate::stream::OwnedWcolBatch::empty();
-            left.append_rows_from(batch, &(0..mid).collect::<Vec<_>>())
-                .map_err(WcolError::msg)?;
-            right
-                .append_rows_from(batch, &(mid..batch.row_count()).collect::<Vec<_>>())
-                .map_err(WcolError::msg)?;
-            push_row_frame(egress, &left)?;
-            push_row_frame(egress, &right)
-        }
-        Err(err) => Err(err),
     }
 }

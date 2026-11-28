@@ -1,6 +1,6 @@
 # Job API
 
-Everything goes through one route. `POST /jobs` takes a job, and `GET /jobs/{jobId}` reports on it. Both routes need `Authorization: Bearer <token>` matching the Worker's `WCOL_API_TOKEN` secret; a Worker without the secret answers 401 to every job.
+`POST /jobs` takes a job, and `GET /jobs/{jobId}` reports on it. Every `/jobs` route needs `Authorization: Bearer <token>` matching the Worker's `WCOL_API_TOKEN` secret; a Worker without the secret answers 401 to every job (unless `WCOL_ALLOW_ANONYMOUS` is `"1"`, for local Miniflare runs only).
 
 ## Routes
 
@@ -10,6 +10,8 @@ Everything goes through one route. `POST /jobs` takes a job, and `GET /jobs/{job
 | `GET /jobs/{jobId}` | State (`accepted`, `running`, `completed`, `failed`), attempts, node count, timings and bytes read; plus the result, manifest key or output key once complete |
 | `GET /jobs/{jobId}/live` | A snapshot of the running graph: tasks, edges, bytes and data centres. The console polls this |
 | `GET /version` | The deploy id. The deploy script waits for it to change |
+| `GET /recordings/{name}.json` | A recorded console run, bundled at build time, or `404`. Public: visitors without a token replay these |
+| `POST /admin/shutdown` | Ops only. Needs header `x-wcol-shutdown` matching `WCOL_SHUTDOWN_SECRET` (`403` otherwise, and always when the secret is unset). Aborts and purges a job's node objects, aborts its container reducers and purges its coordinator. Body: optional `jobIds` (default: every job under `_jobs/`), `attempts` (default `[1, 2, 3]`), `slots` (default: found from the job's records in R2) and `timeoutMs` per call (default 5000) |
 | `GET /` | The console |
 
 The sync budget is `WCOL_JOB_SYNC_MS` (10 s by default). With `0`, every job is asynchronous.
@@ -27,7 +29,8 @@ The sync budget is `WCOL_JOB_SYNC_MS` (10 s by default). With `0`, every job is 
 
 - `sources` maps each table name to one object. It can be `{ "bucket", "key" }`, `{ "bucket", "keys": [...] }` (several objects with one schema, read as one table), or a URL. A prefix or a glob is not a source. `bucket` names an R2 binding: Workers have one, `output`.
 - `sql` is optional for a Parquet export. Without it, the export copies every row and column. `FROM` must name a table in `sources`. A job reads one table: joins are not supported yet.
-- `idempotencyKey` is optional. A repeated key returns the first job instead of starting another.
+- `idempotencyKey` is optional. A repeated key with the same body returns the first job instead of starting another; with a different body it answers `409`.
+- `jobId` is optional and names the job (it must match `[A-Za-z0-9_-]{1,64}`, or the request gets `400`). Without it, the job id comes from `idempotencyKey`, or is random. Reusing a `jobId` with a different body answers `409`.
 
 ### Tuning
 
@@ -41,6 +44,9 @@ These are optional. Without them, the planner and the coordinator decide.
 | `reducerInstance` | The container instance type: `lite`, `basic` (default), `standard-1` to `standard-4` |
 | `targetGroupBytes` | A reducer's group table size before it spills (16 MiB on nodes; on containers, the instance's memory less 128 MiB) |
 | `groupSpill` | `false` makes a reducer fail at its hard limit instead of spilling |
+| `minBytesPerNode` | The fewest planned scan bytes per scan task (64 KiB by default), so a small scan stays on few nodes |
+| `maxActiveIngress` | Scan streams a reducer reads at once, 1 to 64 (default `WCOL_MAX_ACTIVE_INGRESS`, 8) |
+| `failFirstAttemptTaskId` | Fault injection for retry tests: `"n<taskId>"` makes that task fail mid-stream on the first attempt only |
 
 With `"reducers": "auto"`, the coordinator compares the planner's estimate of group state with what node reducers can hold in memory (128 of them × 16 MiB). It sends larger aggregates to 64 `basic` containers.
 
@@ -94,4 +100,4 @@ When a job completes or fails, the coordinator sweeps its scratch in the backgro
 
 ## Errors
 
-Planning errors (unsupported SQL, an unknown table or column, an invalid body) return `400` with `{ "error": ... }`, and the job is not retried. Execution errors are retried as new attempts, up to three. A job that still fails reports `failed` with the last error; a synchronous `json` request that fails gets `500` with `{ "jobId", "error" }`.
+Planning errors (unsupported SQL, an unknown table or column, an invalid body) return `400` with `{ "error": ... }`, and the job is not retried. A reused `idempotencyKey` or `jobId` with a different body, or a `CREATE MODEL` whose model already exists, returns `409`. A failed task fails its attempt, and the job runs again as a new attempt, up to three attempts in all. A fatal error (one that would recur on the same bytes, such as a result too large for a JSON answer) or a stall (an attempt that makes no progress) fails the job at once. A job that fails reports `failed` with the last error; a synchronous `json` request that fails gets `500` with `{ "jobId", "error" }`.

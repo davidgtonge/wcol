@@ -1,5 +1,5 @@
 //! `POST /jobs` plans run natively: json, parquet export (per-node parts, a root-written file,
-//! an aggregate), and concat. Exported files are read back through the engine and compared
+//! an aggregate), and the finaliser's concat. Exported files are read back through the engine and compared
 //! with the same query run directly.
 
 #[path = "../common/claims.rs"]
@@ -309,10 +309,7 @@ fn identity_export_keeps_every_row() {
 fn scan_export_writes_one_part_per_node() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits_subset_500k.parquet");
-    let Ok(file) = std::fs::read(&path) else {
-        eprintln!("skip: hits subset missing");
-        return;
-    };
+    let file = std::fs::read(&path).expect("committed hits sample");
     let file = file.as_slice();
     let body = r#"{"sources":{"hits":{"bucket":"output","key":"hits.parquet"}},"sql":"SELECT CounterID, UserID, RegionID FROM hits WHERE RegionID = 229","output":{"format":"parquet","bucket":"output","prefix":"out/","targetFileBytes":1}}"#;
     let JobPlan::Parquet { exec, .. } = job(body, &[file], 4) else {
@@ -384,17 +381,17 @@ fn aggregate_export_is_written_by_the_finalizer() {
 }
 
 #[test]
-fn concat_copies_every_input_into_one_file() {
+fn finaliser_concat_copies_every_input_into_one_file() {
     let file = fixture();
     // Page copy needs plain pages: export the plain BIGINT column first.
     let (_, parts) = export(&file, Some("SELECT p FROM t"), 1);
     let input = parts[0].as_slice();
-    let body = r#"{"output":{"format":"concat","bucket":"output","key":"merged.parquet"},"inputs":[{"bucket":"output","key":"a.parquet"},{"bucket":"output","key":"b.parquet"}]}"#;
-    let JobPlan::Concat { key, programs, .. } = job(body, &[input, input], 4) else {
-        panic!("expected concat");
-    };
-    assert_eq!((key.as_str(), programs.len()), ("merged.parquet", 1));
-    let merged = run_task(&[input, input], &programs[0], &[], &[]);
+    let plans: Vec<_> = [input, input]
+        .iter()
+        .map(|file| (file.len() as u64, footer(file).plan))
+        .collect();
+    let program = wcol::plan::parquet_concat::concat_program_from_footers(&plans).unwrap();
+    let merged = run_task(&[input, input], &program, &[], &[]);
     let read = |bytes: &[u8]| -> serde_json::Value {
         serde_json::from_str(&query(bytes, "SELECT COUNT(*), SUM(p), COUNT(p) FROM t", 1)).unwrap()
     };
@@ -551,6 +548,17 @@ fn resident_graph_retains_rows_and_resumes_through_the_stream_pool() {
 }
 
 /// Exchange keys of the one hash exchange in `sql`'s plan on the 500k hits subset.
+const FULL_HITS_FOOTER: &str =
+    "needs data/hits.footer.bin, the footer of the full ClickBench hits.parquet (gitignored); \
+     the 500k sample plans these queries differently";
+
+/// The full hits footer: these planner decisions depend on its row groups and statistics.
+fn full_hits_footer() -> wcol::formats::parquet::Plan {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
+    let bytes = std::fs::read(&path).expect(FULL_HITS_FOOTER);
+    plan_footer(&bytes).unwrap()
+}
+
 fn hits_exchange_keys(sql: &str) -> Vec<u32> {
     use wcol::plan::physical_plan::OpKind;
     use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
@@ -584,14 +592,11 @@ fn distinct_keeps_many_groups_whole_and_spreads_few() {
 
 /// Distinct exchange keys on the full hits footer at the hosted shape (32 scans, 64 reducers).
 #[test]
+#[ignore = "needs data/hits.footer.bin (full ClickBench footer, gitignored)"]
 fn full_hits_distinct_exchange_keys() {
     use wcol::plan::physical_plan::OpKind;
     use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    let footer = plan_footer(&bytes).unwrap();
+    let footer = full_hits_footer();
     let mut config = PhysicalPlannerConfig::for_coordinator(32);
     config.hash_aggregate.reducers = Some(64);
     let keys = |sql: &str| {
@@ -634,6 +639,7 @@ fn full_hits_distinct_exchange_keys() {
 /// URL and EventTime alone, then reads the rest back in column groups. Q24–Q26 print one
 /// column and stay one pass.
 #[test]
+#[ignore = "needs data/hits.footer.bin (full ClickBench footer, gitignored)"]
 fn full_hits_wide_topk_reads_rows_late() {
     use wcol::exec::operators::RowBatchWcsEgress;
     use wcol::plan::late_rows::{plan_late_pick, plan_late_read, LateRead};
@@ -641,11 +647,7 @@ fn full_hits_wide_topk_reads_rows_late() {
     use wcol::plan::PhysicalPlannerConfig;
     use wcol::program::row_id::{row_id, RowPosition};
     use wcol::stream::OwnedWcolBatch;
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    let footer = plan_footer(&bytes).unwrap();
+    let footer = full_hits_footer();
     let objects = [("hits", &footer)];
     let config = PhysicalPlannerConfig::for_coordinator(32);
     let q24 = "SELECT * FROM hits WHERE URL LIKE '%google%' ORDER BY EventTime LIMIT 10";
@@ -695,7 +697,7 @@ fn full_hits_wide_topk_reads_rows_late() {
     batch.push_i64_column(row_id_column, ids.clone(), vec![1; ids.len()]);
     batch.set_row_count(ids.len()).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     egress.push_end().unwrap();
     let mut picked = Vec::new();
     let mut buf = vec![0u8; 4096];
@@ -725,13 +727,10 @@ fn full_hits_wide_topk_reads_rows_late() {
 /// every scan would ship every region's sketch to one merge (52 MB for A2 on full hits),
 /// so RegionID partitions. A few OS values stay gathered.
 #[test]
+#[ignore = "needs data/hits.footer.bin (full ClickBench footer, gitignored)"]
 fn full_hits_grouped_sketches_partition_by_size() {
     use wcol::plan::{plan_query_job, PhysicalPlannerConfig};
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    let footer = plan_footer(&bytes).unwrap();
+    let footer = full_hits_footer();
     let config = PhysicalPlannerConfig::for_coordinator(32);
     let reducers = |sql: &str| {
         let (_, plan, _) = plan_query_job(sql, &[("hits", &footer)], 32, 1024, &config).unwrap();

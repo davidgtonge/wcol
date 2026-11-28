@@ -309,7 +309,7 @@ fn schema_leaves(footer: &[u8]) -> Result<Vec<Leaf>, Error> {
     }
     let mut leaves = Vec::new();
     let mut index = 0;
-    walk(&elements, &mut index, 0, 0, true, &mut leaves)?;
+    walk(&elements, &mut index, 0, 0, None, &mut leaves)?;
     if index != elements.len() {
         return Err(Error::Message("schema walk did not consume every element"));
     }
@@ -356,12 +356,17 @@ fn read_element(reader: &mut Reader<'_>) -> Result<Element, Error> {
     Ok(out)
 }
 
+/// Deepest group nesting a footer may declare. Each level is one stack frame of [`walk`], and
+/// a hostile footer can chain thousands; real schemas nest a handful deep.
+const MAX_SCHEMA_DEPTH: usize = 64;
+
+/// Flatten the schema tree below `elements[*index]`. `depth` is `None` for the root.
 fn walk(
     elements: &[Element],
     index: &mut usize,
     def: u8,
     rep: u8,
-    is_root: bool,
+    depth: Option<usize>,
     leaves: &mut Vec<Leaf>,
 ) -> Result<(), Error> {
     let element = elements
@@ -370,7 +375,7 @@ fn walk(
     *index += 1;
     let mut def = def;
     let mut rep = rep;
-    if !is_root {
+    if depth.is_some() {
         match element.repetition {
             Some(1) => {
                 def = def
@@ -400,57 +405,43 @@ fn walk(
         });
         return Ok(());
     }
+    let child_depth = depth.map_or(0, |d| d + 1);
+    if child_depth >= MAX_SCHEMA_DEPTH {
+        return Err(Error::Message("schema nests too deeply"));
+    }
     for _ in 0..children {
-        walk(elements, index, def, rep, false, leaves)?;
+        walk(elements, index, def, rep, Some(child_depth), leaves)?;
     }
     Ok(())
 }
 
-pub fn encode_plan(plan: &Plan) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::new();
-    out.extend_from_slice(b"WPQ1");
-    out.extend_from_slice(&plan.rows.to_le_bytes());
-    out.extend_from_slice(&(plan.leaves.len() as u32).to_le_bytes());
-    for leaf in &plan.leaves {
-        let name = leaf.name.as_bytes();
-        let name_len =
-            u16::try_from(name.len()).map_err(|_| Error::Message("schema name is too long"))?;
-        out.extend_from_slice(&name_len.to_le_bytes());
-        out.extend_from_slice(name);
-        out.extend_from_slice(&leaf.physical.to_le_bytes());
-        out.extend_from_slice(&leaf.type_length.to_le_bytes());
-        out.push(leaf.max_def);
-        out.push(leaf.max_rep);
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain(groups: usize) -> Vec<Element> {
+        let group = |children| Element {
+            name: "g".into(),
+            physical: None,
+            type_length: None,
+            repetition: Some(0),
+            num_children: Some(children),
+        };
+        let mut elements: Vec<Element> = (0..groups).map(|_| group(1)).collect();
+        elements.push(group(0));
+        elements
     }
-    out.extend_from_slice(&(plan.chunks.len() as u32).to_le_bytes());
-    for chunk in &plan.chunks {
-        out.extend_from_slice(&chunk.leaf.to_le_bytes());
-        out.extend_from_slice(&chunk.codec.to_le_bytes());
-        out.extend_from_slice(&chunk.num_values.to_le_bytes());
-        out.extend_from_slice(&chunk.start.to_le_bytes());
-        out.extend_from_slice(&chunk.compressed_size.to_le_bytes());
+
+    fn leaves(elements: &[Element]) -> Result<Vec<Leaf>, Error> {
+        let mut leaves = Vec::new();
+        walk(elements, &mut 0, 0, 0, None, &mut leaves)?;
+        Ok(leaves)
     }
-    let groups = plan
-        .chunks
-        .iter()
-        .map(|chunk| chunk.row_group as usize + 1)
-        .max()
-        .unwrap_or(0);
-    let mut group_rows = vec![None; groups];
-    for chunk in &plan.chunks {
-        let slot = &mut group_rows[chunk.row_group as usize];
-        if let Some(existing) = *slot {
-            if existing != chunk.rows {
-                return Err(Error::Message("row group num_rows disagree"));
-            }
-        } else {
-            *slot = Some(chunk.rows);
-        }
+
+    #[test]
+    fn schema_nesting_is_capped_before_the_stack() {
+        assert_eq!(leaves(&chain(8)).unwrap().len(), 1);
+        let err = leaves(&chain(100_000)).unwrap_err();
+        assert!(err.to_string().contains("nests too deeply"), "{err}");
     }
-    out.extend_from_slice(&(groups as u32).to_le_bytes());
-    for rows in group_rows {
-        let rows = rows.ok_or(Error::Message("row group has no num_rows"))?;
-        out.extend_from_slice(&rows.to_le_bytes());
-    }
-    Ok(out)
 }

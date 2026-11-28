@@ -117,7 +117,7 @@ fn prefetch_stays_within_the_byte_cap_but_a_lone_demand_load_passes_it() {
         "40 bytes resident: no more prefetch"
     );
     // The decoder needs the fifth column before it can finish the first four.
-    stage.prioritize_fetch_covering(45);
+    stage.prioritize_fetch(4);
     assert_eq!(load(&mut stage, true, &[4; 10]).offset, 40);
     assert_eq!(stage.metrics().peak_resident_bytes, 50);
     for column in 0..5u64 {
@@ -184,8 +184,9 @@ fn a_fetch_can_arrive_in_ring_sized_parts() {
     stage
         .complete_host_fetch(host.ticket, b"0123".to_vec())
         .unwrap();
-    assert!(
-        stage.slice_for_range(0, 4).is_err(),
+    assert_eq!(
+        stage.slice_for_range(0, 4),
+        Err(SliceError::NotLoaded { fetch_id: 0 }),
         "not usable until every part is in"
     );
     stage
@@ -218,4 +219,26 @@ fn a_cancelled_fetch_can_be_requested_again() {
         .complete_host_fetch(again.ticket, b"0123".to_vec())
         .unwrap();
     assert_eq!(stage.slice_for_range(0, 4).unwrap(), b"0123");
+}
+
+#[test]
+fn a_read_straddling_a_loaded_and_a_missing_fetch_consumes_nothing() {
+    // One read [0, 8) split over fetch 0 [0, 4) and fetch 1 [4, 8).
+    let reads = vec![read(0, 0, vec![piece(0, 0, 0, 4), piece(1, 0, 4, 4)])];
+    let fetches = vec![fetch(0, 0, 4, vec![0]), fetch(1, 4, 4, vec![0])];
+    let mut stage = FetchStage::new(fetches, reads, 1, u64::MAX);
+    assert_eq!(load(&mut stage, false, b"0123").offset, 0);
+    assert_eq!(
+        stage.slice_for_range(0, 8),
+        Err(SliceError::NotLoaded { fetch_id: 1 })
+    );
+    assert_eq!(stage.resident_bytes(), 4, "the first buffer is kept");
+    stage.prioritize_fetch(1);
+    assert_eq!(load(&mut stage, true, b"4567").offset, 4);
+    assert_eq!(stage.slice_for_range(0, 8).unwrap(), b"01234567");
+    assert_eq!(
+        stage.resident_bytes(),
+        0,
+        "both buffers free after the read"
+    );
 }

@@ -15,13 +15,12 @@
     "deploy": "tsx scripts/deploy-worker.ts",
     "test": "tsx --test 'tests/*.test.ts'",
     "test:slow": "tsx --test 'tests/slow/*.test.ts'",
-    "test:rust": "cd rust && cargo test --workspace && cargo test -p wcol --features native",
+    "test:rust": "cd rust && cargo test --workspace && cargo test -p wcol --features native && cargo test -p wcol --features memory-plateau --test memory_plateau",
     "typecheck": "tsc -p tsconfig.json",
     "lint:rust": "cd rust && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
     "clickbench:local": "tsx scripts/cf-clickbench-miniflare.ts",
     "clickbench:cloudflare": "tsx scripts/cf-production-jobs.ts",
-    "analyze:node-wasm": "node scripts/analyze-node-wasm.mjs",
-    "report:node-worker-bundle": "tsx scripts/report-node-worker-bundle.ts"
+    "analyze:node-wasm": "node scripts/analyze-node-wasm.mjs"
   },
   "devDependencies": {
     "@duckdb/node-api": "^1.5.3-r.3",

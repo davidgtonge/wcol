@@ -29,9 +29,6 @@ export type RunTaskParams = {
   hashScanIndex?: number;
   failTaskId?: number;
   trace?: boolean;
-  openingConcurrency?: number;
-  maxActiveIngress?: number;
-  ingressBytes?: number;
   /** Etag parallel to `sources`. Empty string means the source is not pinned. */
   etags?: string[];
 };
@@ -97,9 +94,6 @@ export type PrepareReducerParams = {
   containerInstance?: ContainerInstance;
   failTaskId?: number;
   trace?: boolean;
-  openingConcurrency?: number;
-  maxActiveIngress?: number;
-  ingressBytes?: number;
   etags?: string[];
   /** Hash shard: finalize program fed by this reducer. Range sort: same as `program`. */
   exportProgram?: Uint8Array;
@@ -269,17 +263,13 @@ export type IsolateProgress = {
   wasmMemoryBytes: number;
   leftoverBytes?: number;
   outstandingReads?: number;
-  retainedIngressBytes?: number;
-  ingressLocks?: number;
   residentGroups?: number;
   residentGroupBytes?: number;
   spillRuns?: number;
   spillGroupsFlushed?: number;
   spillPeakLiveBytes?: number;
   spillPeakInternerBytes?: number;
-  spillBoundaries?: Array<SpillBoundary & {
-    hostRetainedBytes: number;
-  }>;
+  spillBoundaries?: SpillBoundary[];
   egressPendingBytes?: number;
   egressPeakPendingBytes?: number;
   yieldCount?: number;
@@ -315,10 +305,7 @@ export type TaskTiming = {
   sourceReads: number;
   sourceReadBytes: number;
   wasmLoadMs: number;
-  inputWaitMs: number;
   writeWaitMs: number;
-  readAtWaitMs: number;
-  readAtCalls: number;
   inputBytes: number;
   outputBytes: number;
   wasmMemoryBytes: number;

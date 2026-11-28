@@ -68,26 +68,6 @@ fn open_scan(path: &Path, batch_rows: usize, leaf: Leaf) -> NumericScan {
     scan
 }
 
-fn drain_page_tail(scan: &mut NumericScan) {
-    for _ in 0..64 {
-        if scan.decode_exhausted() {
-            return;
-        }
-        match scan.poll(0).unwrap() {
-            DecodeProgress::Finished => return,
-            DecodeProgress::Advanced => continue,
-            DecodeProgress::BatchReady { .. } => panic!("advance poll must not emit rows"),
-            DecodeProgress::NeedInput => panic!(
-                "unexpected NeedInput (chunk_complete={} decode_exhausted={} chunk_wants={})",
-                scan.chunk_complete(),
-                scan.decode_exhausted(),
-                scan.chunk_wants()
-            ),
-        }
-    }
-    panic!("decode tail did not finish");
-}
-
 fn collect_poll_batches(scan: &mut NumericScan, cap: usize) -> Vec<usize> {
     let mut batches = Vec::new();
     loop {
@@ -100,7 +80,6 @@ fn collect_poll_batches(scan: &mut NumericScan, cap: usize) -> Vec<usize> {
                 scan.advance_batch(rows).unwrap();
                 batches.push(rows);
             }
-            DecodeProgress::Advanced => drain_page_tail(scan),
             DecodeProgress::Finished => break,
             DecodeProgress::NeedInput => panic!("unexpected NeedInput with full chunk fed"),
         }
@@ -145,7 +124,6 @@ fn collect_poll_values(scan: &mut NumericScan, cap: usize) -> (Vec<usize>, Vec<i
                 scan.advance_batch(rows).unwrap();
                 sizes.push(rows);
             }
-            DecodeProgress::Advanced => drain_page_tail(scan),
             DecodeProgress::Finished => break,
             DecodeProgress::NeedInput => panic!("unexpected NeedInput with full chunk fed"),
         }
@@ -203,7 +181,7 @@ fn poll_zero_rows_chunk_finishes() {
 }
 
 #[test]
-fn poll_exact_boundary_then_advanced_to_finished() {
+fn poll_exact_boundary_then_finished() {
     let bytes = write_i64_chunk(4, &[10, 20, 30, 40], None);
     let path = temp_parquet(&bytes);
     let leaf = Leaf {
@@ -219,13 +197,7 @@ fn poll_exact_boundary_then_advanced_to_finished() {
         DecodeProgress::BatchReady { rows: 4 }
     );
     scan.advance_batch(4).unwrap();
-    match scan.poll(4).unwrap() {
-        DecodeProgress::Finished => {}
-        DecodeProgress::Advanced => {
-            assert_eq!(scan.poll(0).unwrap(), DecodeProgress::Finished);
-        }
-        other => panic!("expected tail completion, got {other:?}"),
-    }
+    assert_eq!(scan.poll(4).unwrap(), DecodeProgress::Finished);
     assert!(scan.decode_exhausted());
     let _ = fs::remove_file(path);
 }

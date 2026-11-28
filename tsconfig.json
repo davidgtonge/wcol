@@ -8,10 +8,10 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "strict": false,
+    "strict": true,
     "paths": {
       "cloudflare:workers": ["./cloudflare/workers-stub.ts"]
     }
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "cloudflare/src/**/*.ts", "cloudflare/console/**/*.ts", "cloudflare/durable-objects.d.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "cloudflare/src/**/*.ts", "cloudflare/console/**/*.ts", "cloudflare/durable-objects.d.ts", "scripts/**/*.ts"]
 }

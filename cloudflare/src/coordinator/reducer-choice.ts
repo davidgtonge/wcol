@@ -6,6 +6,7 @@
  * past that they spill to R2. Container reducers take 2–6 s to start but hold the instance's
  * memory and spill to local disk. So containers win only when the groups would not fit.
  */
+import { binaryBytes } from "../format.ts";
 import { CONTAINER_INSTANCES, containerGroupBytes, DEFAULT_CONTAINER_INSTANCE, type ContainerInstance } from "../node/containers.ts";
 
 const MIB = 1024 * 1024;
@@ -32,7 +33,7 @@ export function parseReducerRequest(row: Record<string, unknown>): ReducerReques
 
 /** `groupBytes` is the planner's estimate under node budgets; 0 means no aggregate. */
 export function chooseReducers(request: ReducerRequest, groupBytes: number): ReducerChoice {
-  const estimate = `estimated group state ${formatBytes(groupBytes)}`;
+  const estimate = `estimated group state ${binaryBytes(groupBytes)}`;
   switch (request.runtime) {
     case "node":
       return { runtime: "node", reason: "requested node reducers" };
@@ -43,32 +44,22 @@ export function chooseReducers(request: ReducerRequest, groupBytes: number): Red
         ? {
             runtime: "container",
             instance: request.instance,
-            reason: `${estimate} exceeds the ${formatBytes(NODE_REDUCER_MEMORY_BYTES)} node reducers hold in memory`,
+            reason: `${estimate} exceeds the ${binaryBytes(NODE_REDUCER_MEMORY_BYTES)} node reducers hold in memory`,
           }
         : { runtime: "node", reason: groupBytes > 0 ? `${estimate} fits node reducers` : "no hash aggregate" };
   }
 }
 
 /**
- * The request the planner sees for container reducers: the instance's group budget and
+ * What the planner is told for container reducers: the instance's group budget and
  * `CONTAINER_REDUCERS`, unless the request set its own.
  */
-export function containerRequestBody(body: string, instance: ContainerInstance): string {
-  const request = JSON.parse(body) as Record<string, unknown>;
-  return JSON.stringify({
-    ...request,
+export function containerPlanKnobs(
+  request: { readonly targetGroupBytes?: number; readonly hashReducers?: number },
+  instance: ContainerInstance,
+): { targetGroupBytes: number; hashReducers: number } {
+  return {
     targetGroupBytes: request.targetGroupBytes ?? containerGroupBytes(instance),
     hashReducers: request.hashReducers ?? CONTAINER_REDUCERS,
-  });
-}
-
-export function formatBytes(bytes: number): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+  };
 }

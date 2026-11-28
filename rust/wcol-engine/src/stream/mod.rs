@@ -2,12 +2,10 @@
 
 pub mod batch;
 pub mod core;
-pub mod dictionary;
 pub mod native_poll;
 pub mod partial_wcs;
 pub mod partials;
 pub mod projection;
-pub mod schema;
 pub mod wcs;
 
 pub use wcs::{
@@ -21,6 +19,6 @@ pub use batch::{
 };
 pub use partial_wcs::{
     partial_first_sum_from_wire, partial_state_from_wire_payload, partial_state_to_wcs_payload,
-    partial_wire_format, PartialWireFormat, PWCL_MAGIC,
+    PWCL_MAGIC,
 };
 pub use partials::{partial_snapshot_from_batch, partial_snapshot_from_wire};

@@ -90,7 +90,7 @@ enum ReducerInput {
 
 struct SpillDrive {
     phase: SpillPhase,
-    /// Chunked spill finish emitted every partial; FRAME_END is queued after DROP TABLE.
+    /// Chunked spill finish emitted every partial; FRAME_END is queued once the spill store ends.
     chunks_finished: bool,
     /// What becomes of the reducer's folded distinct counts.
     distinct: DistinctFold,
@@ -139,14 +139,7 @@ pub struct GraphHost {
     read_at_ticket: u32,
     ring_capacity: usize,
     spill_op: u8,
-    spill_session: u64,
-    spill_max_rows: u32,
-    spill_max_bytes: u32,
-    spill_resume_seq: i64,
-    spill_resume_started: u8,
-    spill_append_len: u32,
     spill_append_buf: Vec<u8>,
-    spill_resume_key: Vec<u8>,
     spill_run_upload_mirror: Vec<u8>,
     error: Option<WcolError>,
 }
@@ -295,7 +288,6 @@ impl GraphHost {
         })
     }
 
-    #[allow(dead_code)]
     fn fail_message(&mut self, message: &str) {
         if self.error.is_none() {
             self.error = Some(WcolError::msg(message.to_string()));

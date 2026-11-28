@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { planJob, readParquetFooter, resultJson, type ReadAt } from "../../src/runtime/coordinator/plan-dispatch.ts";
-import { runLocalHashGraph, type LocalHashScheduling } from "../../src/runtime/coordinator/run-local-hash-graph.ts";
+import { runLocalHashGraph, type LocalHashScheduling } from "./run-local-hash-graph.ts";
 import type { ExecutionPlan } from "../../src/runtime/coordinator/execution-graph.ts";
 import { HttpRangeSource } from "../../src/runtime/host/ports/http-range.ts";
 import { loadCoordinatorWasm, loadNodeWasm } from "../../src/runtime/host/wasm.ts";

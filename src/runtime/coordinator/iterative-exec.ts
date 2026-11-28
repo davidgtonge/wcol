@@ -153,7 +153,7 @@ function mergeTree<T>(
   while (values.length > 1) {
     const next: T[] = [];
     for (let at = 0; at < values.length; at += fanIn) {
-      let current = values[at]!;
+      let current: T = values[at]!;
       const end = Math.min(values.length, at + fanIn);
       for (let index = at + 1; index < end; index++)
         current = merge(current, values[index]!);

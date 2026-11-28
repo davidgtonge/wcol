@@ -67,13 +67,6 @@ export type {
   RunTaskParams,
 } from "./types.ts";
 
-export type NodePingPayload = {
-  ok: true;
-  doId: string;
-  constructedAt: number;
-  handledAt: number;
-};
-
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -82,9 +75,9 @@ function json(body: unknown, status = 200): Response {
 }
 
 /**
- * Pooled nodes run one execution at a time; a claim on a busy node waits this long for
- * it to finish (jobs take turns) before failing. Also bounds how long an edge that
- * arrives before its reducer is prepared waits for that reducer's session.
+ * A node runs one execution at a time; a claim on a busy node waits this long for it to
+ * finish (two tasks of one attempt planned on the same slot) before failing. Also bounds
+ * how long an edge that arrives before its reducer is prepared waits for that reducer's session.
  */
 const NODE_CLAIM_WAIT_MS = 120 * 1000;
 const RESIDENT_SESSION_TTL_MS = 10 * 60 * 1000;
@@ -118,7 +111,6 @@ type ResidentKMeansSession = {
 export class WcolNode extends DurableObject {
   protected readonly nodeState: DurableObjectState;
   protected readonly nodeEnv: GraphTaskEnv;
-  private readonly constructedAt: number;
   private readonly sessionLease: NodeSessionLease = emptyNodeSessionLease();
   /** This object's own Wasm instance (never shared with other objects in the isolate). */
   private readonly wasm = nodeWasm(this.sessionLease);
@@ -140,17 +132,6 @@ export class WcolNode extends DurableObject {
     super(state, env);
     this.nodeState = state;
     this.nodeEnv = env;
-    this.constructedAt = performance.now();
-  }
-
-  /** Cold-start probe: no Wasm, no storage. */
-  async ping(): Promise<NodePingPayload> {
-    return {
-      ok: true,
-      doId: this.nodeState.id.toString(),
-      constructedAt: this.constructedAt,
-      handledAt: performance.now(),
-    };
   }
 
   /**
@@ -213,8 +194,8 @@ export class WcolNode extends DurableObject {
 
   /**
    * Scans start alongside reducer setup, so an edge can arrive before this attempt's
-   * reducer is prepared (or while the pooled node finishes another job). Wait for the
-   * session instead of refusing; an attempt that already ended here will not come back.
+   * reducer is prepared. Wait for the session instead of refusing; an attempt that already
+   * ended here will not come back.
    */
   private async awaitSession(params: { jobId: string; executionAttempt: number }): Promise<void> {
     await this.whenReady(

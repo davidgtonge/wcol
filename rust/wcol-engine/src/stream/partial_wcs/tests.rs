@@ -51,15 +51,6 @@ fn pwcl_roundtrip_preserves_sum() {
 }
 
 #[test]
-fn wire_format_detects_pwcl() {
-    assert_eq!(
-        partial_wire_format(&sum_pwcl(&[1])),
-        PartialWireFormat::PwclV1
-    );
-    assert_eq!(partial_wire_format(b"nope"), PartialWireFormat::Unknown);
-}
-
-#[test]
 fn wire_sum_reads_pwcl() {
     assert_eq!(partial_first_sum_from_wire(&sum_pwcl(&[5])).unwrap(), 5);
 }
@@ -271,4 +262,28 @@ fn truncated_or_corrupt_payloads_are_refused() {
     let at = 27 + aggs * 5 + 8;
     huge_rows[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
     assert!(partial_state_from_wire_payload(&huge_rows).is_err());
+}
+
+#[test]
+fn counts_beyond_the_payload_are_refused_before_allocating() {
+    let pwcl = sum_pwcl(&[3, 7]);
+    let count_at = |at: usize| u32::from_le_bytes(pwcl[at..at + 4].try_into().unwrap()) as usize;
+    // Magic, version, flags, limit, offset, key length and the two key masks precede it.
+    let aggs_at = 23;
+    let rows_at = aggs_at + 4 + count_at(aggs_at) * AGG_BYTES + 8;
+    let columns_at = rows_at + 4;
+    for (at, want) in [
+        (aggs_at, "aggregate count"),
+        (rows_at, "row count"),
+        (columns_at, "column count"),
+    ] {
+        let mut wire = pwcl.clone();
+        wire[at..at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let err = partial_state_from_wire_payload(&wire).unwrap_err();
+        assert!(err.contains(want), "{want}: {err}");
+    }
+    // A row count the payload could hold, but its columns cannot.
+    let mut wire = pwcl.clone();
+    wire[rows_at..rows_at + 4].copy_from_slice(&((pwcl.len() - 1) as u32).to_le_bytes());
+    assert!(partial_state_from_wire_payload(&wire).is_err());
 }

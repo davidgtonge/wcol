@@ -1,4 +1,4 @@
-//! WCS1 `DATA_BATCH` egress / ingress for hash-partitioned row exchange (Milestone B).
+//! WCS1 `DATA_BATCH` egress / ingress for hash-partitioned row exchange.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -11,7 +11,8 @@ use crate::formats::parquet::stream_wcs::{
     apply_dictionary_payload, encode_one_dictionary_frame, rebase_dictionary_frame,
 };
 use crate::stream::projection::{
-    encode_projection_columns, max_rows_for_body_budget, projection_columns_for_range,
+    encode_projection_columns, max_rows_for_body_budget, projection_body_byte_len,
+    projection_columns_for_range,
 };
 use crate::stream::wcs::MAX_WCS_PAYLOAD;
 use crate::stream::wcs::{self, FRAME_DATA_BATCH, FRAME_DICTIONARY, FRAME_END, FRAME_PARTIAL};
@@ -151,12 +152,12 @@ impl RowBatchWcsEgress {
     /// those rows go as plain values. A filtered or limited stream (a late read-back keeps
     /// one row of a row group) never ships a dictionary it barely uses, and a full scan
     /// sends at most twice the bytes of the cheaper choice.
-    pub fn push_batch(&mut self, batch: &OwnedWcolBatch) -> WcolResult<()> {
+    pub fn push_batch(&mut self, mut batch: OwnedWcolBatch) -> WcolResult<()> {
         let partition = 0;
         if self.stream_ended {
             return Err(WcolError::from("WCS stream already ended"));
         }
-        let batch = self.plain_until_dictionary_pays(batch)?;
+        self.plain_until_dictionary_pays(&mut batch)?;
         let mut col_view = Vec::new();
         let view = batch.view_with(&mut col_view);
         for col in view.columns {
@@ -177,11 +178,8 @@ impl RowBatchWcsEgress {
         Ok(())
     }
 
-    /// `batch` with each dictionary column that is not yet worth sending as plain values.
-    fn plain_until_dictionary_pays(
-        &mut self,
-        batch: &OwnedWcolBatch,
-    ) -> WcolResult<OwnedWcolBatch> {
+    /// Expand each dictionary column of `batch` that is not yet worth sending whole.
+    fn plain_until_dictionary_pays(&mut self, batch: &mut OwnedWcolBatch) -> WcolResult<()> {
         let rows = batch.row_count();
         let scope = batch.dict_scope();
         let mut plain = Vec::new();
@@ -203,9 +201,10 @@ impl RowBatchWcsEgress {
                 plain.push(*column);
             }
         }
-        let mut out = batch.clone();
-        out.expand_dicts(&plain).map_err(WcolError::msg)?;
-        Ok(out)
+        if !plain.is_empty() {
+            batch.expand_dicts(&plain).map_err(WcolError::msg)?;
+        }
+        Ok(())
     }
 
     /// One hash partition's rows, stamped with `partition`.
@@ -598,14 +597,20 @@ fn row_span(view: crate::stream::WcolBatch<'_>, start: usize) -> WcolResult<usiz
     match max_rows_for_body_budget(view, start, budget) {
         Ok(rows) if rows > 0 => Ok(rows),
         Ok(_) => Err(WcolError::from("projection row range produced no rows")),
-        Err(err) if err.as_str().contains("single projection row") => {
+        // Decided from the row itself, not the error text: one row that cannot fit any
+        // frame fails the same way on every retry.
+        Err(err) if start < view.row_count && single_row_body_len(view, start)? > budget => {
             Err(WcolError::fatal(format!(
-                "wcs: single_row_too_large (dict_scope={} rows=1 max={})",
-                view.dict_scope, MAX_WCS_PAYLOAD
+                "wcs: single_row_too_large (dict_scope={} rows=1 max={MAX_WCS_PAYLOAD}): {err}",
+                view.dict_scope
             )))
         }
         Err(err) => Err(err),
     }
+}
+
+fn single_row_body_len(view: crate::stream::WcolBatch<'_>, row: usize) -> WcolResult<usize> {
+    projection_body_byte_len(&projection_columns_for_range(view, row, row + 1)?)
 }
 
 /// Split a mixed producer byte stream into one WCS stream per partition.

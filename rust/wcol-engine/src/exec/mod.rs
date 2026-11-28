@@ -8,10 +8,8 @@ pub mod graph_scheduler;
 pub(crate) mod mem_growth;
 pub mod operator;
 pub mod operators;
-pub mod phase;
 pub mod runtime;
 pub mod stream_pool;
-pub mod trace;
 pub mod wcol_session;
 pub(crate) mod wcs_port;
 

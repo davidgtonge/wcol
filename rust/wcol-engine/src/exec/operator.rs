@@ -1,4 +1,4 @@
-//! Canonical WCOL execution contract (I-01): one [`Operator`] trait and [`OperatorIo`] lifecycle.
+//! Canonical WCOL execution contract: one [`Operator`] trait and [`OperatorIo`] lifecycle.
 //!
 //! Host byte ports stay outside this trait. Query operators do not parse WCS frames.
 

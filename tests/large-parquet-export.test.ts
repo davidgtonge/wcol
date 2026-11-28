@@ -11,7 +11,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { planJob, readParquetFooter } from "../src/runtime/coordinator/plan-dispatch.ts";
-import { runGatherGraph } from "../src/runtime/coordinator/run-local-graph.ts";
+import { runGatherGraph } from "./helpers/run-local-graph.ts";
 import { finishParquetShard, ParquetUploadSink } from "../src/runtime/host/parquet-upload-sink.ts";
 import { R2_PART_SIZE, type R2MultipartSession, type R2UploadedPart } from "../src/runtime/host/ports/r2-write.ts";
 import { loadCoordinatorWasm, loadNodeWasm } from "../src/runtime/host/wasm.ts";

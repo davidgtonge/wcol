@@ -311,7 +311,6 @@ fn multi_page_chunk_streams_within_window() {
                 scan.advance_batch(rows).unwrap();
             }
             wcol::formats::parquet::DecodeProgress::Finished => break,
-            wcol::formats::parquet::DecodeProgress::Advanced => {}
             wcol::formats::parquet::DecodeProgress::NeedInput => break,
         }
     }

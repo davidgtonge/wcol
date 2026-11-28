@@ -1,17 +1,7 @@
-//! Append-only spill table I/O.
+//! The [`SpillStore`] contract, and the native SQLite [`FileAppendSpillStore`] tests use.
 //!
 //! Finalize reads rows in `(key_blob, seq)` order so Rust can merge partials for the
-//! same key. On Cloudflare, run one keyset page query per host call (do not hold a
-//! `SqlStorageCursor` across `await`):
-//!
-//! ```sql
-//! SELECT seq, key_blob, partial FROM spill_partial
-//! WHERE (key_blob, seq) > (?1, ?2)
-//! ORDER BY key_blob, seq
-//! LIMIT ?3;
-//! ```
-//!
-//! Native [`FileAppendSpillStore`] uses the same composite keyset pages.
+//! same key, one bounded page at a time from a [`SpillScanResume`] cursor.
 
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 use rusqlite::{params, params_from_iter, Connection};

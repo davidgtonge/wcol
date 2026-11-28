@@ -219,7 +219,7 @@ impl GraphHostCore {
                 .row_egress
                 .as_mut()
                 .ok_or_else(|| WcolError::from("missing row egress"))?;
-            push_row_frame(egress, &batch)?;
+            egress.push_batch(batch)?;
             return Ok(());
         }
         if self.graph.ingest_complete() {
@@ -231,7 +231,7 @@ impl GraphHostCore {
                     .row_egress
                     .as_mut()
                     .ok_or_else(|| WcolError::from("missing row egress"))?;
-                push_row_frame(egress, &batch)?;
+                egress.push_batch(batch)?;
                 return Ok(());
             }
             let egress = self

@@ -1,5 +1,5 @@
 import type { HostBytes } from "./host-bytes.ts";
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import type { PoolWasm } from "./wasm-stream.ts";
 import { readWasmLastError } from "./wasm.ts";
 import { pumpReadableToWriter } from "./pool-streams.ts";
 
@@ -13,37 +13,38 @@ const STEP_FAILED = 8;
 const STEP_RESIDENT_READY = 32;
 const STEP_SPILL_EXEC = 16;
 
-/** May answer at once or later: the pool wraps every answer in a promise. */
-export type ReadAtCallback = (
-  source: number,
-  offset: bigint,
-  length: number,
-) => Uint8Array | Promise<Uint8Array>;
+/**
+ * The one host read a graph asks for: `length` bytes of source `source` at `offset`. It may
+ * answer at once or later. Offsets come from a Rust `u64`; objects stay below 2^53 bytes.
+ */
+export type SourceReadAt = (source: number, offset: number, length: number) => Uint8Array | Promise<Uint8Array>;
 
-export interface CreateStreamPoolOptions {
+/**
+ * What the pool runs: the echo driver (tests), or a graph program. `budgetShare`: tasks
+ * sharing this isolate's memory, this one included (1 when alone). A hash reducer flushes
+ * its groups at that fraction of the planned budget.
+ */
+type PoolProgram =
+  | { echo: true; graph?: never }
+  | { echo?: never; graph: { program: Uint8Array; scratchBytes: number; budgetShare?: number } };
+
+export type CreateStreamPoolOptions = PoolProgram & {
   inputs: number;
   /** Slot size in KiB (each ingress mailbox). */
   inputSize: number;
   outputs: number;
   /** Slot size in KiB (each egress mailbox). */
   outputSize: number;
-  wasm: WcolStreamWasm;
-  /** Echo driver for tests; omit when `graph` is set. */
-  echo?: boolean;
-  /**
-   * `budgetShare`: tasks sharing this isolate's memory, this one included (1 when alone).
-   * A hash reducer flushes its groups at that fraction of the planned budget.
-   */
-  graph?: { program: Uint8Array; scratchBytes: number; budgetShare?: number };
+  wasm: PoolWasm;
   /** Input bytes leave the host's `edges` count here, once copied into Wasm. */
   hostBytes?: HostBytes;
   residentMemoryLimitBytes?: number;
-  readAt?: ReadAtCallback;
+  readAt?: SourceReadAt;
   /** Called when Rust returns `STEP_SPILL_EXEC` (R2 sorted-run spill). */
   onSpillExec?: (handle: number) => Promise<void>;
   /** Optional macrotask yield between advance batches. */
   yieldToEventLoop?: () => Promise<void>;
-}
+};
 
 export interface StreamPool {
   readonly resident: boolean;
@@ -53,7 +54,7 @@ export interface StreamPool {
   request(kind: number, bytes: Uint8Array): Promise<Uint8Array>;
   inputStreams: WritableStream<Uint8Array>[];
   outputStreams: ReadableStream<Uint8Array>[];
-  /** Start pumping `stream` into ingress port `port` (BYOB when supported). Idempotent per port until done. */
+  /** Start pumping `stream` into ingress port `port`. One stream per port. */
   attachInput(port: number, stream: ReadableStream<Uint8Array>): void;
   /** Mark a reducer scan input absent (not EOF). No-op if a stream is already attached. */
   sealInput(port: number): void;
@@ -81,6 +82,8 @@ export type PoolProfile = {
   /** Output ports still holding bytes, summed over idle exits on output. */
   idleOutputPorts: number;
   idleOutputExits: number;
+  /** Bytes copied into ingress ports and out of egress ports. */
+  inputBytes: number;
   outputBytes: number;
   stepMs: number;
   completeMs: number;
@@ -102,15 +105,23 @@ export type PoolStats = {
   readonly profile: PoolProfile;
 };
 
-function requireSp(wasm: WcolStreamWasm): NonNullable<WcolStreamWasm["wcs_sp_open_echo"]> {
-  if (!wasm.wcs_sp_open_echo || !wasm.wcs_sp_step || !wasm.wcs_sp_close || !wasm.wcs_sp_take_read_at) {
-    throw new Error("wasm missing stream pool exports (rebuild wcol_node.wasm)");
-  }
-  return wasm.wcs_sp_open_echo;
-}
-
 function viewAt(memory: WebAssembly.Memory, ptr: number, len: number): Uint8Array {
   return new Uint8Array(memory.buffer, ptr, len);
+}
+
+/** Open the pool's Wasm session. The program is copied in for the open only: Rust keeps its own. */
+function openPool(options: CreateStreamPoolOptions, inputSize: number, outputSize: number): number {
+  const { wasm, inputs, outputs } = options;
+  if (!options.graph) return wasm.wcs_sp_open_echo(inputs, outputs, inputSize, outputSize);
+  const { program, scratchBytes, budgetShare = 1 } = options.graph;
+  const ptr = wasm.wcs_alloc(program.byteLength);
+  if (!ptr) throw new Error(`wcs_alloc failed for a ${program.byteLength}-byte program`);
+  try {
+    viewAt(wasm.memory, ptr, program.byteLength).set(program);
+    return wasm.wcs_sp_open_graph(ptr, program.byteLength, scratchBytes, inputs, outputs, inputSize, outputSize, budgetShare);
+  } finally {
+    wasm.wcs_dealloc(ptr, program.byteLength);
+  }
 }
 
 type WaitEntry = {
@@ -127,39 +138,18 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
       `stream pool expects 0–${MAX_INPUT_PORTS} inputs, 0–${MAX_OUTPUT_PORTS} outputs, at least one port total`,
     );
   }
-  requireSp(wasm);
 
   const yieldToEventLoop =
     options.yieldToEventLoop ??
     (() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
 
-  const inputBytes = inputSize * 1024;
-  let handle = 0;
-  let programPtr = 0;
-  let programLen = 0;
-
-  if (options.graph) {
-    programLen = options.graph.program.byteLength;
-    programPtr = wasm.wcs_alloc!(programLen);
-    viewAt(wasm.memory, programPtr, programLen).set(options.graph.program);
-    handle = wasm.wcs_sp_open_graph!(
-      programPtr,
-      programLen,
-      options.graph.scratchBytes,
-      inputs,
-      outputs,
-      inputSize,
-      outputSize,
-      options.graph.budgetShare ?? 1,
-    );
-  } else {
-    handle = wasm.wcs_sp_open_echo!(inputs, outputs, inputSize, outputSize);
-  }
+  const slotBytes = inputSize * 1024;
+  let handle = openPool(options, inputSize, outputSize);
   if (!handle) {
     throw new Error(`wcs_sp_open failed: ${readWasmLastError(wasm, "no reason recorded")}`);
   }
 
-  const resident = wasm.wcs_sp_is_resident?.(handle) === 1;
+  const resident = wasm.wcs_sp_is_resident(handle) === 1;
   if (resident && options.residentMemoryLimitBytes !== undefined) {
     const limit = options.residentMemoryLimitBytes;
     let ptr = 0;
@@ -167,18 +157,17 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
       if (!Number.isSafeInteger(limit) || limit <= 0 || limit > 0xffff_ffff) {
         throw new Error("wcol-fatal: resident memory limit must be a positive 32-bit byte count");
       }
-      ptr = wasm.wcs_alloc!(8);
+      ptr = wasm.wcs_alloc(8);
       if (!ptr) throw new Error("resident limit allocation failed");
       new DataView(wasm.memory.buffer).setBigUint64(ptr, BigInt(limit), true);
-      if (!wasm.wcs_sp_command!(handle, 0, ptr, 8)) {
+      if (!wasm.wcs_sp_command(handle, 0, ptr, 8)) {
         throw new Error(readWasmLastError(wasm, "resident memory limit rejected"));
       }
     } catch (error) {
-      wasm.wcs_sp_close!(handle);
-      if (programPtr) wasm.wcs_dealloc!(programPtr, programLen);
+      wasm.wcs_sp_close(handle);
       throw error;
     } finally {
-      if (ptr) wasm.wcs_dealloc!(ptr, 8);
+      if (ptr) wasm.wcs_dealloc(ptr, 8);
     }
   }
   let residentIdle = false;
@@ -195,7 +184,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
   let advanceQueued = false;
   let needsAdvance = false;
   let advanceChain: Promise<void> = Promise.resolve();
-  const inputReaders = new Set<ReadableStreamDefaultReader<Uint8Array> | ReadableStreamBYOBReader>();
+  const inputReaders = new Set<ReadableStreamDefaultReader<Uint8Array>>();
   const waits: WaitEntry[] = [];
   let steps = 0;
   let maxStepMs = 0;
@@ -206,6 +195,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
     idleInputMs: 0,
     idleOutputPorts: 0,
     idleOutputExits: 0,
+    inputBytes: 0,
     outputBytes: 0,
     stepMs: 0,
     completeMs: 0,
@@ -223,7 +213,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
   const pendingOutputPorts = (): number => {
     let pending = 0;
     for (let port = 0; port < outputs; port++) {
-      if (wasm.wcs_sp_out_len!(handle, port) > 0) pending += 1;
+      if (wasm.wcs_sp_out_len(handle, port) > 0) pending += 1;
     }
     return pending;
   };
@@ -254,19 +244,13 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
   };
 
   const poolError = (): Error => {
-    const ptr = wasm.wcs_sp_error_ptr?.(handle) ?? 0;
-    if (ptr) {
-      const byteLen = wasm.wcs_sp_error_len?.(handle) ?? 0;
-      const len = byteLen > 0 ? byteLen : viewAt(wasm.memory, ptr, 256).findIndex((b) => b === 0);
-      const msg = new TextDecoder().decode(
-        viewAt(wasm.memory, ptr, len >= 0 && len > 0 ? len : 256),
-      );
-      if (msg) return new Error(msg);
-    }
-    return new Error(readWasmLastError(wasm, "stream pool failed"));
+    const ptr = wasm.wcs_sp_error_ptr(handle);
+    const len = wasm.wcs_sp_error_len(handle);
+    const message = ptr && len ? new TextDecoder().decode(viewAt(wasm.memory, ptr, len)) : "";
+    return new Error(message || readWasmLastError(wasm, "stream pool failed"));
   };
 
-  const inputFree = (port: number): boolean => wasm.wcs_sp_in_free!(handle, port) === 1;
+  const inputFree = (port: number): boolean => wasm.wcs_sp_in_free(handle, port) === 1;
 
   const notifyWaiters = (): void => {
     for (let i = waits.length - 1; i >= 0; i--) {
@@ -316,9 +300,28 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
     });
   };
 
+  /** Hand a finished read to Wasm by ticket. Throws on a trap or a refused completion. */
+  const completeRead = (ticket: number, bytes: Uint8Array): void => {
+    if (closed || sessionDone || !handle) return;
+    const started = performance.now();
+    const length = bytes.byteLength;
+    const ptr = length ? wasm.wcs_alloc(length) : 0;
+    if (length && !ptr) throw new Error(`wcs_alloc failed for a ${length}-byte read`);
+    try {
+      viewAt(wasm.memory, ptr, length).set(bytes);
+    } catch (error) {
+      wasm.wcs_dealloc(ptr, length);
+      throw error;
+    }
+    // The pool owns `ptr` from here, whether it accepts the read or not.
+    const ok = wasm.wcs_sp_complete_read_at(handle, ticket, ptr, length);
+    profile.completeMs += performance.now() - started;
+    if (!ok) throw new Error(readWasmLastError(wasm, `ReadAt ticket ${ticket} rejected`));
+    requestAdvance();
+  };
+
   /** One host read; completes into Wasm by ticket and wakes the step loop. */
-  const startRead = (ticket: number, source: number, offset: bigint, length: number): void => {
-    const readAt = options.readAt!;
+  const startRead = (readAt: SourceReadAt, ticket: number, source: number, offset: number, length: number): void => {
     const issued = performance.now();
     if (inFlight === 0) busySince = issued;
     inFlight += 1;
@@ -332,28 +335,14 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
       if (inFlight === 0) profile.readBusyMs += now - busySince;
       profile.lastReadAt = Date.now();
     };
-    new Promise<Uint8Array>((resolve) => resolve(readAt(source, offset, length))).then(
-      (bytes) => {
-        settled();
+    // Every failure, the read's or the completion's, fails the pool: nothing is left unhandled.
+    new Promise<Uint8Array>((resolve) => resolve(readAt(source, offset, length)))
+      .finally(settled)
+      .then((bytes) => {
         profile.readBytes += bytes.byteLength;
-        if (closed || sessionDone || !handle) return;
-        const completeStarted = performance.now();
-        const ptr = wasm.wcs_alloc!(bytes.byteLength);
-        viewAt(wasm.memory, ptr, bytes.byteLength).set(bytes);
-        // The pool keeps this allocation as the fetch buffer and frees it itself.
-        const ok = wasm.wcs_sp_complete_read_at!(handle, ticket, ptr, bytes.byteLength);
-        profile.completeMs += performance.now() - completeStarted;
-        if (!ok) {
-          fail(poolError());
-          return;
-        }
-        requestAdvance();
-      },
-      (error: unknown) => {
-        settled();
-        fail(error);
-      },
-    );
+        completeRead(ticket, bytes);
+      })
+      .catch(fail);
   };
 
   const requestAdvance = (): void => {
@@ -384,7 +373,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
         }
 
         const stepStarted = performance.now();
-        const status = wasm.wcs_sp_step!(handle, 100);
+        const status = wasm.wcs_sp_step(handle, 100);
         const stepMs = performance.now() - stepStarted;
         profile.stepMs += stepMs;
         maxStepMs = Math.max(maxStepMs, stepMs);
@@ -432,20 +421,20 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
           throw new Error("stream pool SpillExec pending but no onSpillExec handler");
         }
 
-        const readLen = wasm.wcs_sp_read_at_len?.(handle) ?? 0;
+        const readLen = wasm.wcs_sp_read_at_len(handle);
         if (readLen > 0) {
           if (!options.readAt) {
             throw new Error(
               `stream pool pending ReadAt (${readLen} bytes) but no readAt handler was configured`,
             );
           }
-          const ticket = wasm.wcs_sp_read_at_ticket!(handle);
-          const source = wasm.wcs_sp_read_at_source!(handle);
-          const offset = wasm.wcs_sp_read_at_offset!(handle);
+          const ticket = wasm.wcs_sp_read_at_ticket(handle);
+          const source = wasm.wcs_sp_read_at_source(handle);
+          const offset = Number(wasm.wcs_sp_read_at_offset(handle));
           // Claim it and keep stepping: Rust exposes the next fetch while this one is
           // in flight, up to the plan's fetch depth. Scans are R2-latency bound.
-          wasm.wcs_sp_take_read_at!(handle);
-          startRead(ticket, source, offset, readLen);
+          wasm.wcs_sp_take_read_at(handle);
+          startRead(options.readAt, ticket, source, offset, readLen);
           madeProgress = true;
           stepsSinceYield += 1;
           continue;
@@ -463,7 +452,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
         await yieldNow();
         // Pending spill host ops must keep the loop alive even when the last
         // step reported no row progress (common between R2 put chunks).
-        if ((wasm.wcs_sp_spill_op?.(handle) ?? 0) !== 0) {
+        if (wasm.wcs_sp_spill_op(handle) !== 0) {
           madeProgress = true;
           continue;
         }
@@ -508,12 +497,13 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
       async write(chunk) {
         for (let offset = 0; offset < chunk.byteLength; ) {
           await waitWhen(() => inputFree(port));
-          const n = Math.min(inputBytes, chunk.byteLength - offset);
-          const ptr = wasm.wcs_sp_in_ptr!(handle, port);
+          const n = Math.min(slotBytes, chunk.byteLength - offset);
+          const ptr = wasm.wcs_sp_in_ptr(handle, port);
           if (!ptr) throw new Error(`missing input slot ${port}`);
           viewAt(wasm.memory, ptr, n).set(chunk.subarray(offset, offset + n));
-          const rc = wasm.wcs_sp_in_commit!(handle, port, n);
+          const rc = wasm.wcs_sp_in_commit(handle, port, n);
           if (rc !== 0) throw poolError();
+          profile.inputBytes += n;
           options.hostBytes?.add("edges", -n);
           onSlotChange();
           offset += n;
@@ -522,7 +512,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
       },
       async close() {
         await waitWhen(() => inputFree(port));
-        const rc = wasm.wcs_sp_in_end!(handle, port);
+        const rc = wasm.wcs_sp_in_end(handle, port);
         if (rc !== 0) throw poolError();
         onSlotChange();
       },
@@ -537,20 +527,18 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
       {
         async pull(controller) {
           await waitWhen(
-            () => wasm.wcs_sp_out_len!(handle, port) > 0 || wasm.wcs_sp_out_done!(handle, port) === 1,
+            () => wasm.wcs_sp_out_len(handle, port) > 0 || wasm.wcs_sp_out_done(handle, port) === 1,
           );
-          const len = wasm.wcs_sp_out_len!(handle, port);
+          const len = wasm.wcs_sp_out_len(handle, port);
           if (len === 0) {
             controller.close();
             return;
           }
-          const ptr = wasm.wcs_sp_out_ptr!(handle, port);
+          const ptr = wasm.wcs_sp_out_ptr(handle, port);
           if (!ptr) throw new Error(`missing output slot ${port}`);
-          const copy = new Uint8Array(len);
-          copy.set(viewAt(wasm.memory, ptr, len));
           profile.outputBytes += len;
-          controller.enqueue(copy);
-          const rc = wasm.wcs_sp_out_release!(handle, port);
+          controller.enqueue(viewAt(wasm.memory, ptr, len).slice());
+          const rc = wasm.wcs_sp_out_release(handle, port);
           if (rc !== 0) throw poolError();
           onSlotChange();
         },
@@ -564,8 +552,8 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
 
   const response = (): Uint8Array => {
     if (closed || !resident) throw new Error("resident graph is unavailable");
-    const length = wasm.wcs_sp_response_len!(handle);
-    return viewAt(wasm.memory, wasm.wcs_sp_response_ptr!(handle), length).slice();
+    const length = wasm.wcs_sp_response_len(handle);
+    return viewAt(wasm.memory, wasm.wcs_sp_response_ptr(handle), length).slice();
   };
 
   return {
@@ -580,7 +568,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
         if (bytes.byteLength && !ptr) throw new Error("resident command allocation failed");
         try {
           if (bytes.byteLength) viewAt(wasm.memory, ptr, bytes.byteLength).set(bytes);
-          if (!wasm.wcs_sp_command!(handle, kind, ptr, bytes.byteLength)) {
+          if (!wasm.wcs_sp_command(handle, kind, ptr, bytes.byteLength)) {
             throw new Error(readWasmLastError(wasm, "resident command rejected"));
           }
         } finally {
@@ -619,7 +607,7 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
         throw new RangeError(`sealInput port ${port} outside 0..${inputs - 1}`);
       }
       if (inputAttached.has(port) || inputPumpDone.has(port)) return;
-      const rc = wasm.wcs_sp_in_absent!(handle, port);
+      const rc = wasm.wcs_sp_in_absent(handle, port);
       if (rc !== 0) throw poolError();
       noteInputDone(port);
       onSlotChange();
@@ -644,10 +632,8 @@ export function createStreamPool(options: CreateStreamPoolOptions): StreamPool {
           await reader.cancel(new Error("stream pool closed")).catch(() => undefined);
         }
         inputReaders.clear();
-        if (programPtr) wasm.wcs_dealloc!(programPtr, programLen);
-        if (handle) wasm.wcs_sp_close!(handle);
+        if (handle) wasm.wcs_sp_close(handle);
         handle = 0;
-        programPtr = 0;
       })();
       return closeTask;
     },

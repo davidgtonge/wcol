@@ -10,7 +10,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { planJob, readParquetFooter, resultJson } from "../src/runtime/coordinator/plan-dispatch.ts";
-import { runLocalHashGraph } from "../src/runtime/coordinator/run-local-hash-graph.ts";
+import { runLocalHashGraph } from "./helpers/run-local-hash-graph.ts";
 import { loadCoordinatorWasm, loadNodeWasm } from "../src/runtime/host/wasm.ts";
 
 const ROWS_PER_GROUP = 200_000;

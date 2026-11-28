@@ -21,14 +21,6 @@ pub enum ObjectLocation {
     Url(String),
 }
 
-/// One concat input. `row_groups` copies only that half-open range of its row groups,
-/// unchanged; a job with ranges splits rather than compacts.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConcatInput {
-    pub location: ObjectLocation,
-    pub row_groups: Option<std::ops::Range<u32>>,
-}
-
 /// The single table a json or parquet job reads: one object, or several with one schema
 /// (`"keys": [...]` in one bucket). Order is the job's source order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,12 +54,6 @@ pub enum JobRequest {
         target_file_bytes: u64,
         target_row_group_rows: u32,
     },
-    Concat {
-        idempotency_key: Option<String>,
-        bucket: String,
-        key: String,
-        inputs: Vec<ConcatInput>,
-    },
 }
 
 impl JobRequest {
@@ -81,9 +67,6 @@ impl JobRequest {
             }
             | JobRequest::Parquet {
                 idempotency_key, ..
-            }
-            | JobRequest::Concat {
-                idempotency_key, ..
             } => idempotency_key.as_deref(),
         }
     }
@@ -94,16 +77,14 @@ impl JobRequest {
             JobRequest::Parquet { partition_by, .. } => {
                 bind_partition_columns(partition_by, output_fields)
             }
-            JobRequest::Json { .. }
-            | JobRequest::CreateModel { .. }
-            | JobRequest::Concat { .. } => {
+            JobRequest::Json { .. } | JobRequest::CreateModel { .. } => {
                 Err("partitionBy is only valid on a parquet sink".into())
             }
         }
     }
 }
 
-/// Parse a `POST /jobs` body. Day 1 executes one source table. Concat does not use `sources` or SQL.
+/// Parse a `POST /jobs` body. Day 1 executes one source table.
 pub fn parse_job_request(body: &str) -> Result<JobRequest, String> {
     let value: Value = serde_json::from_str(body).map_err(|err| format!("job json: {err}"))?;
     let obj = value
@@ -157,7 +138,6 @@ pub fn parse_job_request(body: &str) -> Result<JobRequest, String> {
     match format {
         "json" => parse_json(idempotency_key, sql, sources, output),
         "parquet" => parse_parquet(idempotency_key, sql, sources, output),
-        "concat" => parse_concat(idempotency_key, sql, sources, obj, output),
         other => Err(format!("unknown output format {other}")),
     }
 }
@@ -373,58 +353,6 @@ fn parse_parquet(
     })
 }
 
-fn parse_concat(
-    idempotency_key: Option<String>,
-    sql: Option<String>,
-    sources: BTreeMap<String, Vec<ObjectLocation>>,
-    body: &serde_json::Map<String, Value>,
-    output: &Value,
-) -> Result<JobRequest, String> {
-    if sql.is_some() {
-        return Err("concat does not take sql".into());
-    }
-    if !sources.is_empty() {
-        return Err("concat does not take sources".into());
-    }
-    if output.get("partitionBy").is_some() {
-        return Err("concat does not take partitionBy".into());
-    }
-    let bucket = required_string(output, "bucket")?;
-    let key = required_string(output, "key")?;
-    let location = parse_object(
-        &Value::Object(serde_json::Map::from_iter([
-            ("bucket".to_string(), Value::String(bucket.clone())),
-            ("key".to_string(), Value::String(key)),
-        ])),
-        "output",
-    )?;
-    let ObjectLocation::Bucket { bucket, key } = location else {
-        return Err("concat output needs a bucket key".into());
-    };
-    let inputs = body
-        .get("inputs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "concat requires inputs".to_string())?;
-    if inputs.is_empty() {
-        return Err("concat requires at least one input".into());
-    }
-    let inputs = inputs
-        .iter()
-        .map(|input| {
-            Ok(ConcatInput {
-                location: parse_object(input, "inputs")?,
-                row_groups: parse_row_groups(input)?,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(JobRequest::Concat {
-        idempotency_key,
-        bucket,
-        key,
-        inputs,
-    })
-}
-
 fn parse_sources(value: Option<&Value>) -> Result<BTreeMap<String, Vec<ObjectLocation>>, String> {
     let Some(value) = value else {
         return Ok(BTreeMap::new());
@@ -481,27 +409,6 @@ fn parse_table_objects(value: &Value, what: &str) -> Result<Vec<ObjectLocation>,
 }
 
 /// `"rowGroups": [start, end]`, half-open and non-empty.
-fn parse_row_groups(input: &Value) -> Result<Option<std::ops::Range<u32>>, String> {
-    let Some(value) = input.get("rowGroups") else {
-        return Ok(None);
-    };
-    let bound = |index: usize| {
-        value
-            .get(index)
-            .and_then(Value::as_u64)
-            .and_then(|n| u32::try_from(n).ok())
-            .ok_or_else(|| "rowGroups must be [start, end]".to_string())
-    };
-    if value.as_array().map(Vec::len) != Some(2) {
-        return Err("rowGroups must be [start, end]".into());
-    }
-    let (start, end) = (bound(0)?, bound(1)?);
-    if start >= end {
-        return Err("rowGroups must be a non-empty [start, end) range".into());
-    }
-    Ok(Some(start..end))
-}
-
 fn parse_object(value: &Value, what: &str) -> Result<ObjectLocation, String> {
     let obj = value
         .as_object()
@@ -591,9 +498,7 @@ mod tests {
     fn request_shape_rejections() {
         assert!(parse_job_request(r#"{"sources":{"a":{"bucket":"b","key":"a"},"c":{"bucket":"b","key":"c"}},"sql":"select 1","output":{"format":"json"}}"#).is_err());
         assert!(parse_job_request(r#"{"sources":{"hits":{"bucket":"in","key":"hits/*"}},"output":{"format":"parquet","bucket":"out","prefix":"hits/"}}"#).is_err());
-        assert!(parse_job_request(r#"{"sql":"select 1","output":{"format":"concat","bucket":"out","key":"merged.parquet"},"inputs":[{"bucket":"out","key":"a.parquet"}]}"#).is_err());
-        let concat = parse_job_request(r#"{"output":{"format":"concat","bucket":"out","key":"hits/merged.parquet"},"inputs":[{"bucket":"out","key":"a.parquet"},{"key":"https://example.com/b.parquet"}]}"#).unwrap();
-        assert!(matches!(concat, JobRequest::Concat { inputs, .. } if inputs.len() == 2));
+        assert!(parse_job_request(r#"{"output":{"format":"concat","bucket":"out","key":"merged.parquet"},"inputs":[{"bucket":"out","key":"a.parquet"}]}"#).is_err());
     }
 
     #[test]
@@ -656,22 +561,6 @@ mod tests {
             r#"{"bucket":"b","keys":["p/0.parquet","p/0.parquet"]}"#,
             r#"{"bucket":"b","keys":["p/*"]}"#,
         ] {
-            assert!(parse_job_request(&body(bad)).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn concat_inputs_take_a_row_group_range() {
-        let body = |groups: &str| {
-            format!(
-                r#"{{"output":{{"format":"concat","bucket":"out","key":"p.parquet"}},"inputs":[{{"bucket":"out","key":"a.parquet","rowGroups":{groups}}}]}}"#
-            )
-        };
-        let JobRequest::Concat { inputs, .. } = parse_job_request(&body("[3, 7]")).unwrap() else {
-            panic!("not a concat");
-        };
-        assert_eq!(inputs[0].row_groups, Some(3..7));
-        for bad in ["[7, 3]", "[3, 3]", "[3]", "\"3-7\"", "[-1, 2]"] {
             assert!(parse_job_request(&body(bad)).is_err(), "{bad}");
         }
     }

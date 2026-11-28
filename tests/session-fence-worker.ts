@@ -34,7 +34,8 @@ export class SessionFence extends DurableObject<FenceEnv> {
   async exercise(): Promise<FenceResult> {
     let current: NodeExecution | null = beginNodeExecution(null, 1, { jobId: "j", executionAttempt: 1 });
     const oldId = current.id;
-    let lastEnd: SessionEnd | null = null;
+    // Assigned inside a callback, so the annotation keeps TypeScript from narrowing it to null.
+    let lastEnd = null as SessionEnd | null;
     const release = (executionId: number, reason: string): boolean => {
       const released = releaseIfOwner(current, executionId, reason);
       if (!released.ended) return false;

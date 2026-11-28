@@ -9,7 +9,7 @@ import { describe, it } from "node:test";
 import { DuckDBInstance } from "@duckdb/node-api";
 import type { ExecutionPlan } from "../src/runtime/coordinator/execution-graph.ts";
 import { planJob, readParquetFooter, resultJson } from "../src/runtime/coordinator/plan-dispatch.ts";
-import { runLocalHashGraph } from "../src/runtime/coordinator/run-local-hash-graph.ts";
+import { runLocalHashGraph } from "./helpers/run-local-hash-graph.ts";
 import { loadCoordinatorWasm, loadNodeWasm } from "../src/runtime/host/wasm.ts";
 import { createMemoryR2SpillBucket } from "./helpers/memory-r2-spill-bucket.ts";
 
@@ -19,7 +19,7 @@ function parseRows(
   coordinator: Awaited<ReturnType<typeof loadCoordinatorWasm>>,
   planned: Extract<Awaited<ReturnType<typeof planJob>>, { kind: "json" }>,
   bytes: Uint8Array,
-): string[][] {
+): (string | null)[][] {
   const json = JSON.parse(resultJson(coordinator, planned.graph, { rows: bytes }, planned.rowCap)) as {
     rows?: unknown[][];
   };

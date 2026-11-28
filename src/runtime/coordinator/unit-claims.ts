@@ -9,6 +9,8 @@
  * attempt starts from the plan again.
  */
 
+import type { SourceReadAt } from "../host/stream-pool.ts";
+
 /** The Wasm scan's ReadAt source for "next unit": four bytes come back, the unit id. */
 export const CLAIM_SOURCE = 0xffff;
 /** The answer when no unit is left for this scan. */
@@ -58,10 +60,11 @@ export function nextUnit(queues: WorkQueues, attempt: string, taskId: number): n
   return fullest.shift() ?? null;
 }
 
-type ScanReadAt = (source: number, offset: bigint | number, length: number) => Promise<Uint8Array>;
-
 /** A scan's ReadAt: "next unit" goes to `next`, every other read to `read`. */
-export function claimingReadAt(read: ScanReadAt, next: () => Promise<number | null> | number | null): ScanReadAt {
+export function claimingReadAt(
+  read: SourceReadAt,
+  next: () => Promise<number | null> | number | null,
+): (...args: Parameters<SourceReadAt>) => Promise<Uint8Array> {
   return async (source, offset, length) => {
     if (source !== CLAIM_SOURCE) return read(source, offset, length);
     const answer = new Uint8Array(4);

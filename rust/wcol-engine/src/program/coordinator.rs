@@ -5,8 +5,8 @@
 //! The program carries no SQL. Node row frames are merged in node order on one ingress.
 
 use crate::program::codec::{
-    decode_sort_key, encode_sort_key, push_str, push_u32, push_u64, read_str, read_u32, read_u64,
-    LogicalWireError,
+    decode_sort_key, encode_sort_key, push_str, push_u32, push_u64, read_list, read_str, read_u32,
+    read_u64, read_u8, LogicalWireError,
 };
 use crate::program::stream_program::{
     OP_COORDINATOR_FRAGMENT, OP_FINALIZE_FRAGMENT, OP_SHARD_EXPORT, PLAN_V2,
@@ -134,70 +134,44 @@ pub fn decode_coordinator_steps(
     if version != COORDINATOR_WIRE_VERSION {
         return Err(LogicalWireError::UnknownTag);
     }
-    let count = read_u32(&mut bytes)? as usize;
-    let mut steps = Vec::with_capacity(count);
-    for _ in 0..count {
-        let tag = *bytes.first().ok_or(LogicalWireError::UnexpectedEnd)?;
-        bytes = &bytes[1..];
-        steps.push(match tag {
-            1 => {
-                let n = read_u32(&mut bytes)? as usize;
-                let mut columns = Vec::with_capacity(n);
-                for _ in 0..n {
-                    columns.push(read_u32(&mut bytes)?);
-                }
-                CoordinatorStep::Project(columns)
-            }
-            2 => {
-                let n = read_u32(&mut bytes)? as usize;
-                let mut keys = Vec::with_capacity(n);
-                for _ in 0..n {
-                    keys.push(decode_sort_key(&mut bytes)?);
-                }
-                CoordinatorStep::Sort(keys)
-            }
-            3 => {
-                let skip = read_u64(&mut bytes)?;
-                let flag = *bytes.first().ok_or(LogicalWireError::UnexpectedEnd)?;
-                bytes = &bytes[1..];
-                let fetch = if flag == 0 {
-                    None
-                } else {
-                    Some(read_u64(&mut bytes)?)
-                };
-                CoordinatorStep::Limit { skip, fetch }
-            }
-            4 => {
-                let target_row_group_rows = read_u32(&mut bytes)?;
-                let n = read_u32(&mut bytes)? as usize;
-                let mut columns = Vec::with_capacity(n);
-                for _ in 0..n {
-                    let name = read_str(&mut bytes)?;
-                    let optional = *bytes.first().ok_or(LogicalWireError::UnexpectedEnd)? != 0;
-                    bytes = &bytes[1..];
-                    if bytes.len() < 8 {
-                        return Err(LogicalWireError::UnexpectedEnd);
-                    }
-                    let physical = i32::from_le_bytes(bytes[..4].try_into().unwrap());
-                    let type_length = i32::from_le_bytes(bytes[4..8].try_into().unwrap());
-                    bytes = &bytes[8..];
-                    columns.push(ExportColumn {
-                        name,
-                        optional,
-                        physical,
-                        type_length,
-                    });
-                }
-                CoordinatorStep::Parquet {
-                    target_row_group_rows,
-                    columns,
-                }
-            }
-            _ => return Err(LogicalWireError::UnknownTag),
-        });
-    }
+    let steps = read_list(&mut bytes, decode_coordinator_step)?;
     if !bytes.is_empty() {
         return Err(LogicalWireError::UnknownTag);
     }
     Ok(steps)
+}
+
+fn read_i32(bytes: &mut &[u8]) -> Result<i32, LogicalWireError> {
+    Ok(read_u32(bytes)? as i32)
+}
+
+fn decode_coordinator_step(bytes: &mut &[u8]) -> Result<CoordinatorStep, LogicalWireError> {
+    Ok(match read_u8(bytes)? {
+        1 => CoordinatorStep::Project(read_list(bytes, read_u32)?),
+        2 => CoordinatorStep::Sort(read_list(bytes, decode_sort_key)?),
+        3 => {
+            let skip = read_u64(bytes)?;
+            let fetch = match read_u8(bytes)? {
+                0 => None,
+                _ => Some(read_u64(bytes)?),
+            };
+            CoordinatorStep::Limit { skip, fetch }
+        }
+        4 => {
+            let target_row_group_rows = read_u32(bytes)?;
+            let columns = read_list(bytes, |bytes| {
+                Ok(ExportColumn {
+                    name: read_str(bytes)?,
+                    optional: read_u8(bytes)? != 0,
+                    physical: read_i32(bytes)?,
+                    type_length: read_i32(bytes)?,
+                })
+            })?;
+            CoordinatorStep::Parquet {
+                target_row_group_rows,
+                columns,
+            }
+        }
+        _ => return Err(LogicalWireError::UnknownTag),
+    })
 }

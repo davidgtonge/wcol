@@ -1,6 +1,8 @@
 //! Parquet planned-chunk source as a canonical [`Operator`](crate::exec::operator::Operator).
 
-use crate::exec::fetch_stage::{FetchStage, FetchStageMetrics, HostFetchRead, FETCH_BUFFER_BYTES};
+use crate::exec::fetch_stage::{
+    FetchStage, FetchStageMetrics, HostFetchRead, SliceError, FETCH_BUFFER_BYTES,
+};
 use crate::exec::operator::{Operator, OperatorIo, StreamProgress, WcolStreamItem};
 use crate::formats::parquet::ParquetDecode;
 use crate::ops::query::CatalogColumn;
@@ -396,17 +398,20 @@ impl Operator for ParquetSourceOp {
             match self.decode.host_read_request().map_err(|e| e.to_string())? {
                 Some(read) if self.fetch.is_some() => {
                     let fetch = self.fetch.as_mut().expect("fetch stage");
-                    fetch.prioritize_fetch_covering(read.offset);
-                    if let Ok(bytes) = fetch.slice_for_range(read.offset, read.length) {
-                        self.decode
-                            .complete_read(read.ticket, &bytes)
-                            .map_err(|e| e.to_string())?;
-                        continue;
-                    }
+                    let missing = match fetch.slice_for_range(read.offset, read.length) {
+                        Ok(bytes) => {
+                            self.decode
+                                .complete_read(read.ticket, &bytes)
+                                .map_err(|e| e.to_string())?;
+                            continue;
+                        }
+                        Err(SliceError::NotLoaded { fetch_id }) => fetch_id,
+                        Err(err @ SliceError::Plan(_)) => return Err(err.to_string()),
+                    };
                     self.decode
                         .cancel_read(read.ticket)
                         .map_err(|e| e.to_string())?;
-                    fetch.prioritize_fetch_covering(read.offset);
+                    fetch.prioritize_fetch(missing);
                     if let Some(host_fetch) = fetch.poll_host_fetch(true) {
                         return Ok(StreamProgress::NeedHostRead {
                             ticket: host_fetch.ticket,

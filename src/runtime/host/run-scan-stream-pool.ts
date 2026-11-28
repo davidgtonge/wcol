@@ -1,23 +1,23 @@
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import type { PoolWasm } from "./wasm-stream.ts";
 import { OUTPUT_SLOTS, portKiB } from "./port-budget.ts";
-import { createStreamPool, type PoolStats, type ReadAtCallback } from "./stream-pool.ts";
+import { createStreamPool, type PoolStats, type SourceReadAt } from "./stream-pool.ts";
 import { hashScanOutputStream } from "./pool-streams.ts";
 
-export type RunScanStreamPoolOptions = {
-  wasm: WcolStreamWasm;
+type RunScanStreamPoolOptions = {
+  wasm: PoolWasm;
   program: Uint8Array;
   scratchBytes: number;
   partitionCount: number;
   inputSizeKiB?: number;
   outputSizeKiB?: number;
-  readAt: ReadAtCallback;
+  readAt: SourceReadAt;
   yieldToEventLoop?: () => Promise<void>;
   onPartitionStream: (partition: number, body: ReadableStream<Uint8Array>) => void | Promise<void>;
   /** Abort the scan, eg. when a consumer refused one of its edges. The pool fails with the reason. */
   signal?: AbortSignal;
 };
 
-/** Hash scan driver: Parquet ReadAt + hash egress on fixed output slots (no ABI v1 loop). */
+/** Hash scan driver: Parquet ReadAt in, one egress port per hash partition out. */
 export async function runScanStreamPool(options: RunScanStreamPoolOptions): Promise<PoolStats> {
   const pool = createStreamPool({
     inputs: 0,

@@ -11,17 +11,14 @@ mod profile;
 pub use profile::{
     clear_spill_boundaries, last_resident_group_bytes, last_resident_groups,
     last_spill_groups_flushed, last_spill_peak_interner_bytes, last_spill_peak_live_bytes,
-    last_spill_runs, note_spill_host_ack, note_spill_io_encode, note_spill_merge_scan_begin,
-    note_spill_merge_step, note_spill_payload_inflight_add,
-    note_spill_payload_move_queued_to_inflight, note_spill_payload_queued,
-    note_spill_payload_release_inflight, note_spill_serialize, phase_timers, reset_phase_timers,
-    spill_boundary_wire, SpillBoundary,
+    last_spill_runs, note_spill_merge_scan_begin, note_spill_merge_step, note_spill_serialize,
+    phase_timers, reset_phase_timers, spill_boundary_wire, SpillBoundary,
 };
 use profile::{
     note_spill_boundary, phase, phase_on, publish_spill_stats, reset_flush_probe,
-    spill_merge_counters, spill_payload_pair, wasm_linear_bytes, FlushStart, FLUSH_PROBE,
-    FLUSH_START, LAST_PAGE, PHASE_FILTER_NS, PHASE_FINISH_NS, PHASE_GROUPS_IN, PHASE_GROUPS_OUT,
-    PHASE_HASH_NS, RESIDENT_GROUPS, RESIDENT_GROUP_BYTES,
+    spill_merge_counters, wasm_linear_bytes, FlushStart, FLUSH_PROBE, FLUSH_START, LAST_PAGE,
+    PHASE_FILTER_NS, PHASE_FINISH_NS, PHASE_GROUPS_IN, PHASE_GROUPS_OUT, PHASE_HASH_NS,
+    RESIDENT_GROUPS, RESIDENT_GROUP_BYTES,
 };
 
 mod chunked;

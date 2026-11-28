@@ -1,10 +1,9 @@
 //! Parquet column chunks → WCOL batches (decode only; no SQL).
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use crate::error::{WcolError, WcolResult};
-use crate::formats::parquet::decode::{DecodeProgress, ScanLimits};
+use crate::formats::parquet::decode::ScanLimits;
 use crate::formats::parquet::ingest_memory::ScanMemoryBudget;
 use crate::formats::parquet::page_scratch::PageScratch;
 use crate::formats::parquet::schema::Leaf;
@@ -13,7 +12,7 @@ use crate::formats::parquet::{NumericScan, ScanValueMode};
 use crate::ops::query::CatalogColumn;
 use crate::program::row_id::{row_id, RowPosition};
 use crate::program::IngestMemoryProfile;
-use crate::stream::{DictEntries, DictionaryValues, OwnedWcolBatch};
+use crate::stream::{DictionaryValues, OwnedWcolBatch};
 
 /// Max bytes requested per host ReadAt (JS retains the full response until commit).
 pub const HOST_READ_LIMIT: usize = 256 * 1024;
@@ -44,7 +43,8 @@ struct PlannedGroup {
 struct ColumnScan {
     column: u32,
     scan: NumericScan,
-    /// Built once per column chunk; reused for every dict-id batch (I-09).
+    /// Built once per column chunk and shared by every dict-id batch. The scan rejects a
+    /// second dictionary page, so the entries cannot change under it.
     shared_dict: Option<DictionaryValues>,
 }
 
@@ -610,22 +610,7 @@ impl ParquetDecode {
                 }
                 ScanValueMode::DictionaryIds => {
                     if col_scan.shared_dict.is_none() {
-                        let dict = col_scan.scan.dictionary();
-                        let entries = if let Ok(floats) = dict.copy_float_entries() {
-                            DictEntries::Float(Arc::from(floats))
-                        } else {
-                            match dict.copy_int_entries() {
-                                Ok(ints) => DictEntries::Int(Arc::from(ints)),
-                                Err(_) => {
-                                    let (offsets, bytes) =
-                                        dict.copy_byte_entries().map_err(decode_err)?;
-                                    DictEntries::Bytes {
-                                        offsets: Arc::from(offsets),
-                                        bytes: Arc::from(bytes),
-                                    }
-                                }
-                            }
-                        };
+                        let entries = col_scan.scan.dictionary_entries().map_err(decode_err)?;
                         col_scan.shared_dict = Some(DictionaryValues {
                             scope,
                             column: payload.column,
@@ -704,17 +689,10 @@ impl ParquetDecode {
             if col_scan.scan.decode_exhausted() {
                 continue;
             }
-            loop {
-                match col_scan
-                    .scan
-                    .poll_with_scratch(max_emit, scratch)
-                    .map_err(decode_err)?
-                {
-                    DecodeProgress::BatchReady { .. } | DecodeProgress::Finished => break,
-                    DecodeProgress::Advanced => continue,
-                    DecodeProgress::NeedInput => break,
-                }
-            }
+            col_scan
+                .scan
+                .poll_with_scratch(max_emit, scratch)
+                .map_err(decode_err)?;
         }
         Ok(())
     }

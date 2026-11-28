@@ -80,8 +80,4 @@ test("work for an aborted or older attempt is refused at once", () => {
   noteAborted(aborted, "j", 1);
   assert.equal(attemptSuperseded(aborted, null, params), true);
   assert.equal(attemptSuperseded(aborted, null, { jobId: "j", executionAttempt: 2 }), false);
-  // Only the newest jobs are remembered.
-  for (let job = 0; job < 70; job++) noteAborted(aborted, `j${job}`, 1);
-  assert.equal(aborted.has("j"), false);
-  assert.equal(aborted.size <= 64, true);
 });

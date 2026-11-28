@@ -112,10 +112,13 @@ pub struct QueryPlan<'a> {
 
 pub use crate::ir::MAX_GROUP_KEYS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PlanError {
-    Unsupported,
+    #[error("unsupported sql: {0}")]
+    Unsupported(&'static str),
+    #[error("unknown column")]
     UnknownColumn,
+    #[error("a text literal is compared with a numeric column")]
     TextForNumber,
 }
 
@@ -124,11 +127,14 @@ pub fn plan_query<'a>(
     columns: &[Column<'a>],
 ) -> Result<QueryPlan<'a>, PlanError> {
     if query.having.is_some() {
-        return Err(PlanError::Unsupported);
+        return Err(PlanError::Unsupported("HAVING"));
     }
+    let row_count = |value: u64| {
+        u32::try_from(value).map_err(|_| PlanError::Unsupported("LIMIT or OFFSET above 2^32 - 1"))
+    };
     let mut plan = QueryPlan {
-        limit: query.limit.map(|limit| limit.min(u32::MAX as u64) as u32),
-        offset: query.offset.unwrap_or(0).min(u32::MAX as u64) as u32,
+        limit: query.limit.map(row_count).transpose()?,
+        offset: row_count(query.offset.unwrap_or(0))?,
         filters: Vec::new(),
         group_by: Vec::new(),
         aggregates: Vec::new(),
@@ -154,14 +160,14 @@ pub fn plan_query<'a>(
             other => other,
         };
         if !matches!(expr, Expr::Ident(_)) {
-            return Err(PlanError::Unsupported);
+            return Err(PlanError::Unsupported("GROUP BY on an expression"));
         }
         let id = expr_to_col_id(expr, columns).ok_or(PlanError::UnknownColumn)?;
         if plan.group_by.contains(&id) {
             continue;
         }
         if plan.group_by.len() >= MAX_GROUP_KEYS {
-            return Err(PlanError::Unsupported);
+            return Err(PlanError::Unsupported("too many GROUP BY keys"));
         }
         plan.group_by.push(id);
     }
@@ -205,7 +211,7 @@ pub fn plan_query<'a>(
                     offset,
                 }
             } else {
-                return Err(PlanError::Unsupported);
+                return Err(PlanError::Unsupported("aggregate argument is not a column"));
             };
             if !plan.aggregates.iter().any(|existing| {
                 existing.column == aggregate.column
@@ -245,7 +251,10 @@ pub fn plan_query<'a>(
             plan.row_order = true;
             // Every key must be a plain column: dropping one would return rows in the wrong order.
             for item in &query.order_by {
-                let column = expr_to_col_id(&item.expr, columns).ok_or(PlanError::Unsupported)?;
+                let expr = order_by_target(&item.expr, &query.select)?;
+                let column = expr_to_col_id(expr, columns).ok_or(PlanError::Unsupported(
+                    "ORDER BY on a row query needs a column",
+                ))?;
                 plan.order_rows_by.push(OrderKey {
                     column,
                     desc: item.desc,
@@ -266,7 +275,26 @@ fn select_ordinal<'q, 'a>(
         .ok()
         .and_then(|n| n.checked_sub(1))
         .and_then(|index| select.get(index))
-        .ok_or(PlanError::Unsupported)
+        .ok_or(PlanError::Unsupported(
+            "ordinal out of range of the SELECT list",
+        ))
+}
+
+/// The expression an `ORDER BY` item names: a SELECT ordinal or alias resolves to that
+/// item's expression (an alias wins over a source column of the same name), anything else
+/// is itself.
+fn order_by_target<'q, 'a>(
+    order_expr: &'q Expr<'a>,
+    select: &'q [super::SelectItem<'a>],
+) -> Result<&'q Expr<'a>, PlanError> {
+    Ok(match order_expr {
+        Expr::Int(ordinal) => &select_ordinal(*ordinal, select)?.expr,
+        Expr::Ident(Ident(name)) => select
+            .iter()
+            .find(|item| item.alias.is_some_and(|alias| alias.0 == *name))
+            .map_or(order_expr, |item| &item.expr),
+        other => other,
+    })
 }
 
 fn aggregate_index<'a>(
@@ -301,12 +329,14 @@ fn output_items<'a>(
             if let Some(index) = aggregate_index(&item.expr, columns, &plan.aggregates) {
                 OutputSource::Aggregate(index as u32)
             } else {
-                let id = expr_to_col_id(&item.expr, columns).ok_or(PlanError::Unsupported)?;
+                let not_grouped =
+                    PlanError::Unsupported("selected column is neither a key nor an aggregate");
+                let id = expr_to_col_id(&item.expr, columns).ok_or(not_grouped)?;
                 let key = plan
                     .group_by
                     .iter()
                     .position(|&column| column == id)
-                    .ok_or(PlanError::Unsupported)?;
+                    .ok_or(not_grouped)?;
                 OutputSource::Key(key as u32)
             }
         } else if matches!(item.expr, Expr::Star) {
@@ -318,7 +348,9 @@ fn output_items<'a>(
             }
             continue;
         } else {
-            OutputSource::Column(expr_to_col_id(&item.expr, columns).ok_or(PlanError::Unsupported)?)
+            OutputSource::Column(expr_to_col_id(&item.expr, columns).ok_or(
+                PlanError::Unsupported("selected expression is not a column"),
+            )?)
         };
         let name = match item.alias {
             Some(alias) => alias.0.to_string(),
@@ -448,25 +480,16 @@ fn resolve_group_order<'a>(
     select: &[super::SelectItem<'a>],
     plan: &QueryPlan<'a>,
 ) -> Result<GroupSortTarget, PlanError> {
-    let mut expr = order_expr;
-    if let Expr::Int(ordinal) = order_expr {
-        expr = &select_ordinal(*ordinal, select)?.expr;
-    } else if let Expr::Ident(Ident(name)) = order_expr {
-        if let Some(item) = select
-            .iter()
-            .find(|item| item.alias.is_some_and(|alias| alias.0 == *name))
-        {
-            expr = &item.expr;
-        }
-    }
+    let expr = order_by_target(order_expr, select)?;
     if let Some(index) = aggregate_index(expr, columns, &plan.aggregates) {
         return Ok(GroupSortTarget::Aggregate(index));
     }
-    let id = expr_to_col_id(expr, columns).ok_or(PlanError::Unsupported)?;
+    let not_grouped = PlanError::Unsupported("ORDER BY is neither a key nor an aggregate");
+    let id = expr_to_col_id(expr, columns).ok_or(not_grouped)?;
     if plan.group_by.contains(&id) {
         Ok(GroupSortTarget::Key(id))
     } else {
-        Err(PlanError::Unsupported)
+        Err(not_grouped)
     }
 }
 
@@ -527,7 +550,11 @@ fn collect_filters_impl<'a>(
             ) {
                 (Some(name), Some(value), _, _) => (name, value, *op),
                 (_, _, Some(name), Some(value)) => (name, value, mirror(*op)),
-                _ => return Err(PlanError::Unsupported),
+                _ => {
+                    return Err(PlanError::Unsupported(
+                        "comparison is not column against literal",
+                    ))
+                }
             };
             let column = find_column(name, columns).ok_or(PlanError::UnknownColumn)?;
             out.push(Filter::Compare {
@@ -541,12 +568,14 @@ fn collect_filters_impl<'a>(
             values,
             negated,
         } => {
-            let name = expr_to_col_name(left).ok_or(PlanError::Unsupported)?;
+            let name =
+                expr_to_col_name(left).ok_or(PlanError::Unsupported("IN on an expression"))?;
             let column = find_column(name, columns).ok_or(PlanError::UnknownColumn)?;
             let scalars = values
                 .iter()
                 .map(|value| {
-                    let scalar = expr_to_scalar(value).ok_or(PlanError::Unsupported)?;
+                    let scalar = expr_to_scalar(value)
+                        .ok_or(PlanError::Unsupported("IN list item is not a literal"))?;
                     literal_for_column(scalar, column, columns)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -563,7 +592,9 @@ fn collect_filters_impl<'a>(
         } => {
             let (Some(name), Expr::Str(pattern)) = (expr_to_col_name(left), pattern.as_ref())
             else {
-                return Err(PlanError::Unsupported);
+                return Err(PlanError::Unsupported(
+                    "LIKE needs a column and a string pattern",
+                ));
             };
             let column = find_column(name, columns).ok_or(PlanError::UnknownColumn)?;
             out.push(Filter::Like {
@@ -574,7 +605,7 @@ fn collect_filters_impl<'a>(
         }
         // Anything else (functions, arithmetic, bare columns) is not a predicate we can run;
         // dropping it would silently widen the result.
-        _ => return Err(PlanError::Unsupported),
+        _ => return Err(PlanError::Unsupported("predicate")),
     }
     Ok(())
 }
@@ -736,12 +767,55 @@ mod tests {
             "SELECT COUNT(*) FROM hits WHERE CounterID IN (1, Income)",
         ] {
             let query = parse_sql_v0(sql).unwrap();
-            assert_eq!(
-                plan_query(&query, &columns()),
-                Err(PlanError::Unsupported),
+            assert!(
+                matches!(
+                    plan_query(&query, &columns()),
+                    Err(PlanError::Unsupported(_))
+                ),
                 "{sql}"
             );
         }
+    }
+
+    #[test]
+    fn a_row_order_by_names_the_select_alias_first() {
+        // `Income AS URL`: ORDER BY URL sorts on Income, the output column named URL.
+        let query =
+            parse_sql_v0("SELECT Income AS URL, URL AS u FROM hits ORDER BY URL, u LIMIT 3")
+                .unwrap();
+        let plan = plan_query(&query, &columns()).unwrap();
+        let keys: Vec<u32> = plan.order_rows_by.iter().map(|key| key.column).collect();
+        assert_eq!(keys, vec![1, 2]);
+        let query = parse_sql_v0("SELECT URL, Income FROM hits ORDER BY 2 DESC").unwrap();
+        let plan = plan_query(&query, &columns()).unwrap();
+        assert_eq!(plan.order_rows_by[0].column, 1);
+    }
+
+    #[test]
+    fn limits_past_u32_are_rejected_not_clamped() {
+        for sql in [
+            "SELECT URL FROM hits LIMIT 4294967296",
+            "SELECT URL FROM hits LIMIT 1 OFFSET 4294967296",
+        ] {
+            let query = parse_sql_v0(sql).unwrap();
+            assert!(
+                matches!(
+                    plan_query(&query, &columns()),
+                    Err(PlanError::Unsupported(_))
+                ),
+                "{sql}"
+            );
+        }
+        let query = parse_sql_v0("SELECT URL FROM hits LIMIT 4294967295").unwrap();
+        assert_eq!(
+            plan_query(&query, &columns()).unwrap().limit,
+            Some(u32::MAX)
+        );
+    }
+
+    #[test]
+    fn count_distinct_star_is_rejected() {
+        assert!(parse_sql_v0("SELECT COUNT(DISTINCT *) FROM hits").is_err());
     }
 
     #[test]

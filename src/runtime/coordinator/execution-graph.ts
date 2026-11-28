@@ -1,5 +1,7 @@
 /** Immutable execution graph from Rust `encode_execution_plan_wire`. */
 
+import type { TaskWork } from "./unit-claims.ts";
+
 export const WIRE_TAG_METADATA_PARTIAL = 0;
 export const WIRE_TAG_EXECUTION_GRAPH_V1 = 4;
 /** Tag 4 plus a partition id on every edge. `0xffffffff` is the whole stream. */
@@ -18,8 +20,6 @@ export function isHashReducer(program: Uint8Array): boolean {
 }
 
 export type EdgeTransport = "in_process" | "do_rpc_wcs" | "do_fetch_wcs" | "colocated";
-
-import type { TaskWork } from "./unit-claims.ts";
 
 /** Task wire: a task without run-time work carries this group. */
 const NO_WORK_GROUP = 0xffff_ffff;
@@ -83,7 +83,7 @@ export type ExecutionPlan =
       resultColumns: Uint8Array;
     };
 
-function edgeTransportFromWire(byte: number): EdgeTransport {
+function edgeTransportFromWire(byte: number | undefined): EdgeTransport {
   switch (byte) {
     case 0:
       return "in_process";
@@ -96,6 +96,21 @@ function edgeTransportFromWire(byte: number): EdgeTransport {
     default:
       throw new Error(`unknown edge transport ${byte}`);
   }
+}
+
+const ROOT_OUTPUTS: readonly RootOutputKind[] = ["partial", "rows", "parquet"];
+const OUTPUT_FORMATS: readonly OutputFormat[] = ["json", "parquet"];
+
+/** `table[byte]`, or an error naming the field: an unknown wire byte is a broken plan. */
+function wireEnum<T>(table: readonly T[], byte: number | undefined, what: string): T {
+  const value = byte === undefined ? undefined : table[byte];
+  if (value === undefined) throw new Error(`unknown ${what} ${byte} in execution graph wire`);
+  return value;
+}
+
+/** A wire flag: 0 or 1, nothing else. */
+function wireFlag(byte: number | undefined, what: string): boolean {
+  return wireEnum([false, true], byte, what);
 }
 
 /** Optional trailer: `u32` length + result columns. */
@@ -153,7 +168,7 @@ export function decodeExecutionPlanWire(out: Uint8Array): ExecutionPlan {
   for (let count = u32(); count > 0; count--) {
     const from = u32();
     const to = u32();
-    const transport = edgeTransportFromWire(out[at]!);
+    const transport = edgeTransportFromWire(out[at]);
     at += 1;
     let partition: number | undefined;
     if (partitioned) {
@@ -163,7 +178,7 @@ export function decodeExecutionPlanWire(out: Uint8Array): ExecutionPlan {
     edges.push({ from, to, transport, partition });
   }
   const rootTaskId = u32();
-  const rootOutput: RootOutputKind = out[at] === 1 ? "rows" : out[at] === 2 ? "parquet" : "partial";
+  const rootOutput = wireEnum(ROOT_OUTPUTS, out[at], "root output");
   at += 1;
   let output: OutputPlan | undefined;
   let finalizer: OutputFinalizer = { kind: "none" };
@@ -174,32 +189,26 @@ export function decodeExecutionPlanWire(out: Uint8Array): ExecutionPlan {
       at += len;
       return new TextDecoder().decode(bytes);
     };
-    if (out[at]! === 1) {
+    const hasOutput = wireFlag(out[at], "output flag");
+    at += 1;
+    if (hasOutput) {
+      const format = wireEnum(OUTPUT_FORMATS, out[at], "output format");
       at += 1;
-      const format: OutputFormat = out[at]! === 1 ? "parquet" : "json";
-      at += 1;
-      const layout = OUTPUT_LAYOUTS[out[at]!];
-      if (!layout) throw new Error(`unknown output layout ${out[at]}`);
+      const layout = wireEnum(OUTPUT_LAYOUTS, out[at], "output layout");
       at += 1;
       const bucket = readStr();
       const prefix = readStr();
-      const hasKey = out[at]!;
+      const hasKey = wireFlag(out[at], "object key flag");
       at += 1;
-      const objectKey = hasKey === 1 ? readStr() : undefined;
+      const objectKey = hasKey ? readStr() : undefined;
       output = { format, destination: { bucket, prefix, objectKey }, layout };
-    } else {
-      at += 1;
     }
-    const finTag = out[at]!;
+    const finTag = wireEnum(["none", "concat_parquet", "concat_json"] as const, out[at], "finalizer");
     at += 1;
-    if (finTag === 1 || finTag === 2) {
-      const count = u32();
+    if (finTag !== "none") {
       const partitionOrder: number[] = [];
-      for (let i = 0; i < count; i++) partitionOrder.push(u32());
-      finalizer =
-        finTag === 1
-          ? { kind: "concat_parquet", partitionOrder }
-          : { kind: "concat_json", partitionOrder };
+      for (let count = u32(); count > 0; count--) partitionOrder.push(u32());
+      finalizer = { kind: finTag, partitionOrder };
     }
   }
   const resultColumns = resultColumnsAt(out, view, at);
@@ -208,8 +217,4 @@ export function decodeExecutionPlanWire(out: Uint8Array): ExecutionPlan {
 
 export function edgesInto(taskId: number, edges: ExecutionEdge[]): ExecutionEdge[] {
   return edges.filter((edge) => edge.to === taskId);
-}
-
-export function edgesFrom(taskId: number, edges: ExecutionEdge[]): ExecutionEdge[] {
-  return edges.filter((edge) => edge.from === taskId);
 }

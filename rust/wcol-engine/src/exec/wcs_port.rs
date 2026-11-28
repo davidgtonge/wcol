@@ -7,7 +7,7 @@ use crate::exec::operators::{CompleteFrame, WcsIngress};
 use crate::stream::core::WCS_MAX_PAYLOAD;
 
 /// Decoder bytes across every input port. Mailboxes are not included.
-/// One 64 KiB frame on each of 100 ports is 6.25 MiB.
+/// One 64 KiB frame on each of 128 ports is 8 MiB.
 pub const WCS_INGRESS_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 use crate::stream::wcs::FRAME_END;
 

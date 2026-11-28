@@ -95,7 +95,12 @@ impl Operator for SortOp {
 enum ColData {
     I64(Vec<i64>),
     F64(Vec<f64>),
-    Bytes { offsets: Vec<u32>, bytes: Vec<u8> },
+    Bytes {
+        offsets: Vec<u32>,
+        bytes: Vec<u8>,
+    },
+    /// An integer column that outgrew `i64` somewhere (see [`column_kinds`]).
+    Wide(Vec<i128>),
 }
 
 struct PlainCol {
@@ -119,17 +124,18 @@ pub fn sort_rows(
     if keys.is_empty() {
         return Err("sort needs a key".to_string());
     }
-    let mut columns: Vec<PlainCol> = Vec::new();
+    let mut columns: Vec<PlainCol> = column_kinds(batches)?
+        .into_iter()
+        .map(|(id, kind)| plain_col(id, kind))
+        .collect();
     let mut selected = Vec::new();
     let mut scope = 0u32;
     for batch in batches {
         scope = batch_scope(batch);
         let mut view_buf = Vec::new();
         let view = batch.view_with(&mut view_buf);
-        if columns.is_empty() {
-            for col in view.columns {
-                columns.push(plain_col(col)?);
-            }
+        if view.columns.len() != columns.len() {
+            return Err("sort batches have different columns".to_string());
         }
         let mask = batch.effective_selection_mask();
         for row in 0..view.row_count {
@@ -196,27 +202,144 @@ fn batch_scope(batch: &OwnedWcolBatch) -> u32 {
     batch.view_with(&mut buf).dict_scope
 }
 
-fn plain_col(col: &WcolColumn<'_>) -> Result<PlainCol, String> {
-    let id = column_id(col);
-    let data = match resolved_data(col)? {
+fn plain_col(id: u32, kind: Resolved) -> PlainCol {
+    let data = match kind {
         Resolved::I64 => ColData::I64(Vec::new()),
         Resolved::F64 => ColData::F64(Vec::new()),
         Resolved::Bytes => ColData::Bytes {
             offsets: vec![0],
             bytes: Vec::new(),
         },
+        Resolved::Wide => ColData::Wide(Vec::new()),
     };
-    Ok(PlainCol {
+    PlainCol {
         id,
         data,
         nulls: Vec::new(),
-    })
+    }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Resolved {
     I64,
     F64,
     Bytes,
+    Wide,
+}
+
+/// What the batches say about one column so far.
+struct ColumnEvidence {
+    id: u32,
+    kind: Resolved,
+    saw_i64: bool,
+    /// Every text value seen is a canonical integer.
+    integer_text: bool,
+    /// Some text value is an integer outside `i64`.
+    past_i64: bool,
+}
+
+/// Each column's id and sort type across `batches`. A finalized integer `SUM` is `i64`, or
+/// exact decimal text in a batch where it outgrew `i64` ([`push_wide_integer_column`]): a
+/// column whose text is all canonical integers, and that is `i64` in another batch or holds
+/// a value past `i64`, sorts as one wide integer column. Otherwise ORDER BY would compare
+/// such sums as bytes ("9" after "10"), and a column `i64` in one reducer's rows and text
+/// in another's could not be sorted at all.
+///
+/// [`push_wide_integer_column`]: crate::ops::finalize::push_wide_integer_column
+fn column_kinds(batches: &[OwnedWcolBatch]) -> Result<Vec<(u32, Resolved)>, String> {
+    let mut evidence: Vec<ColumnEvidence> = Vec::new();
+    for batch in batches {
+        let mut view_buf = Vec::new();
+        let view = batch.view_with(&mut view_buf);
+        if evidence.is_empty() {
+            evidence = view
+                .columns
+                .iter()
+                .map(|col| {
+                    Ok(ColumnEvidence {
+                        id: column_id(col),
+                        kind: resolved_data(col)?,
+                        saw_i64: false,
+                        integer_text: true,
+                        past_i64: false,
+                    })
+                })
+                .collect::<Result<_, String>>()?;
+        }
+        if view.columns.len() != evidence.len() {
+            return Err("sort batches have different columns".to_string());
+        }
+        for (seen, col) in evidence.iter_mut().zip(view.columns) {
+            if column_id(col) != seen.id {
+                return Err("sort batches have different columns".to_string());
+            }
+            match col {
+                WcolColumn::I64 { .. } => seen.saw_i64 = true,
+                WcolColumn::Utf8 {
+                    offsets,
+                    bytes,
+                    nulls,
+                    ..
+                } if seen.integer_text => {
+                    for row in 0..view.row_count {
+                        if nulls[row] == 0 {
+                            continue;
+                        }
+                        let text = &bytes[offsets[row] as usize..offsets[row + 1] as usize];
+                        match canonical_integer(text) {
+                            Some(value) => seen.past_i64 |= i64::try_from(value).is_err(),
+                            None => {
+                                seen.integer_text = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                WcolColumn::DictId { .. } => seen.integer_text = false,
+                _ => {}
+            }
+            let kind = resolved_data(col)?;
+            if kind != seen.kind && seen.kind != Resolved::Wide {
+                let integer = matches!(
+                    (seen.kind, kind),
+                    (Resolved::I64, Resolved::Bytes) | (Resolved::Bytes, Resolved::I64)
+                );
+                if !integer {
+                    return Err("sort column changed type".to_string());
+                }
+                seen.kind = Resolved::Wide;
+            }
+        }
+    }
+    evidence
+        .into_iter()
+        .map(|seen| {
+            let kind = match seen.kind {
+                Resolved::Wide if !seen.integer_text => {
+                    return Err("sort column changed type".to_string());
+                }
+                Resolved::Bytes if seen.integer_text && seen.past_i64 => Resolved::Wide,
+                kind => kind,
+            };
+            Ok((seen.id, kind))
+        })
+        .collect()
+}
+
+/// `text` as an integer if it is one in canonical form (no sign on zero, no leading zeros):
+/// the form [`push_wide_integer_column`](crate::ops::finalize::push_wide_integer_column)
+/// writes.
+fn canonical_integer(text: &[u8]) -> Option<i128> {
+    let digits = text.strip_prefix(b"-").unwrap_or(text);
+    let canonical = match digits {
+        [b'0'] => digits.len() == text.len(),
+        [b'1'..=b'9', rest @ ..] => rest.iter().all(u8::is_ascii_digit),
+        _ => false,
+    };
+    if !canonical {
+        return None;
+    }
+    std::str::from_utf8(text).ok()?.parse().ok()
 }
 
 fn resolved_data(col: &WcolColumn<'_>) -> Result<Resolved, String> {
@@ -233,6 +356,26 @@ fn resolved_data(col: &WcolColumn<'_>) -> Result<Resolved, String> {
 }
 
 fn push_cell(col: &mut PlainCol, src: &WcolColumn<'_>, row: usize) -> Result<(), String> {
+    if let ColData::Wide(dest) = &mut col.data {
+        let (value, present) = match src {
+            WcolColumn::I64 { values, nulls, .. } => (i128::from(values[row]), nulls[row]),
+            WcolColumn::Utf8 { nulls, .. } if nulls[row] == 0 => (0, 0),
+            WcolColumn::Utf8 {
+                offsets,
+                bytes,
+                nulls,
+                ..
+            } => (
+                canonical_integer(&bytes[offsets[row] as usize..offsets[row + 1] as usize])
+                    .ok_or("sort column changed type")?,
+                nulls[row],
+            ),
+            _ => return Err("sort column changed type".to_string()),
+        };
+        dest.push(value);
+        col.nulls.push(present);
+        return Ok(());
+    }
     if !matches_resolved(&col.data, resolved_data(src)?) {
         return Err("sort column changed type".to_string());
     }
@@ -316,6 +459,7 @@ fn matches_resolved(data: &ColData, resolved: Resolved) -> bool {
 fn push_resolved_null(col: &mut PlainCol) -> Result<(), String> {
     match &mut col.data {
         ColData::I64(values) => values.push(0),
+        ColData::Wide(values) => values.push(0),
         ColData::F64(values) => values.push(0.0),
         ColData::Bytes { offsets, .. } => offsets.push(*offsets.last().unwrap_or(&0)),
     }
@@ -359,6 +503,7 @@ fn cmp_cell(
     let pb = col.nulls[b] != 0;
     cmp_sort_presence(pa, pb, nulls_first, desc, || match &col.data {
         ColData::I64(values) => values[a].cmp(&values[b]),
+        ColData::Wide(values) => values[a].cmp(&values[b]),
         ColData::F64(values) => float_key(values[a]).cmp(&float_key(values[b])),
         ColData::Bytes { offsets, bytes } => {
             let left = &bytes[offsets[a] as usize..offsets[a + 1] as usize];
@@ -428,6 +573,10 @@ fn emit_ordered(
             ColData::F64(values) => {
                 let values = order.iter().map(|&row| values[row]).collect();
                 out.push_f64_column(col.id, values, nulls);
+            }
+            ColData::Wide(values) => {
+                let values: Vec<i128> = order.iter().map(|&row| values[row]).collect();
+                crate::ops::finalize::push_wide_integer_column(&mut out, col.id, &values, nulls)?;
             }
             ColData::Bytes { offsets, bytes } => {
                 let mut out_offsets = Vec::with_capacity(rows + 1);

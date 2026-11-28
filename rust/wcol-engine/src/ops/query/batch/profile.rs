@@ -84,21 +84,17 @@ pub struct SpillBoundary {
     pub serialize_bytes: u32,
     /// `GraphHost.spill_append_buf` capacity at serialize peak.
     pub append_buf_cap: u32,
-    /// Io bridge encoded SQLite record buffer capacity at peak.
+    // These six words were set by the removed SQLite host spill. They stay, always 0,
+    // so the 27-word boundary record keeps the layout the host decodes.
     pub io_encode_cap: u32,
-    /// Host outstanding I/O ops when the last SQLite chunk of the run was written.
     pub host_pending_ops: u32,
-    /// Bytes in the last SQLite write chunk for the run.
     pub sqlite_write_bytes: u32,
-    /// Host spill SQL payload still charged in the host ledger at the last ack.
     pub host_pending_sql_bytes: u32,
-    /// Rust bridge queue: pending append payload not yet handed to graph host.
     pub rust_queued_spill_bytes: u32,
-    /// Rust graph/io buffers holding serialized spill payload (append + sqlite encode).
     pub rust_inflight_spill_bytes: u32,
     /// Peak allocator live bytes while serializing spill pages this run.
     pub live_serialized_peak: u32,
-    /// Allocator live bytes after every append page reached SQL ack, before group reset.
+    /// Allocator live bytes once every page of the run is appended, before group reset.
     pub live_sql_acked: u32,
     /// Cumulative merge scan opens seen before this boundary (0 during ingest-only flushes).
     pub merge_scan_begins: u32,
@@ -125,7 +121,6 @@ thread_local! {
     pub(super) static FLUSH_START: std::cell::Cell<Option<FlushStart>> = const { std::cell::Cell::new(None) };
     pub(super) static LAST_PAGE: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
     pub(super) static FLUSH_PROBE: std::cell::Cell<FlushProbe> = const { std::cell::Cell::new(FlushProbe::EMPTY) };
-    static SPILL_PAYLOAD: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
     static SPILL_MERGE: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
     static SPILL_BOUNDARY_WIRE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -179,64 +174,6 @@ pub fn note_spill_merge_step() {
     });
 }
 
-pub(super) fn spill_payload_pair() -> (u32, u32) {
-    SPILL_PAYLOAD.with(|cell| cell.get())
-}
-
-fn note_spill_payload_probe() {
-    let (queued, inflight) = spill_payload_pair();
-    FLUSH_PROBE.with(|cell| {
-        let mut probe = cell.get();
-        probe.rust_queued_spill_bytes = probe.rust_queued_spill_bytes.max(queued);
-        probe.rust_inflight_spill_bytes = probe.rust_inflight_spill_bytes.max(inflight);
-        cell.set(probe);
-    });
-}
-
-pub fn note_spill_payload_queued(bytes: u32) {
-    if bytes == 0 {
-        return;
-    }
-    SPILL_PAYLOAD.with(|cell| {
-        let (queued, inflight) = cell.get();
-        cell.set((queued.saturating_add(bytes), inflight));
-    });
-    note_spill_payload_probe();
-}
-
-pub fn note_spill_payload_move_queued_to_inflight(bytes: u32) {
-    if bytes == 0 {
-        return;
-    }
-    SPILL_PAYLOAD.with(|cell| {
-        let (queued, inflight) = cell.get();
-        cell.set((queued.saturating_sub(bytes), inflight.saturating_add(bytes)));
-    });
-    note_spill_payload_probe();
-}
-
-pub fn note_spill_payload_release_inflight(bytes: u32) {
-    if bytes == 0 {
-        return;
-    }
-    SPILL_PAYLOAD.with(|cell| {
-        let (queued, inflight) = cell.get();
-        cell.set((queued, inflight.saturating_sub(bytes)));
-    });
-    note_spill_payload_probe();
-}
-
-pub fn note_spill_payload_inflight_add(bytes: u32) {
-    if bytes == 0 {
-        return;
-    }
-    SPILL_PAYLOAD.with(|cell| {
-        let (queued, inflight) = cell.get();
-        cell.set((queued, inflight.saturating_add(bytes)));
-    });
-    note_spill_payload_probe();
-}
-
 pub fn reset_flush_probe(live_before: u32) {
     FLUSH_PROBE.with(|cell| {
         cell.set(FlushProbe {
@@ -259,24 +196,6 @@ pub fn note_spill_serialize(append_len: u32, append_cap: u32) {
     });
 }
 
-pub fn note_spill_io_encode(record_len: u32, record_cap: u32) {
-    FLUSH_PROBE.with(|cell| {
-        let mut probe = cell.get();
-        probe.io_encode_cap = probe.io_encode_cap.max(record_cap.max(record_len));
-        cell.set(probe);
-    });
-}
-
-pub fn note_spill_host_ack(pending_ops: u32, write_bytes: u32, pending_sql_bytes: u32) {
-    FLUSH_PROBE.with(|cell| {
-        let mut probe = cell.get();
-        probe.host_pending_ops = pending_ops;
-        probe.sqlite_write_bytes = write_bytes;
-        probe.host_pending_sql_bytes = pending_sql_bytes;
-        cell.set(probe);
-    });
-}
-
 pub(super) fn wasm_linear_bytes() -> u32 {
     #[cfg(target_arch = "wasm32")]
     {
@@ -294,7 +213,6 @@ pub fn clear_spill_boundaries() {
     FLUSH_START.with(|cell| cell.set(None));
     LAST_PAGE.with(|cell| cell.set((0, 0)));
     FLUSH_PROBE.with(|cell| cell.set(FlushProbe::EMPTY));
-    SPILL_PAYLOAD.with(|cell| cell.set((0, 0)));
     SPILL_MERGE.with(|cell| cell.set((0, 0)));
 }
 

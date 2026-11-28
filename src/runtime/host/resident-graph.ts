@@ -1,5 +1,5 @@
 /** A resident graph: loaded once into a stream pool, then driven by host commands. */
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import type { PoolWasm } from "./wasm-stream.ts";
 
 export type ResidentMemoryStats = {
   readonly limitBytes: number;
@@ -12,7 +12,7 @@ export type ResidentMemoryStats = {
 
 export async function readResidentMemory(
   request: ResidentGraph["request"],
-  wasm: WcolStreamWasm,
+  wasm: Pick<PoolWasm, "memory">,
 ): Promise<ResidentMemoryStats> {
   const bytes = await request(3, new Uint8Array());
   if (

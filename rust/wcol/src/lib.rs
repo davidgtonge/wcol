@@ -25,10 +25,6 @@ static KEEP_ITERATIVE_FFI: [wcol_engine::exec::runtime::ffi::FfiSymbol; 6] =
     wcol_engine::exec::runtime::ffi::ITERATIVE_COORDINATOR_FFI;
 #[allow(dead_code)]
 #[used]
-static KEEP_REDUCE_FFI: [wcol_engine::exec::runtime::ffi::FfiSymbol; 5] =
-    wcol_engine::exec::runtime::ffi::REDUCE_EXPORTED_FFI;
-#[allow(dead_code)]
-#[used]
 static KEEP_PLAN_FFI: [wcol_plan::plan::host_ffi::FfiSymbol;
     wcol_plan::plan::host_ffi::EXPORTED_FFI_LEN] = wcol_plan::plan::host_ffi::EXPORTED_FFI;
 

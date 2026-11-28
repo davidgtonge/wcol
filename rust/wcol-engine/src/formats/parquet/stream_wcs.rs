@@ -1,77 +1,18 @@
-//! WCS1 dictionary payloads (mirror `archive/legacy-ts-stream/codec.ts` + numeric extension).
+//! WCS1 dictionary payloads: a dictionary sent as bounded chunks, each appending entries
+//! `[start_index, start_index + count)` to the receiver's table for `(scope, column)`.
 
 use std::sync::Arc;
 
 use crate::error::{WcolError, WcolResult};
 use crate::stream::{DictEntries, DictionaryValues};
 
-const DICT_PAYLOAD_STRING: u8 = 0;
-const DICT_PAYLOAD_NUMERIC: u8 = 1;
-/// Chunked dictionary install. The type tag stays at byte 12 in v1 and v2.
+/// Type tag at byte 12. Tags 0 and 1 were whole-dictionary payloads nothing sends any more.
+const DICT_TAG_AT: usize = 12;
 const DICT_PAYLOAD_STRING_V2: u8 = 2;
 const DICT_PAYLOAD_NUMERIC_V2: u8 = 3;
-const DICT_HEADER_V1: usize = 13;
-/// v2 string body starts here: scope, column, start_index, tag, count.
+/// String body starts here: scope, column, start_index, tag, count.
 const DICT_HEADER_V2: usize = 17;
 const DICT_V2_NUMERIC_BODY: usize = 19;
-
-/// UTF-8 string dictionary (existing stream format).
-pub fn encode_string_dictionary(dict_scope: u32, dict_id: u32, values: &[&str]) -> Vec<u8> {
-    let encoded: Vec<Vec<u8>> = values.iter().map(|s| s.as_bytes().to_vec()).collect();
-    let mut size = 13usize;
-    for value in &encoded {
-        size += 4 + value.len();
-    }
-    let mut out = vec![0u8; size];
-    out[0..4].copy_from_slice(&dict_scope.to_le_bytes());
-    out[4..8].copy_from_slice(&dict_id.to_le_bytes());
-    out[8..12].copy_from_slice(&(values.len() as u32).to_le_bytes());
-    out[12] = DICT_PAYLOAD_STRING;
-    let mut offset = 13;
-    for value in &encoded {
-        out[offset..offset + 4].copy_from_slice(&(value.len() as u32).to_le_bytes());
-        offset += 4;
-        out[offset..offset + value.len()].copy_from_slice(value);
-        offset += value.len();
-    }
-    out
-}
-
-/// Fixed-width numeric dictionary (extension tag `1` at byte 12).
-pub fn encode_numeric_dictionary(
-    dict_scope: u32,
-    dict_id: u32,
-    physical: u8,
-    value_width: u8,
-    values: &[u8],
-) -> WcolResult<Vec<u8>> {
-    if !values.len().is_multiple_of(value_width as usize) {
-        return Err(WcolError::from("numeric dictionary length mismatch"));
-    }
-    let count = (values.len() / value_width as usize) as u32;
-    let mut out = vec![0u8; 15 + values.len()];
-    out[0..4].copy_from_slice(&dict_scope.to_le_bytes());
-    out[4..8].copy_from_slice(&dict_id.to_le_bytes());
-    out[8..12].copy_from_slice(&count.to_le_bytes());
-    out[12] = DICT_PAYLOAD_NUMERIC;
-    out[13] = physical;
-    out[14] = value_width;
-    out[15..].copy_from_slice(values);
-    Ok(out)
-}
-
-/// One installed dictionary as a single `FRAME_DICTIONARY` payload (v1, must fit `max_payload`).
-pub fn encode_installed_dictionary(dict: &DictionaryValues) -> WcolResult<Vec<u8>> {
-    let frames = encode_dictionary_frames(dict, 0, crate::stream::wcs::MAX_WCS_PAYLOAD)?;
-    if frames.len() != 1 {
-        return Err(WcolError::msg(format!(
-            "wcs: dictionary_chunk_too_large ({} entries need {} frames)",
-            dict.entry_count(),
-            frames.len()
-        )));
-    }
-    Ok(frames.into_iter().next().unwrap())
-}
 
 /// Encode dictionary entries `[from_entry..)` into one or more bounded v2 payloads.
 pub fn encode_dictionary_frames(
@@ -352,22 +293,11 @@ pub fn merge_dictionary_chunk(
 }
 
 pub fn decode_dictionary_chunk(payload: &[u8]) -> WcolResult<DictionaryChunk> {
-    if payload.len() < DICT_HEADER_V1 {
-        return Err(WcolError::from("truncated dictionary payload"));
-    }
-    match payload[12] {
-        DICT_PAYLOAD_STRING | DICT_PAYLOAD_NUMERIC => {
-            let dict = decode_installed_dictionary_v1(payload)?;
-            Ok(DictionaryChunk {
-                scope: dict.scope,
-                column: dict.column,
-                start_index: 0,
-                entries: dict.entries,
-            })
-        }
-        DICT_PAYLOAD_STRING_V2 => decode_string_dictionary_v2(payload),
-        DICT_PAYLOAD_NUMERIC_V2 => decode_numeric_dictionary_v2(payload),
-        _ => Err(WcolError::from("unsupported dictionary payload tag")),
+    match payload.get(DICT_TAG_AT) {
+        None => Err(WcolError::from("truncated dictionary payload")),
+        Some(&DICT_PAYLOAD_STRING_V2) => decode_string_dictionary_v2(payload),
+        Some(&DICT_PAYLOAD_NUMERIC_V2) => decode_numeric_dictionary_v2(payload),
+        Some(_) => Err(WcolError::from("unsupported dictionary payload tag")),
     }
 }
 
@@ -405,37 +335,11 @@ fn decode_numeric_dictionary_v2(payload: &[u8]) -> WcolResult<DictionaryChunk> {
     })
 }
 
-/// Decode a `FRAME_DICTIONARY` payload into an installed dictionary.
-pub fn decode_installed_dictionary(payload: &[u8]) -> WcolResult<DictionaryValues> {
-    let chunk = decode_dictionary_chunk(payload)?;
-    if chunk.start_index != 0 {
-        return Err(WcolError::from(
-            "dictionary chunk is not a full install (start_index != 0)",
-        ));
-    }
-    chunk.into_values()
-}
-
-fn decode_installed_dictionary_v1(payload: &[u8]) -> WcolResult<DictionaryValues> {
-    if payload.len() < 13 {
-        return Err(WcolError::from("truncated dictionary payload"));
-    }
-    let scope = u32::from_le_bytes(payload[0..4].try_into().unwrap());
-    let column = u32::from_le_bytes(payload[4..8].try_into().unwrap());
-    let count = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
-    let entries = match payload[12] {
-        DICT_PAYLOAD_STRING => decode_byte_entries(&payload[13..], count)?,
-        DICT_PAYLOAD_NUMERIC => decode_numeric_entries(&payload[13..], count)?,
-        _ => return Err(WcolError::from("unsupported dictionary payload tag")),
-    };
-    Ok(DictionaryValues {
-        scope,
-        column,
-        entries,
-    })
-}
-
 fn decode_byte_entries(payload: &[u8], count: usize) -> WcolResult<DictEntries> {
+    // Every entry has a four-byte length, so the payload bounds the count before allocating.
+    if count > payload.len() / 4 {
+        return Err(WcolError::from("truncated dictionary string"));
+    }
     let mut offsets = Vec::with_capacity(count + 1);
     offsets.push(0u32);
     let mut bytes = Vec::new();
@@ -567,21 +471,26 @@ mod dictionary_frame_tests {
     }
 
     #[test]
-    fn v2_tag_stays_at_byte_12_and_legacy_values_are_not_v2() {
+    fn tag_is_byte_12_and_whole_dictionary_tags_are_rejected() {
         let dict = byte_dict(&["ab", "cd"]);
-        let frames = encode_dictionary_frames(&dict, 0, 64).unwrap();
-        assert_eq!(frames[0][12], DICT_PAYLOAD_STRING_V2);
-        let legacy = encode_numeric_dictionary(4, 9, 2, 8, &512i64.to_le_bytes()).unwrap();
-        assert_eq!(legacy[12], DICT_PAYLOAD_NUMERIC);
-        assert_eq!(legacy[16], DICT_PAYLOAD_STRING_V2);
-        let chunk = decode_dictionary_chunk(&legacy).unwrap();
-        assert_eq!(chunk.start_index, 0);
-        assert_eq!(chunk.scope, 4);
-        assert_eq!(chunk.column, 9);
-        let DictEntries::Int(entries) = chunk.entries else {
-            panic!("legacy numeric dictionary decoded as another type");
-        };
-        assert_eq!(entries.as_slice(), &[512]);
+        let mut frame = encode_dictionary_frames(&dict, 0, 64).unwrap().remove(0);
+        assert_eq!(frame[DICT_TAG_AT], DICT_PAYLOAD_STRING_V2);
+        for retired in [0, 1] {
+            frame[DICT_TAG_AT] = retired;
+            assert!(decode_dictionary_chunk(&frame).is_err());
+        }
+    }
+
+    #[test]
+    fn a_count_beyond_the_payload_is_an_error_not_an_allocation() {
+        for tag in [DICT_PAYLOAD_STRING_V2, DICT_PAYLOAD_NUMERIC_V2] {
+            let mut frame = vec![0u8; DICT_V2_NUMERIC_BODY];
+            frame[DICT_TAG_AT] = tag;
+            frame[13..17].copy_from_slice(&u32::MAX.to_le_bytes());
+            frame[17] = 2;
+            frame[18] = 8;
+            assert!(decode_dictionary_chunk(&frame).is_err(), "tag {tag}");
+        }
     }
 
     #[test]

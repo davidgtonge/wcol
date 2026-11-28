@@ -146,7 +146,7 @@ fn dict_utf8_scan_emits_byte_dictionary() {
                 scan.advance_batch(rows).unwrap();
             }
             DecodeProgress::Finished => break,
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => continue,
+            DecodeProgress::NeedInput => continue,
         }
         if scan.decode_exhausted() {
             break;

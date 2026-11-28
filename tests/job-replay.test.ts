@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { COORDINATOR_SLOT, type ExecutionPlan } from "../src/runtime/coordinator/execution-graph.ts";
+import { COORDINATOR_SLOT } from "../src/runtime/coordinator/execution-graph.ts";
 import {
   assertNoStreamFanOut,
   isFullyColocated,
@@ -72,9 +72,4 @@ test("a live lease with a null alarm is not a stranded job", () => {
   assert.equal(shouldArmAlarm({ state: "running", leaseUntil: now - 1 }, now + 10, now), false);
   assert.equal(shouldArmAlarm({ state: "completed", leaseUntil: 0 }, null, now), false);
   assert.equal(shouldArmAlarm({ state: "failed" }, null, now), false);
-});
-
-test("metadata plans are not graphs", () => {
-  const partial: ExecutionPlan = { kind: "metadata_partial", partial: new Uint8Array(), resultColumns: new Uint8Array() };
-  assert.equal(partial.kind, "metadata_partial");
 });

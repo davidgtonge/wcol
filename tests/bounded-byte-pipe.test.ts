@@ -1,11 +1,8 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import {
-  createBoundedBytePipe,
-  drainReadable,
-  pumpSyntheticBytes,
-} from "../src/runtime/host/ports/rpc.ts";
+import { createBoundedBytePipe, drainReadable } from "../src/runtime/host/ports/rpc.ts";
 import { createSharedBytePool } from "../src/runtime/host/shared-byte-pool.ts";
+import { pumpSyntheticBytes } from "./helpers/streams.ts";
 
 describe("bounded byte pipe", () => {
   it("transfers all bytes", async () => {
@@ -55,7 +52,7 @@ describe("bounded byte pipe", () => {
     assert.equal(pool.used, 0);
   });
 
-  it("an abort releases a writer blocked on the cap and ends the readable", async () => {
+  it("an abort releases a writer blocked on the cap and errors the readable", async () => {
     const pool = createSharedBytePool(64 * 1024);
     const pipe = createBoundedBytePipe({ maxBufferedBytes: 1000, pool });
     const writer = pipe.writable.getWriter();
@@ -65,7 +62,8 @@ describe("bounded byte pipe", () => {
     pipe.abort(new Error("scan aborted"));
     await blocked;
     assert.equal(pool.used, 0);
-    assert.equal(await drainReadable(pipe.readable), 0);
+    // A cut edge must not read as a complete one.
+    await assert.rejects(drainReadable(pipe.readable), /scan aborted/);
     await assert.rejects(writer.write(new Uint8Array(1)), /closed bounded pipe \(abort: scan aborted\)/);
   });
 });

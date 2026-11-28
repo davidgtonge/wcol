@@ -77,7 +77,7 @@ Prefer:
 ```typescript
 const graph = await loadGraph(job);
 const recovery = planRecovery(graph, ledger);
-const results = await executeGraph(graph, recovery, runtime);
+const results = await runGraph(graph, recovery, runtime);
 await commitResults(job, results);
 ```
 

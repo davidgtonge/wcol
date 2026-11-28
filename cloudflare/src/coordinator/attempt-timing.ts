@@ -25,8 +25,8 @@ export type AttemptReport = {
   readonly facts: Map<number, TaskFacts>;
 };
 
-/** Reducers split ingest from finish work; only the node can see that boundary. */
-type TaskRecordEntry = { taskId: number; reducer: boolean; record: Partial<TaskTimingRecord> };
+/** A reducer's timing record. Reducers split ingest from finish work; only the node can see that boundary. */
+type TaskRecordEntry = { taskId: number; record: Partial<TaskTimingRecord> };
 
 /** Each reducer's timing record for the attempt; one small read each, after the attempt. */
 async function taskRecords(ctx: GraphJobContext, jobId: string, attempt: number, graph: GraphPlan): Promise<TaskRecordEntry[]> {
@@ -40,7 +40,7 @@ async function taskRecords(ctx: GraphJobContext, jobId: string, attempt: number,
           const object = await outputBucket(ctx.env).get(slotsObjectKey(jobId, attempt, task.id));
           if (!object || object.body === null) return null;
           const record = JSON.parse(await object.text()) as Partial<TaskTimingRecord>;
-          return { taskId: task.id, reducer: reducerIds.has(task.id), record };
+          return { taskId: task.id, record };
         }),
       ),
   );
@@ -65,12 +65,12 @@ function attemptUsage(entries: readonly TaskRecordEntry[], report: AttemptReport
     });
   return summarizeUsage([
     ...scans,
-    ...entries.flatMap(({ reducer, record }) =>
+    ...entries.flatMap(({ record }) =>
       record.startedAt == null || record.endedAt == null
         ? []
         : [
             {
-              role: reducer ? ("reducer" as const) : ("scan" as const),
+              role: "reducer" as const,
               startedAt: record.startedAt,
               endedAt: record.endedAt,
               sourceReads: record.sourceReads,
@@ -84,9 +84,7 @@ function attemptUsage(entries: readonly TaskRecordEntry[], report: AttemptReport
 
 function reducerSpans(entries: readonly TaskRecordEntry[]): StageSpan[] {
   const spans: StageSpan[] = [];
-  for (const entry of entries) {
-    if (!entry.reducer) continue;
-    const { taskId, record } = entry;
+  for (const { taskId, record } of entries) {
     if (record.startedAt == null || record.endedAt == null) continue;
     const outcome = record.outcome === "ok" ? "ok" : "failed";
     if (record.inputsEndedAt == null) {
@@ -103,7 +101,7 @@ export async function writeAttemptTiming(
   ctx: GraphJobContext,
   jobId: string,
   attempt: number,
-  graph: GraphPlan | undefined,
+  graph: GraphPlan | null,
   report: AttemptReport,
   failure: unknown,
 ): Promise<void> {

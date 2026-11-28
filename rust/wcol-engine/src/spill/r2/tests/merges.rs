@@ -245,10 +245,6 @@ fn ingest_after_host_complete_applies_run_read_buf() {
             &mut bridge.borrow_mut(),
             HostSpillRequest {
                 op: SPILL_OP_RUN_READ,
-                session: 1,
-                resume: SpillScanResume::default(),
-                max_rows: 0,
-                max_bytes: plan.length,
                 append_bytes: encode_run_read_open(&plan).unwrap(),
             },
         ),

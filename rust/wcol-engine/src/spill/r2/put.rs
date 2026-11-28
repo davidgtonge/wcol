@@ -3,7 +3,6 @@
 use super::super::host::{
     await_host, HostSpillRequest, SpillProgress, SPILL_OP_RUN_COMMIT, SPILL_OP_RUN_PUT,
 };
-use super::super::SpillScanResume;
 use super::codec::{encode_run_put_open, RunPutPlan, RUN_PART_BYTES};
 use super::{CommittedRunMeta, HostR2SortedRunStore};
 
@@ -160,17 +159,9 @@ impl HostR2SortedRunStore {
     }
 
     fn request_host(&mut self, op: u8, append_bytes: Vec<u8>) -> Result<SpillProgress<()>, String> {
-        let session = self.bridge.borrow().session_id();
         await_host(
             &mut self.bridge.borrow_mut(),
-            HostSpillRequest {
-                op,
-                session,
-                resume: SpillScanResume::default(),
-                max_rows: 0,
-                max_bytes: 0,
-                append_bytes,
-            },
+            HostSpillRequest { op, append_bytes },
         )
     }
 }

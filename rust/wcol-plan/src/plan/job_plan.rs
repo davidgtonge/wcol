@@ -2,11 +2,10 @@
 //!
 //! The host asks [`job_sources`] which objects to read footers from, fetches them, and calls
 //! [`plan_job`]. A `json` or `parquet` job becomes one execution graph: its root prints rows,
-//! or every task (or the root) writes a Parquet object. A `concat` job is page compaction:
-//! one program that copies row groups from every input into one object. No SQL reaches a node.
+//! or every task (or the root) writes a Parquet object. No SQL reaches a node.
 
 use crate::formats::parquet::Plan;
-use crate::plan::distributed::{estimate_output_bytes, workers_for_target_file, SourceVersion};
+use crate::plan::distributed::{estimate_output_bytes, workers_for_target_file};
 use crate::plan::execution_graph::{
     attach_output_plan, encode_execution_plan_wire, execution_plan_for, ExecutionPlan,
     RootOutputKind,
@@ -17,8 +16,6 @@ use crate::plan::output_plan::{
     concat_finalizer_for_graph_tasks, default_layout_for_parquet_job, parse_layout_from_job,
     OutputFinalizer, OutputLayout, OutputPlan,
 };
-use crate::plan::page_compaction::CompactionInputFile;
-use crate::plan::parquet_concat::{concat_parquet_row_groups, CommittedParquetShard, ConcatPolicy};
 use crate::plan::physical_plan::{OpKind, PhysicalPlannerConfig};
 use crate::plan::query_dispatch::{nodes_parquet_finalize_steps, plan_query_job, QueryDispatch};
 use crate::plan::result::{encode_result_columns, ResultColumn};
@@ -71,12 +68,6 @@ pub enum JobPlan {
         prefix: String,
         group_bytes: u64,
     },
-    /// Page copy: each program reads the inputs by index and writes `key`.
-    Concat {
-        bucket: String,
-        key: String,
-        programs: Vec<Vec<u8>>,
-    },
 }
 
 /// The parsed request and the objects whose footers [`plan_job`] needs, in order.
@@ -86,14 +77,6 @@ pub fn job_sources(body: &str) -> Result<(JobRequest, Vec<ObjectLocation>), Stri
         JobRequest::Json { source, .. }
         | JobRequest::Parquet { source, .. }
         | JobRequest::CreateModel { source, .. } => source.locations.clone(),
-        JobRequest::Concat { inputs, .. } => {
-            for input in inputs {
-                if !matches!(input.location, ObjectLocation::Bucket { .. }) {
-                    return Err("concat inputs must be bucket objects".into());
-                }
-            }
-            inputs.iter().map(|input| input.location.clone()).collect()
-        }
     };
     Ok((request, sources))
 }
@@ -301,81 +284,6 @@ pub fn plan_job(
                 group_bytes: plan.metrics.estimated_group_bytes,
             })
         }
-        JobRequest::Concat {
-            bucket,
-            key,
-            inputs,
-            ..
-        } => {
-            if footers.len() != inputs.len() {
-                return Err(format!(
-                    "concat has {} inputs, {} footers",
-                    inputs.len(),
-                    footers.len()
-                ));
-            }
-            if let Some(range) = inputs.iter().find_map(|input| input.row_groups.clone()) {
-                // A row-group range is a split: copy those chunks unchanged under the
-                // source's own footer, rewritten for the part.
-                let [footer] = footers else {
-                    return Err("a rowGroups split takes exactly one input".into());
-                };
-                let split = crate::plan::footer_split::split_row_groups(
-                    &footer.footer,
-                    &footer.plan,
-                    range,
-                )?;
-                let program = crate::plan::page_compaction::encode_page_copy_wire(
-                    &split.row_groups,
-                    &footer.plan.leaves,
-                    Some(&split.footer),
-                )?;
-                return Ok(JobPlan::Concat {
-                    bucket: bucket.clone(),
-                    key: key.clone(),
-                    programs: vec![program],
-                });
-            }
-            let mut joined = String::new();
-            let files = inputs
-                .iter()
-                .zip(footers)
-                .map(|(input, footer)| {
-                    let ObjectLocation::Bucket { key, .. } = &input.location else {
-                        return Err("concat inputs must be bucket objects".to_string());
-                    };
-                    joined.push_str(key);
-                    joined.push('\0');
-                    Ok(CompactionInputFile {
-                        object_key: key.clone(),
-                        file_size: footer.file_size,
-                        plan: footer.plan.clone(),
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let source = SourceVersion {
-                object_key_hash: xxhash_rust::xxh3::xxh3_64(joined.as_bytes()),
-            };
-            let shards: Vec<CommittedParquetShard> = files
-                .iter()
-                .map(|file| CommittedParquetShard {
-                    object_key: file.object_key.clone(),
-                    file_size: file.file_size,
-                    plan: file.plan.clone(),
-                })
-                .collect();
-            let (_planned, program) = concat_parquet_row_groups(
-                source,
-                key,
-                &shards,
-                &ConcatPolicy::standalone_compaction(),
-            )?;
-            Ok(JobPlan::Concat {
-                bucket: bucket.clone(),
-                key: key.clone(),
-                programs: vec![program],
-            })
-        }
     }
 }
 
@@ -462,7 +370,6 @@ pub fn job_sources_json(request: &JobRequest, sources: &[ObjectLocation]) -> Str
     let kind = match request {
         JobRequest::Json { .. } => "json",
         JobRequest::Parquet { .. } => "parquet",
-        JobRequest::Concat { .. } => "concat",
         JobRequest::CreateModel { .. } => "model",
     };
     let sources: Vec<serde_json::Value> = sources
@@ -562,7 +469,6 @@ fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 /// Host wire: `u8` kind, then
 /// - `0` json: `u32` row cap, bytes graph;
 /// - `1` parquet: str bucket, str prefix, bytes graph;
-/// - `2` concat: str bucket, str key, `u32` count, bytes program each;
 /// - `3` model: str name, options, bytes graph;
 /// - `4` late rows: `u32` row cap, bytes graph (the pick).
 ///
@@ -605,19 +511,6 @@ pub fn encode_job_plan(plan: &JobPlan) -> Vec<u8> {
             push_bytes(&mut out, prefix.as_bytes());
             push_bytes(&mut out, &encode_graph_with_columns(exec, columns));
             out.extend_from_slice(&group_bytes.to_le_bytes());
-        }
-        JobPlan::Concat {
-            bucket,
-            key,
-            programs,
-        } => {
-            out.push(2);
-            push_bytes(&mut out, bucket.as_bytes());
-            push_bytes(&mut out, key.as_bytes());
-            out.extend_from_slice(&(programs.len() as u32).to_le_bytes());
-            for program in programs {
-                push_bytes(&mut out, program);
-            }
         }
         JobPlan::CreateModel {
             exec,

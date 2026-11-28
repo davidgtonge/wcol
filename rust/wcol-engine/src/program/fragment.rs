@@ -14,8 +14,8 @@ use crate::ir::Scalar;
 use crate::program::codec::{
     decode_agg, decode_predicate, decode_scalar_list, decode_sort_key, encode_agg,
     encode_predicate, encode_scalar_list, encode_sort_key, push_str, push_u32, push_u64, push_var,
-    push_var_signed, read_str, read_u32, read_u64, read_var, read_var_signed, read_var_u32,
-    LogicalWireError,
+    push_var_signed, read_list, read_str, read_u32, read_u64, read_u8, read_var, read_var_signed,
+    read_var_u32, LogicalWireError,
 };
 use crate::program::ingest::{IngestGroup, IngestGroupChunk};
 use crate::program::stream_program::{encode_catalog, PlanCursor, OP_NODE_FRAGMENT, PLAN_V2};
@@ -190,7 +190,7 @@ impl NodeFragment {
     }
 }
 
-/// A complete `wcs_open` program that runs `fragment` on one worker ([`OP_NODE_FRAGMENT`]).
+/// A complete stream-pool program (`wcs_sp_open_graph`) that runs `fragment` on one worker ([`OP_NODE_FRAGMENT`]).
 ///
 /// [`OP_NODE_FRAGMENT`]: crate::program::stream_program::OP_NODE_FRAGMENT
 pub fn encode_node_fragment_program(
@@ -518,24 +518,6 @@ pub fn decode_node_fragment(bytes: &[u8]) -> Result<NodeFragment, FragmentError>
         claim_units,
         own_units,
     })
-}
-
-fn read_u8(cur: &mut &[u8]) -> Result<u8, LogicalWireError> {
-    let byte = *cur.first().ok_or(LogicalWireError::UnexpectedEnd)?;
-    *cur = &cur[1..];
-    Ok(byte)
-}
-
-fn read_list<T>(
-    cur: &mut &[u8],
-    mut item: impl FnMut(&mut &[u8]) -> Result<T, LogicalWireError>,
-) -> Result<Vec<T>, LogicalWireError> {
-    let count = read_u32(cur)? as usize;
-    // Every item is at least one byte, so a count beyond the input is corrupt.
-    if count > cur.len() {
-        return Err(LogicalWireError::UnexpectedEnd);
-    }
-    (0..count).map(|_| item(cur)).collect()
 }
 
 fn read_var_list<T>(
@@ -872,12 +854,7 @@ fn decode_step(cur: &mut &[u8]) -> Result<FragmentStep, LogicalWireError> {
             let splits = if cur.is_empty() {
                 Vec::new()
             } else {
-                let count = read_u32(cur)? as usize;
-                let mut splits = Vec::with_capacity(count);
-                for _ in 0..count {
-                    splits.push(decode_scalar_list(cur)?);
-                }
-                splits
+                read_list(cur, decode_scalar_list)?
             };
             FragmentStep::RangePartition {
                 keys,

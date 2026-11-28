@@ -50,8 +50,8 @@ export async function instantiateWorkerWasm(
   if (role === "node" && exports.wcol_plan_query) {
     throw new Error("node wasm must not export the planner");
   }
-  if (role === "coordinator" && (!exports.wcol_plan_query || !exports.wcol_reduce_open)) {
-    throw new Error("coordinator wasm is missing plan or reduce exports");
+  if (role === "coordinator" && !exports.wcol_plan_query) {
+    throw new Error("coordinator wasm is missing the planner exports");
   }
   return exports;
 }

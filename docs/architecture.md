@@ -8,11 +8,11 @@ WCOL runs a SQL query over Parquet in R2 as a graph of tasks spread over Durable
 |---|---|---|
 | Front Worker | `cloudflare/src/worker.ts` | Serves the console, checks the API token, and routes `/jobs` to the job's coordinator |
 | Coordinator | `WcolCoordinator` DO, one per job, coordinator Wasm | Reads the source footers, plans the job, runs the graph, finalizes the result and publishes it |
-| Nodes | `WcolNode` DOs, node Wasm | Run scan and reducer tasks. A slot number names each one, so a job reuses the same objects |
+| Nodes | `WcolNode` DOs, node Wasm | Run scan and reducer tasks. Each object is named by job, attempt and slot (`graph:{job}:a{attempt}:s{slot}`), so every attempt gets fresh objects |
 | Container reducers | `WcolReducer` DO and container, `rust/wcol-reducer` | A hash reducer with the instance's memory and local-disk spill, for large group state |
 | R2 | one bucket, bound as `OUTPUT` | Source Parquet, spill runs, async results, Parquet output and manifests |
 
-The node Wasm has no planner and the coordinator Wasm has no scan code, so each stays small (the node module is about 1.1 MB, 430 KB gzipped). The build script fails if the node Wasm grows past its budget or exports a planner symbol.
+The node Wasm has no planner and the coordinator Wasm has no scan code, so each stays small (the node module is about 1.2 MB, 440 KB gzipped). The build script fails if the node Wasm grows past its budget or exports a planner symbol.
 
 ## A query, end to end
 
@@ -23,7 +23,7 @@ The node Wasm has no planner and the coordinator Wasm has no scan code, so each 
    - **Metadata only.** `COUNT(*)`, or `MIN`/`MAX` of an integer column whose every chunk has statistics: answered from the footer. Nothing is scanned.
    - **Gather.** Scans aggregate their share, and the coordinator merges what they send. This is used when the group state fits in one place.
    - **Hash.** Scans partition their partial aggregates by key hash, and send each partition to its reducer. Reducers merge, and the coordinator's finalizer reads their outputs. The planner chooses a power-of-two reducer count from its estimate of group state.
-5. The coordinator runs the graph. Scans claim row groups at run time: each scan has a queue dealt by cost, and steals from the fullest queue when its own runs out. Slow scans therefore shed their tails to fast ones.
+5. The coordinator runs the graph. Scans claim row groups at run time. The planner deals each scan a queue of units by cost, heaviest first, and every claim hands out the front of the fullest queue in the scan's group (its own on a tie). Heavy units start early on whichever scan has room, and the last units handed out are the lightest, so a slow scan finishes on light work.
 6. The finalizer sorts, limits and formats. A `json` job answers inline if it finishes within the sync budget, and otherwise stores the result in R2 for `GET /jobs/{id}`. Parquet output is committed by publishing a manifest.
 
 ## Inside a task
@@ -38,7 +38,7 @@ The node Wasm has no planner and the coordinator Wasm has no scan code, so each 
 
 A job runs as numbered attempts. An attempt claims a lease in the coordinator's SQLite storage, and every task and edge carries the attempt number. A node refuses work from an attempt that is not current, so a superseded attempt cannot commit. Each attempt writes outputs under its own keys. Publication (the result record, or the Parquet manifest) is the commit, and it is a separate step that can be retried.
 
-When a task fails, the attempt fails as a whole. Recovery is a planning step: the coordinator reads the persisted graph and starts a new attempt through the same runner. A stall watchdog fails an attempt that makes no progress. A job fails after three attempts.
+When a task fails, the attempt fails as a whole. Recovery is a planning step: the coordinator reads the persisted graph and starts a new attempt through the same runner. Any other task failure starts a new attempt, up to three in all. A fatal error (one that would recur on the same bytes, such as a result too large for a JSON answer) and a stall (an attempt that makes no progress) fail the job at once.
 
 ## Idle cost
 

@@ -9,7 +9,7 @@ license = "MIT"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
-wcol-engine = { path = "../wcol-engine", features = ["reduce-ffi", "coordinator-iterative-ffi"] }
+wcol-engine = { path = "../wcol-engine", features = ["coordinator-iterative-ffi"] }
 wcol-plan = { path = "../wcol-plan" }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
@@ -143,9 +143,6 @@ path = "tests/parquet/legacy_encodings.rs"
 [[test]]
 name = "hits_adv_engine_id_parity"
 path = "tests/parquet/hits_adv_engine_id_parity.rs"
-[[test]]
-name = "hits_adv_engine_id_diff"
-path = "tests/parquet/hits_adv_engine_id_diff.rs"
 
 [[test]]
 name = "fetch_stage_plan_reads"
@@ -190,3 +187,6 @@ path = "tests/runtime/parquet_export_graph.rs"
 [[test]]
 name = "job_plan"
 path = "tests/runtime/job_plan.rs"
+[[test]]
+name = "parquet_malformed_pages"
+path = "tests/parquet/malformed_pages.rs"

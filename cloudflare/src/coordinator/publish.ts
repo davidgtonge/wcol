@@ -139,7 +139,6 @@ export async function failJob(ctx: GraphJobContext, jobId: string, message: stri
     current.error = message.slice(0, 500);
     current.updatedAt = Date.now();
     current.leaseUntil = 0;
-    current.publishing = undefined;
     await txn.put(jobKey(jobId), current);
   });
   // Sweep only on the transition: a completed job's outputs are its result.

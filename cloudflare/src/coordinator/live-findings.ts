@@ -2,6 +2,7 @@
  * What a finished job's view says about where its time went, in plain sentences: the checks
  * that explained slow runs by hand (cold starts, stragglers, skew). Pure, from `LiveJobView`.
  */
+import { bytes, median, percent, seconds, taskName } from "../format.ts";
 import type { LiveJobView, LiveTask } from "./live.ts";
 
 export type Finding = { level: "info" | "warn"; text: string };
@@ -13,26 +14,7 @@ const STRAGGLER_MS = 1500;
 /** A reducer with this multiple of the median input is skewed. */
 const SKEW_RATIO = 1.5;
 
-const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
-const percent = (part: number, whole: number) => `${Math.round((100 * part) / Math.max(whole, 1))}%`;
-
-function median(values: readonly number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted.length === 0 ? 0 : (sorted[Math.floor(sorted.length / 2)] ?? 0);
-}
-
-function bytes(value: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let n = value;
-  let unit = 0;
-  while (n >= 1000 && unit < units.length - 1) {
-    n /= 1000;
-    unit++;
-  }
-  return `${n >= 100 || unit === 0 ? Math.round(n) : n.toFixed(1)} ${units[unit]}`;
-}
-
-const label = (task: LiveTask) => (task.role === "scan" ? `s${task.index}` : task.role === "reducer" ? `r${task.index}` : "the finalizer");
+const label = (task: LiveTask) => (task.role === "scan" || task.role === "reducer" ? taskName(task) : "the finalizer");
 
 export function findings(view: LiveJobView): Finding[] {
   if (view.state !== "completed") return [];

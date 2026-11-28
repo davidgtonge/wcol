@@ -1,8 +1,5 @@
-import { streamWasmExports, type WcolStreamWasm } from "./wasm-stream.ts";
+import { streamWasmExports, type PoolWasm, type WcolStreamWasm } from "./wasm-stream.ts";
 import { streamWasmImports } from "./wasm-imports.ts";
-
-export type { PhaseMark } from "./wasm-imports.ts";
-export { setPhaseSink, streamWasmImports } from "./wasm-imports.ts";
 
 function nodeSpecifier(name: string): string {
   return ["node", name].join(":");
@@ -87,7 +84,7 @@ export function wasmMemoryOffset(ptr: number): number {
   return ptr >>> 0;
 }
 
-export function wasmMemoryU8(wasm: WcolStreamWasm, ptr: number, byteLength: number): Uint8Array {
+export function wasmMemoryU8(wasm: Pick<PoolWasm, "memory">, ptr: number, byteLength: number): Uint8Array {
   if (byteLength <= 0) return new Uint8Array();
   const offset = wasmMemoryOffset(ptr);
   const buffer = wasm.memory.buffer;
@@ -99,31 +96,22 @@ export function wasmMemoryU8(wasm: WcolStreamWasm, ptr: number, byteLength: numb
   return new Uint8Array(buffer, offset, byteLength);
 }
 
-export function decodeWasmUtf8(wasm: WcolStreamWasm, ptr: number, len: number): string {
+function decodeWasmUtf8(wasm: PoolWasm, ptr: number, len: number): string {
   if (!ptr || !len) return "";
   return new TextDecoder().decode(wasmMemoryU8(wasm, ptr, len));
 }
 
 /** Memory is filled in after instantiate. The trace import reads it synchronously. */
-async function instantiateWithTrace(source: Uint8Array | WebAssembly.Module): Promise<WcolStreamWasm> {
+async function instantiateWithTrace(source: Uint8Array): Promise<WcolStreamWasm> {
   const bind: { memory?: WebAssembly.Memory } = {};
   const imports = streamWasmImports(bind);
-  const instance =
-    source instanceof WebAssembly.Module
-      ? await WebAssembly.instantiate(source, imports)
-      : (await WebAssembly.instantiate(source as Uint8Array<ArrayBuffer>, imports)).instance;
+  const { instance } = await WebAssembly.instantiate(source as Uint8Array<ArrayBuffer>, imports);
   const exports = streamWasmExports(instance);
   bind.memory = exports.memory;
   return exports;
 }
 
 /** Last error from a stateless Wasm FFI call (reduce, partial helpers, stream-pool open). */
-export function readWasmLastError(wasm: WcolStreamWasm, fallback: string): string {
-  if (wasm.wcs_last_error_ptr && wasm.wcs_last_error_len) {
-    const ptr = wasm.wcs_last_error_ptr();
-    const n = wasm.wcs_last_error_len();
-    const message = decodeWasmUtf8(wasm, ptr, n);
-    if (message) return message;
-  }
-  return fallback;
+export function readWasmLastError(wasm: PoolWasm, fallback: string): string {
+  return decodeWasmUtf8(wasm, wasm.wcs_last_error_ptr(), wasm.wcs_last_error_len()) || fallback;
 }

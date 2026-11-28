@@ -46,6 +46,8 @@ class_name = "WcolReducer"
 name = "wcol-reducer"
 class_name = "WcolReducer"
 scheduling_policy = "durable_object"
+# One job at the reducer cap (`WCOL_MAX_REDUCERS` in wrangler.toml), or two at the default 64.
+max_instances = 128
 
 [containers.images.reducer]
 dockerfile = "./reducer/Dockerfile"

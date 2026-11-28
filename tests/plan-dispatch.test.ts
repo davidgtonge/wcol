@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { planQueryDispatch, readParquetFooter, resultJson } from "../src/runtime/coordinator/plan-dispatch.ts";
-import { runNodeProgram, runPlannedQuery } from "../src/runtime/coordinator/run-local-graph.ts";
+import { runNodeProgram, runPlannedQuery } from "./helpers/run-local-graph.ts";
 import { loadCoordinatorWasm, loadNodeWasm } from "../src/runtime/host/wasm.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");

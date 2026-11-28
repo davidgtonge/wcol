@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { loadNodeWasm } from "../src/runtime/host/wasm.ts";
 import { createStreamPool, type StreamPool } from "../src/runtime/host/stream-pool.ts";
-import { pumpReadableToWriter, READ_AT_LEAST_BYTES } from "../src/runtime/host/pool-streams.ts";
+import { pumpReadableToWriter } from "../src/runtime/host/pool-streams.ts";
 import { readableFrom } from "./helpers/streams.ts";
 
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array[]> {
@@ -74,26 +74,6 @@ test("echo pool: write() backpressure until slot frees", async () => {
   assert.equal(resolved, 1);
   await writer.close();
   await reader.read();
-  await pool.finished;
-  await shutdownPool(pool);
-});
-
-test("pumpReadableToWriter BYOB buffer is not wasm memory", async () => {
-  const wasm = await loadNodeWasm();
-  const pool = createStreamPool({
-    inputs: 1,
-    inputSize: 64,
-    outputs: 1,
-    outputSize: 64,
-    wasm,
-    echo: true,
-  });
-  const mem = wasm.memory.buffer;
-  const source = readableFrom([new Uint8Array([42])]);
-  await pumpReadableToWriter(source, pool.inputStreams[0]!.getWriter());
-  assert.notEqual(new Uint8Array(READ_AT_LEAST_BYTES).buffer, mem);
-  const out = await readAll(pool.outputStreams[0]!);
-  assert.deepEqual(out[0], new Uint8Array([42]));
   await pool.finished;
   await shutdownPool(pool);
 });

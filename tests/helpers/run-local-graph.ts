@@ -1,41 +1,38 @@
 /**
- * Run one planned job in this process. Rust chooses ports and reads.
+ * Test harness: run one planned job in this process. Rust chooses ports and reads.
  * TypeScript copies bytes from the file and between tasks.
  */
 
-import { COORDINATOR_SLOT, edgesInto, type ExecutionPlan } from "./execution-graph.ts";
-import { runWcolEngine } from "../host/run-wcol-engine.ts";
-import { concatBytes } from "../host/bytes.ts";
-import { attachBytesInputs } from "../host/pool-streams.ts";
-import { planQueryDispatch, type ReadAt } from "./plan-dispatch.ts";
-import type { WcolStreamWasm } from "../host/wasm-stream.ts";
-import { type LocalSpillR2, runLocalHashGraph } from "./run-local-hash-graph.ts";
-import { claimingReadAt, localWork } from "./unit-claims.ts";
-import { createMemoryR2SpillBucket } from "../../../tests/helpers/memory-r2-spill-bucket.ts";
+import { COORDINATOR_SLOT, edgesInto, type ExecutionPlan } from "../../src/runtime/coordinator/execution-graph.ts";
+import { runWcolEngine } from "../../src/runtime/host/run-wcol-engine.ts";
+import { concatBytes } from "../../src/runtime/host/bytes.ts";
+import { attachBytesInputs } from "../../src/runtime/host/pool-streams.ts";
+import { planQueryDispatch, type ReadAt } from "../../src/runtime/coordinator/plan-dispatch.ts";
+import type { GraphWasm, WcolStreamWasm } from "../../src/runtime/host/wasm-stream.ts";
+import type { R2OutputBucket } from "../../src/runtime/host/ports/r2-bucket.ts";
+import { runLocalHashGraph } from "./run-local-hash-graph.ts";
+import { claimingReadAt, localWork } from "../../src/runtime/coordinator/unit-claims.ts";
+import { createMemoryR2SpillBucket } from "./memory-r2-spill-bucket.ts";
 
-export type LocalGraphWasm = {
-  node: WcolStreamWasm;
-  coordinator: WcolStreamWasm;
-};
+export type LocalGraphWasm = GraphWasm;
 
 async function runTask(
   wasm: WcolStreamWasm,
   program: Uint8Array,
   readAt: ReadAt | undefined,
   inputs: Uint8Array[],
-  spillR2Bucket: LocalSpillR2,
+  spillR2Bucket: R2OutputBucket,
   next: () => number | null = () => null,
 ): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   // One source here; a scan with claim units asks for its next unit through the same ReadAt.
-  const read = readAt ? claimingReadAt(async (_source, offset, length) => readAt(Number(offset), length), next) : undefined;
+  const read = readAt ? claimingReadAt((_source, offset, length) => readAt(offset, length), next) : undefined;
   await runWcolEngine({
     wasm,
     plan: program,
     scratchBytes: 1024 * 1024,
     layout: { inputs: inputs.length, outputs: 1 },
     onPoolReady: attachBytesInputs(inputs),
-    readAt: read,
     host: {
       readAt: read,
       writePort: async (_port, chunk) => {
@@ -48,12 +45,12 @@ async function runTask(
   return concatBytes(parts);
 }
 
-/** Gather plan: each task runs after its producers, on the ABI v1 loop. */
+/** Gather plan: each task runs after its producers, one at a time. */
 export async function runGatherGraph(
   wasm: LocalGraphWasm,
   plan: Extract<ExecutionPlan, { kind: "graph" }>,
   readAt: ReadAt,
-  spillR2Bucket: LocalSpillR2 = createMemoryR2SpillBucket(),
+  spillR2Bucket: R2OutputBucket = createMemoryR2SpillBucket(),
 ): Promise<Uint8Array> {
   const outputs = new Map<number, Uint8Array>();
   const pending = new Set(plan.tasks.map((task) => task.id));
@@ -141,13 +138,12 @@ export async function runNodeProgram(
 ): Promise<void> {
   // With no other scan to steal from, a scan runs exactly its own planned units.
   const units = [...ownUnits];
-  const read = claimingReadAt(async (_source, offset, length) => readAt(Number(offset), length), () => units.shift() ?? null);
+  const read = claimingReadAt((_source, offset, length) => readAt(offset, length), () => units.shift() ?? null);
   await runWcolEngine({
     wasm,
     plan: program,
     scratchBytes: 256 * 1024,
     layout: { inputs: 0, outputs: 1 },
-    readAt: read,
     host: {
       readAt: read,
       writePort: async () => {},

@@ -1,4 +1,4 @@
-//! HyperLogLog sketch for `approx_count_distinct`, ported from the `.wcol` file engine.
+//! HyperLogLog sketch for `approx_count_distinct`.
 //!
 //! Precision is fixed at p = 14 (16 384 registers, ~0.8% standard error) so sketches from any
 //! worker merge. Values are hashed as `i64` with xxh3, whatever their Parquet width, so shards

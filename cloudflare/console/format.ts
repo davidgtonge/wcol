@@ -1,17 +1,5 @@
 /** Formatting and small helpers shared by the console's panels. */
-
-export function bytes(value: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let n = value;
-  let unit = 0;
-  while (n >= 1000 && unit < units.length - 1) {
-    n /= 1000;
-    unit++;
-  }
-  return `${n >= 100 || unit === 0 ? Math.round(n) : n.toFixed(1)} ${units[unit]}`;
-}
-
-export const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+export { bytes, median, seconds, taskName } from "../src/format.ts";
 
 export function usd(value: number): string {
   if (value === 0) return "$0";
@@ -28,11 +16,6 @@ export function element<T extends Element>(id: string): T {
   if (!found) throw new Error(`console markup has no #${id}`);
   return found as unknown as T;
 }
-
-export const median = (values: readonly number[]): number => {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted.length === 0 ? 0 : (sorted[Math.floor(sorted.length / 2)] ?? 0);
-};
 
 /** The theme's colours, read from CSS variables so canvas drawing follows light and dark. */
 export type Palette = Record<"ink" | "muted" | "line" | "panel" | "accent" | "accentSoft" | "ok" | "okSoft" | "warn" | "bad" | "idle" | "purple", string>;
@@ -71,6 +54,3 @@ export function fitCanvas(canvas: HTMLCanvasElement, height: number): { ctx: Can
   ctx.clearRect(0, 0, width, height);
   return { ctx, width, height };
 }
-
-export const taskName = (task: { role: string; index: number }) =>
-  task.role === "scan" ? `s${task.index}` : task.role === "reducer" ? `r${task.index}` : "finalizer";

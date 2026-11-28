@@ -57,10 +57,6 @@ pub fn float_text_literal(text: &str) -> Option<f64> {
     }
 }
 
-pub fn column_is_float(physical: i32) -> bool {
-    matches!(physical, 4 | 5)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

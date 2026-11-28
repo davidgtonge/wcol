@@ -535,7 +535,7 @@ fn dict_stream(text: &[u8]) -> Vec<u8> {
     );
     batch.set_row_count(1).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     egress.push_end().unwrap();
     egress.drain_to_vec().unwrap()
 }

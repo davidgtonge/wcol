@@ -23,18 +23,8 @@ pub(super) struct Linear {
     pub(super) steps: Vec<Step>,
 }
 
-pub(super) enum Input {
-    Scan(Linear),
-    Join {
-        left: Linear,
-        right: Linear,
-        left_keys: Vec<u32>,
-        right_keys: Vec<u32>,
-    },
-}
-
 pub(super) struct Shape {
-    pub(super) input: Input,
+    pub(super) scan: Linear,
     pub(super) aggregate: Option<AggSpec>,
     pub(super) after: Vec<After>,
 }
@@ -51,22 +41,8 @@ pub(super) fn analyze(op: &LogicalOp) -> Result<Shape, PlanError> {
                 return Err(PlanError::Unsupported("empty aggregate"));
             }
             check_agg_args(aggregates)?;
-            let input = match input.as_ref() {
-                LogicalOp::Join {
-                    left,
-                    right,
-                    left_keys,
-                    right_keys,
-                } => Input::Join {
-                    left: linear(left)?,
-                    right: linear(right)?,
-                    left_keys: left_keys.clone(),
-                    right_keys: right_keys.clone(),
-                },
-                other => Input::Scan(linear(other)?),
-            };
             Shape {
-                input,
+                scan: linear(input)?,
                 aggregate: Some(AggSpec {
                     group_by: group_by.clone(),
                     aggregates: aggregates.clone(),
@@ -74,23 +50,8 @@ pub(super) fn analyze(op: &LogicalOp) -> Result<Shape, PlanError> {
                 after,
             }
         }
-        LogicalOp::Join {
-            left,
-            right,
-            left_keys,
-            right_keys,
-        } => Shape {
-            input: Input::Join {
-                left: linear(left)?,
-                right: linear(right)?,
-                left_keys: left_keys.clone(),
-                right_keys: right_keys.clone(),
-            },
-            aggregate: None,
-            after,
-        },
         other => Shape {
-            input: Input::Scan(linear(other)?),
+            scan: linear(other)?,
             aggregate: None,
             after,
         },
@@ -119,9 +80,7 @@ pub(super) fn metadata_answer(
     if !shape.after.is_empty() || !agg.group_by.is_empty() || agg.aggregates.is_empty() {
         return Ok(None);
     }
-    let Input::Scan(linear) = &shape.input else {
-        return Ok(None);
-    };
+    let linear = &shape.scan;
     if linear
         .steps
         .iter()
@@ -306,33 +265,10 @@ pub(super) fn linear(op: &LogicalOp) -> Result<Linear, PlanError> {
 }
 
 pub(super) fn check_shape(shape: &Shape) -> Result<(), PlanError> {
-    match &shape.input {
-        Input::Scan(scan) => {
-            let available = output_columns(scan)?;
-            if let Some(agg) = &shape.aggregate {
-                require_columns(&agg.group_by, &available)?;
-                require_agg_columns(&agg.aggregates, &available)?;
-            }
-        }
-        Input::Join {
-            left,
-            right,
-            left_keys,
-            right_keys,
-        } => {
-            let left_cols = output_columns(left)?;
-            let right_cols = output_columns(right)?;
-            require_columns(left_keys, &left_cols)?;
-            require_columns(right_keys, &right_cols)?;
-            if let Some(agg) = &shape.aggregate {
-                require_one_side(&agg.group_by, &left_cols, &right_cols)?;
-                for expr in &agg.aggregates {
-                    if let Some(column) = expr.column {
-                        require_one_side(&[column], &left_cols, &right_cols)?;
-                    }
-                }
-            }
-        }
+    let available = output_columns(&shape.scan)?;
+    if let Some(agg) = &shape.aggregate {
+        require_columns(&agg.group_by, &available)?;
+        require_agg_columns(&agg.aggregates, &available)?;
     }
     Ok(())
 }
@@ -378,23 +314,6 @@ pub(super) fn require_agg_columns(
     for agg in aggregates {
         if let Some(column) = agg.column {
             require_columns(&[column], available)?;
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn require_one_side(
-    columns: &[u32],
-    left: &[u32],
-    right: &[u32],
-) -> Result<(), PlanError> {
-    for column in columns {
-        let on_left = left.contains(column);
-        let on_right = right.contains(column);
-        if on_left == on_right {
-            return Err(PlanError::Unsupported(
-                "aggregate column must belong to exactly one join input",
-            ));
         }
     }
     Ok(())

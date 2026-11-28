@@ -127,16 +127,13 @@ fn grouped_plan(nodes: &[NodeId]) -> WcolPhysicalPlan {
 
 #[test]
 fn whole_group_distinct_is_ranked_on_reducers() {
-    // Q13 on the full hits footer: each phrase is whole on one reducer, so the reducers
-    // rank its distinct count; without a rank they would send every phrase.
-    let path =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits.footer.bin");
-    let Ok(bytes) = std::fs::read(&path) else {
-        return;
-    };
-    let footer = crate::formats::parquet::plan_footer(&bytes).unwrap();
+    // Q13 on the hits sample: each phrase is whole on one reducer, so the reducers rank its
+    // distinct count; without a rank they would send every phrase.
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/hits_subset_500k.parquet");
+    let footer = crate::formats::parquet::open_plan(&path).unwrap().1;
     let mut config = crate::plan::PhysicalPlannerConfig::for_coordinator(32);
-    config.hash_aggregate.reducers = Some(64);
+    config.hash_aggregate.reducers = Some(4);
     let rank = |sql: &str| {
         let (_, plan) =
             crate::plan::plan_query_dispatch(sql, "hits", &footer, 32, 1024, &config).unwrap();

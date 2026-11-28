@@ -7,13 +7,9 @@ export type SharedBytePool = {
   readonly maxBytes: number;
   readonly used: number;
   readonly peakUsed: number;
-  /** Alias of {@link peakUsed} for demux tests. */
-  readonly peak: number;
   tryAcquire(bytes: number): boolean;
   acquire(bytes: number): Promise<void>;
   release(bytes: number): void;
-  /** Wake when used may have dropped (non-acquiring wait). */
-  wait(): Promise<void>;
   abort(reason?: unknown): void;
 };
 
@@ -50,9 +46,6 @@ export function createSharedBytePool(maxBytes: number): SharedBytePool {
     get peakUsed() {
       return peakUsed;
     },
-    get peak() {
-      return peakUsed;
-    },
     tryAcquire,
     async acquire(bytes: number) {
       for (;;) {
@@ -65,9 +58,6 @@ export function createSharedBytePool(maxBytes: number): SharedBytePool {
       if (bytes <= 0) return;
       used = Math.max(0, used - bytes);
       wake();
-    },
-    wait() {
-      return new Promise<void>((resolve) => waiters.push(resolve));
     },
     abort(reason?: unknown) {
       aborted ??= reason ?? new Error("byte pool aborted");

@@ -104,7 +104,7 @@ describe("reducer progresses with unattached scan ports", { concurrency: 1 }, ()
     };
     const runnable = (id: number): RunnableTask => {
       const task = taskOf(id);
-      return { taskId: id, slot: task.slot, program: task.program, producers: [] };
+      return { taskId: id, slot: task.slot, program: task.program };
     };
     const destinations: HashScanDestination[] = reducers.map((reducer) => ({
       partition: reducer.partition,

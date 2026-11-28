@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { planJob, readParquetFooter, resultJson } from "../src/runtime/coordinator/plan-dispatch.ts";
-import { runLocalHashGraph } from "../src/runtime/coordinator/run-local-hash-graph.ts";
+import { runLocalHashGraph } from "./helpers/run-local-hash-graph.ts";
 import { loadCoordinatorWasm, loadNodeWasm } from "../src/runtime/host/wasm.ts";
 import { createMemoryR2SpillBucket } from "./helpers/memory-r2-spill-bucket.ts";
 import { createStreamPool } from "../src/runtime/host/stream-pool.ts";

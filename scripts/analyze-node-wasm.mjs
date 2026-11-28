@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { PLANNER_EXPORTS, wasmExportNames } from "./node-wasm-exports.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rustDir = path.join(ROOT, "rust");
@@ -18,7 +19,6 @@ const distWasm = path.join(ROOT, "cloudflare/dist/wcol_node.wasm");
 const analyzeWasm = path.join(rustDir, "target/wasm32-unknown-unknown/release/wcol_node.analyze.wasm");
 const skipBuild = process.argv.includes("--skip-build");
 
-const PLANNER_EXPORTS = new Set(["wcol_plan_query", "wcol_plan_output_ptr", "wcol_columns_for_sql"]);
 
 function run(cmd, args, opts = {}) {
   return execFileSync(cmd, args, { encoding: "utf8", ...opts }).trimEnd();
@@ -46,42 +46,6 @@ function buildAnalyzeWasm() {
   );
   const built = path.join(rustDir, "target/wasm32-unknown-unknown/release/wcol_node.wasm");
   fs.copyFileSync(built, analyzeWasm);
-}
-
-function wasmExportNames(bin) {
-  if (bin[0] !== 0 || bin[1] !== 0x61 || bin[2] !== 0x73 || bin[3] !== 0x6d) {
-    throw new Error("not a wasm module");
-  }
-  let at = 8;
-  const readUleb = () => {
-    let value = 0;
-    let shift = 0;
-    for (;;) {
-      const byte = bin[at++];
-      value |= (byte & 0x7f) << shift;
-      if ((byte & 0x80) === 0) return value;
-      shift += 7;
-    }
-  };
-  while (at < bin.length) {
-    const id = bin[at++];
-    const size = readUleb();
-    const end = at + size;
-    if (id === 7) {
-      const count = readUleb();
-      const names = [];
-      for (let i = 0; i < count; i++) {
-        const len = readUleb();
-        names.push(Buffer.from(bin.subarray(at, at + len)).toString("utf8"));
-        at += len;
-        at += 1;
-        readUleb();
-      }
-      return names;
-    }
-    at = end;
-  }
-  return [];
 }
 
 function parseSectionSizes(wasmPath) {
@@ -171,7 +135,7 @@ const unexpected = unexpectedDeps(tree);
 const prodSections = prodBin ? parseSectionSizes(distWasm) : null;
 const analyzeSections = parseSectionSizes(analyzeWasm);
 const exports = wasmExportNames(prodBin ?? analyzeBin);
-const plannerOnNode = exports.filter((name) => PLANNER_EXPORTS.has(name));
+const plannerOnNode = exports.filter((name) => PLANNER_EXPORTS.includes(name));
 const reduceOnNode = exports.filter((name) => name.startsWith("wcol_reduce_"));
 
 const twiggy = twiggyBreakdown(analyzeWasm);

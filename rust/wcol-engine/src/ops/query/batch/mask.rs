@@ -1,5 +1,4 @@
-//! Packed row masks (`u32` words, bit `i & 31` of word `i >> 5`), ported from the `.wcol`
-//! file kernels and generalised from fixed-size chunks to any batch length.
+//! Packed row masks (`u32` words, bit `i & 31` of word `i >> 5`) over any batch length.
 
 /// Words needed for `rows` rows.
 #[inline]

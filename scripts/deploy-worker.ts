@@ -28,7 +28,7 @@ function deploy(config: string, vars: Record<string, string> = {}): string {
   return `${result.stdout}\n${result.stderr}`;
 }
 
-await buildWorkers("prod");
+await buildWorkers();
 const wasmBuild = wasmBuildId();
 console.log(`WCOL_NODE_WASM_BUILD=${wasmBuild}`);
 // Both workers name node DOs: the coordinator prepares reducers, scans on the node
@@ -36,13 +36,8 @@ console.log(`WCOL_NODE_WASM_BUILD=${wasmBuild}`);
 // Nodes from an earlier deploy reset themselves when the coordinator's id differs.
 const deployId = `${Date.now().toString(36)}-${wasmBuild.slice(0, 8)}`;
 deploy("wrangler.node.toml", { WCOL_NODE_WASM_BUILD: wasmBuild, WCOL_DEPLOY_ID: deployId });
-const output = deploy("wrangler.toml", {
-  WCOL_NODE_WASM_BUILD: wasmBuild,
-  WCOL_DEPLOY_ID: deployId,
-  WCOL_DISPATCH_CONCURRENCY: process.env.WCOL_DISPATCH_CONCURRENCY ?? "32",
-  // High-cardinality spill can go minutes between progress without a yield heartbeat.
-  WCOL_STALL_MS: process.env.WCOL_STALL_MS ?? "300000",
-});
+// Every other var is in the wrangler tomls; only the deploy's own identity is set here.
+const output = deploy("wrangler.toml", { WCOL_NODE_WASM_BUILD: wasmBuild, WCOL_DEPLOY_ID: deployId });
 const url = output.match(/https:\/\/[a-z0-9.-]+\.workers\.dev/i);
 console.log(url ? url[0] : "deployed (no workers.dev URL in output)");
 const secrets = spawnSync("npx", ["wrangler", "secret", "list", "--config", "wrangler.toml"], {

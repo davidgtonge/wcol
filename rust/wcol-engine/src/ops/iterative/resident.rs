@@ -267,7 +267,10 @@ impl ResidentExec {
 
 fn check_memory_limit(bytes: usize, limit: usize) -> Result<(), String> {
     if bytes > limit {
-        return Err(format!("wcol-fatal: resident feature memory limit exceeded: required {bytes} bytes, limit {limit} bytes"));
+        return Err(crate::error::WcolError::fatal(format!(
+            "resident feature memory limit exceeded: required {bytes} bytes, limit {limit} bytes"
+        ))
+        .into());
     }
     Ok(())
 }
@@ -312,7 +315,7 @@ mod tests {
         assert_eq!(plan_feature_capacity(0, 100, 1200).unwrap(), (100, 800));
         assert!(plan_feature_capacity(0, 100, 1199)
             .unwrap_err()
-            .contains("wcol-fatal:"));
+            .starts_with(crate::error::FATAL_MARK));
         // Doubling is affordable, including old and new buffers during realloc.
         assert_eq!(plan_feature_capacity(100, 101, 2400).unwrap(), (200, 2400));
         // Under a tighter cap, reserve exactly the requested space.

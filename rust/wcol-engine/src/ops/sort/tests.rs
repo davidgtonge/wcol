@@ -282,3 +282,42 @@ fn topk_matches_sort_then_limit_for_every_n() {
         assert_eq!(ids_of(&top), sorted_ids[..n]);
     }
 }
+
+#[test]
+fn sums_past_i64_sort_as_integers_across_reducer_batches() {
+    let big = i128::from(i64::MAX) * 3;
+    let past: Vec<u8> = big.to_string().into_bytes();
+    let negative: Vec<u8> = (-big).to_string().into_bytes();
+    // One reducer's sums fit i64; another's outgrew it and are decimal text.
+    let batches = [
+        i64_batch(&[0, 1], &[Some(9), Some(-5)]),
+        utf8_batch(&[2, 3, 4], &[Some(&past), None, Some(&negative)]),
+        i64_batch(&[5], &[Some(10)]),
+    ];
+    let key = SortKey {
+        column: 1,
+        descending: false,
+        nulls_first: false,
+    };
+    let sorted = sort_rows(&batches, &[key]).unwrap();
+    assert_eq!(ids_of(&sorted), vec![4, 1, 0, 5, 2, 3]);
+    let mut buf = Vec::new();
+    let view = sorted.view_with(&mut buf);
+    let WcolColumn::Utf8 { offsets, bytes, .. } = view.columns[1] else {
+        panic!("a sum past i64 stays exact text");
+    };
+    assert_eq!(&bytes[offsets[3] as usize..offsets[4] as usize], b"10");
+
+    // A single batch of text sums sorts numerically too once one is past i64...
+    let text = [utf8_batch(
+        &[0, 1, 2],
+        &[Some(b"9"), Some(&past), Some(b"10")],
+    )];
+    assert_eq!(ids_of(&sort_rows(&text, &[key]).unwrap()), vec![0, 2, 1]);
+    // ...but ordinary text, digits or not, keeps byte order.
+    let text = [utf8_batch(
+        &[0, 1, 2],
+        &[Some(b"9"), Some(b"010"), Some(b"10")],
+    )];
+    assert_eq!(ids_of(&sort_rows(&text, &[key]).unwrap()), vec![1, 2, 0]);
+}

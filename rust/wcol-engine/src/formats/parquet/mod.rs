@@ -18,7 +18,6 @@ mod replay_metrics;
 
 pub use batch_decode::{ChunkSpec, ParquetDecode, RowGroupSpec, HOST_READ_LIMIT};
 pub use decode::{DecodeProgress, ScanLimits};
-pub use dictionary::chunk_has_dictionary_page;
 pub use encode::{ParquetEncode, ParquetEncodeConfig, ParquetSinkColumn};
 pub use ingest_memory::{
     plateau_report, DriverMemoryCounters, IngestMemoryHighWater, IngestMemorySample, PlateauReport,
@@ -35,8 +34,8 @@ pub use replay_metrics::{
     ingest_replay_merge, ingest_replay_reset, ingest_replay_totals, ScanReplayMetrics,
 };
 pub use schema::{
-    encode_plan, footer_span, leaf_byte_bounds, leaf_dictionary_bytes, leaf_distinct_upper,
-    leaf_int_bounds, plan_footer, Chunk, Leaf, Plan,
+    footer_span, leaf_byte_bounds, leaf_dictionary_bytes, leaf_distinct_upper, leaf_int_bounds,
+    plan_footer, Chunk, Leaf, Plan,
 };
 
 #[derive(Debug)]
@@ -86,7 +85,8 @@ impl From<crate::error::WcolError> for Error {
     fn from(err: crate::error::WcolError) -> Self {
         match err {
             crate::error::WcolError::Static(s) => Error::Message(s),
-            crate::error::WcolError::Dynamic(s) => Error::Detail(s),
+            // Any other kind keeps its full message (and so any mark the host matches on).
+            other => Error::Detail(other.to_string()),
         }
     }
 }

@@ -96,8 +96,8 @@ fn same_string_different_dictionary_ids_hash_equal() {
     let h2 = hash_row_keys_at(&b2, &keys, 0, 1).unwrap();
     assert_eq!(h1, h2);
     assert_eq!(
-        join_key_fingerprint_at(&b1, &keys, 0).unwrap(),
-        join_key_fingerprint_at(&b2, &keys, 0).unwrap()
+        key_fingerprint_at(&b1, &keys, 0).unwrap(),
+        key_fingerprint_at(&b2, &keys, 0).unwrap()
     );
     let cache = ExchangeHashCache::prepare(&b1, &keys, 1).unwrap();
     assert_eq!(cache.lookup(&b1, &keys, 0).unwrap(), Some(h1));
@@ -133,8 +133,8 @@ fn distinct_strings_stay_distinct_keys() {
     let mut view = Vec::new();
     let b = batch.view_with(&mut view);
     assert_ne!(
-        join_key_fingerprint_at(&b, &keys, 0).unwrap(),
-        join_key_fingerprint_at(&b, &keys, 1).unwrap()
+        key_fingerprint_at(&b, &keys, 0).unwrap(),
+        key_fingerprint_at(&b, &keys, 1).unwrap()
     );
 }
 
@@ -154,8 +154,8 @@ fn composite_string_tuple_is_length_prefixed() {
     let left = ab_c.view_with(&mut v1);
     let right = a_bc.view_with(&mut v2);
     assert_ne!(
-        join_key_fingerprint_at(&left, &keys, 0).unwrap(),
-        join_key_fingerprint_at(&right, &keys, 0).unwrap()
+        key_fingerprint_at(&left, &keys, 0).unwrap(),
+        key_fingerprint_at(&right, &keys, 0).unwrap()
     );
 }
 

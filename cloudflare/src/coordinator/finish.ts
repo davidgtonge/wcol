@@ -107,20 +107,5 @@ export async function finishPrepared(
     );
     return null;
   }
-  if (prepared.plan.kind === "concat") {
-    // One output object: its create-once pointer claims that key (`<key>/_manifest.json`).
-    // An empty prefix gave every concat job in the bucket the same pointer.
-    await publishParquet(
-      ctx,
-      job,
-      prepared.plan.key,
-      prepared.plan.bucket,
-      ran.outputs,
-      attempt,
-      "single_file",
-      prepared.plan.key,
-    );
-    return null;
-  }
   throw new Error("unsupported job kind at finish");
 }

@@ -1,11 +1,7 @@
 import type { HostBytes } from "./host-bytes.ts";
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import type { PoolWasm } from "./wasm-stream.ts";
 import type { WcolHost } from "./host-types.ts";
-import type {
-  R2MultipartUpload,
-  R2OutputBucket,
-  R2UploadedPart,
-} from "../../../cloudflare/src/r2.ts";
+import type { R2MultipartUpload, R2OutputBucket, R2UploadedPart } from "./ports/r2-bucket.ts";
 import { decodeRunPutOpen, decodeRunReadOpen, type RunPutPart } from "./ports/r2-spill-put.ts";
 import { readWasmLastError } from "./wasm.ts";
 import { createLimiter } from "../concurrency.ts";
@@ -24,25 +20,15 @@ function viewAt(memory: WebAssembly.Memory, ptr: number, len: number): Uint8Arra
   return new Uint8Array(memory.buffer, ptr, len);
 }
 
-function readSpillAppend(wasm: WcolStreamWasm, handle: number): Uint8Array {
-  const len = Number(wasm.wcs_sp_spill_append_len?.(handle) ?? 0);
+function readSpillAppend(wasm: PoolWasm, handle: number): Uint8Array {
+  const len = wasm.wcs_sp_spill_append_len(handle);
   if (len <= 0) return new Uint8Array(0);
-  const ptr = Number(wasm.wcs_sp_spill_append_ptr?.(handle) ?? 0);
-  return viewAt(wasm.memory, ptr, len).slice();
+  return viewAt(wasm.memory, wasm.wcs_sp_spill_append_ptr(handle), len).slice();
 }
 
-function completeSpill(wasm: WcolStreamWasm, handle: number, ok: boolean, scan: Uint8Array): void {
-  let ptr = 0;
-  if (scan.byteLength > 0) {
-    ptr = wasm.wcs_alloc!(scan.byteLength);
-    viewAt(wasm.memory, ptr, scan.byteLength).set(scan);
-  }
-  try {
-    const rc = wasm.wcs_sp_spill_complete!(handle, ok ? 1 : 0, ptr, scan.byteLength);
-    if (rc !== 0) throw new Error("wcs_sp_spill_complete failed");
-  } finally {
-    if (ptr) wasm.wcs_dealloc!(ptr, scan.byteLength);
-  }
+function completeSpill(wasm: PoolWasm, handle: number, ok: boolean): void {
+  const rc = wasm.wcs_sp_spill_complete(handle, ok ? 1 : 0);
+  if (rc !== 0) throw new Error("wcs_sp_spill_complete failed");
 }
 
 /** Spill run key in the bucket: the Rust run name under the task's prefix. */
@@ -280,12 +266,12 @@ export function createRunUploads(
 }
 
 export function createPoolSpillDriver(
-  wasm: WcolStreamWasm,
+  wasm: PoolWasm,
   handle: number,
   host: Pick<WcolHost, "spillR2Bucket" | "spillKeyPrefix">,
   stats?: {
     spillExec: number;
-    spillExecByOp: { begin: number; append: number; scan: number; end: number; commit: number };
+    spillExecByOp: { begin: number; scan: number; end: number; commit: number };
     io: SpillIo;
   },
   hostBytes?: HostBytes,
@@ -295,7 +281,7 @@ export function createPoolSpillDriver(
   }
   const bucket = host.spillR2Bucket;
 
-  const note = (op: "begin" | "append" | "scan" | "end" | "commit") => {
+  const note = (op: "begin" | "scan" | "end" | "commit") => {
     if (!stats) return;
     stats.spillExec += 1;
     stats.spillExecByOp[op] += 1;
@@ -328,25 +314,25 @@ export function createPoolSpillDriver(
   return {
     settle: () => uploads.settle(),
     async advance(): Promise<void> {
-      const op = wasm.wcs_sp_spill_op?.(handle) ?? 0;
+      const op = wasm.wcs_sp_spill_op(handle);
       if (op === SPILL_OP_RUN_COMMIT) {
         note("commit");
         // The run's upload may still be running: its first merge read waits for it.
         try {
           uploads.throwIfFailed();
         } catch (error) {
-          completeSpill(wasm, handle, false, new Uint8Array(0));
+          completeSpill(wasm, handle, false);
           throw error;
         }
-        completeSpill(wasm, handle, true, new Uint8Array(0));
+        completeSpill(wasm, handle, true);
         return;
       }
       if (op === SPILL_OP_RUN_PUT) {
         const plan = decodeRunPutOpen(readSpillAppend(wasm, handle));
-        const wasmPtr = Number(wasm.wcs_sp_spill_run_upload_ptr?.(handle) ?? 0);
-        const wasmLen = Number(wasm.wcs_sp_spill_run_upload_len?.(handle) ?? 0);
+        const wasmPtr = wasm.wcs_sp_spill_run_upload_ptr(handle);
+        const wasmLen = wasm.wcs_sp_spill_run_upload_len(handle);
         if (wasmLen !== plan.byteLength) {
-          completeSpill(wasm, handle, false, new Uint8Array(0));
+          completeSpill(wasm, handle, false);
           throw new Error("sorted run part length mismatch");
         }
         note("begin");
@@ -360,9 +346,9 @@ export function createPoolSpillDriver(
             stats.io.putBytes += wasmLen;
             stats.io.putMs += Date.now() - putStarted;
           }
-          completeSpill(wasm, handle, true, new Uint8Array(0));
+          completeSpill(wasm, handle, true);
         } catch (error) {
-          completeSpill(wasm, handle, false, new Uint8Array(0));
+          completeSpill(wasm, handle, false);
           throw error;
         }
         return;
@@ -383,17 +369,17 @@ export function createPoolSpillDriver(
           note("scan");
           // Write into the pool's reused read buffer: a fresh Wasm allocation per read
           // fragmented linear memory during the merge. Fill it before any other Wasm call.
-          const slot = Number(wasm.wcs_sp_spill_read_slot!(handle, bytes.byteLength));
+          const slot = wasm.wcs_sp_spill_read_slot(handle, bytes.byteLength);
           if (!slot) throw new Error(readWasmLastError(wasm, "spill read slot failed"));
           viewAt(wasm.memory, slot, bytes.byteLength).set(bytes);
-          completeSpill(wasm, handle, true, new Uint8Array(0));
+          completeSpill(wasm, handle, true);
         } catch (error) {
-          completeSpill(wasm, handle, false, new Uint8Array(0));
+          completeSpill(wasm, handle, false);
           throw error;
         }
         return;
       }
-      completeSpill(wasm, handle, false, new Uint8Array(0));
+      completeSpill(wasm, handle, false);
       throw new Error(`unsupported stream pool spill op ${op}`);
     },
   };

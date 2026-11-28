@@ -7,7 +7,7 @@ import { DuckDBInstance } from "@duckdb/node-api";
 import { planJob, readParquetFooter } from "../src/runtime/coordinator/plan-dispatch.ts";
 import type { ExecutionPlan } from "../src/runtime/coordinator/execution-graph.ts";
 import { runHashJob, type HashScanDestination, type RunnableTask } from "../src/runtime/coordinator/run-hash-job.ts";
-import { runLocalHashGraph } from "../src/runtime/coordinator/run-local-hash-graph.ts";
+import { runLocalHashGraph } from "./helpers/run-local-hash-graph.ts";
 import { createBoundedBytePipe } from "../src/runtime/host/ports/rpc.ts";
 import { createPoolInputLatch } from "../src/runtime/host/pool-streams.ts";
 import { runWcolEngine, type WcolHost } from "../src/runtime/host/run-wcol-engine.ts";

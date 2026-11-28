@@ -47,7 +47,7 @@ fn collect_f64(scan: &mut NumericScan) -> Vec<f64> {
                 scan.advance_batch(rows).unwrap();
             }
             DecodeProgress::Finished => return out,
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => continue,
+            DecodeProgress::NeedInput => continue,
         }
     }
     panic!("float scan did not finish");
@@ -107,7 +107,7 @@ fn collect_utf8(scan: &mut NumericScan) -> Vec<Vec<u8>> {
                 scan.advance_batch(rows).unwrap();
             }
             DecodeProgress::Finished => return out,
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => continue,
+            DecodeProgress::NeedInput => continue,
         }
     }
     panic!("utf8 scan did not finish");

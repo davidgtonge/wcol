@@ -31,12 +31,6 @@ pub enum LogicalOp {
         skip: u64,
         fetch: Option<u64>,
     },
-    Join {
-        left: Box<LogicalOp>,
-        right: Box<LogicalOp>,
-        left_keys: Vec<u32>,
-        right_keys: Vec<u32>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,16 +110,6 @@ pub(super) fn write_logical(op: &LogicalOp, indent: usize, out: &mut String) {
                     .unwrap_or_else(|| "none".into())
             ));
             write_logical(input, indent + 1, out);
-        }
-        LogicalOp::Join {
-            left,
-            right,
-            left_keys,
-            right_keys,
-        } => {
-            out.push_str(&format!("Join(left={left_keys:?}, right={right_keys:?})\n"));
-            write_logical(left, indent + 1, out);
-            write_logical(right, indent + 1, out);
         }
     }
 }

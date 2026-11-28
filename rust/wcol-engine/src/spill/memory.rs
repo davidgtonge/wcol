@@ -13,7 +13,7 @@ pub struct SpillConfig {
     pub max_batch_rows: usize,
     /// Max bytes per encoded flush blob (host + 2 MiB row cap).
     pub max_batch_bytes: usize,
-    /// Rows per SQLite scan page during finalize.
+    /// Rows per ordered-scan page during finalize.
     pub scan_page_rows: usize,
     /// Max groups per partial-state chunk emitted during spill finalization.
     pub finalize_batch_rows: usize,

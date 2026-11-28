@@ -4,16 +4,17 @@ export function createLimiter(max: number): <T>(run: () => Promise<T>) => Promis
   let active = 0;
   const waiters: Array<() => void> = [];
   return async function limit<T>(run: () => Promise<T>): Promise<T> {
-    while (active >= max) {
-      await new Promise<void>((resolve) => waiters.push(resolve));
-    }
-    active += 1;
+    // A finishing task hands its permit straight to the oldest waiter, so a newcomer can
+    // never take it first: `active` only drops when nobody waits.
+    if (active < max) active += 1;
+    else await new Promise<void>((resolve) => waiters.push(resolve));
     try {
       return await run();
     } finally {
       // Release in `finally` so a failed task never strands its permit.
-      active -= 1;
-      waiters.shift()?.();
+      const next = waiters.shift();
+      if (next) next();
+      else active -= 1;
     }
   };
 }

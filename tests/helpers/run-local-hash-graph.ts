@@ -1,10 +1,15 @@
 /**
- * Run a hash-partitioned graph in this process: scans, reducers and the finalizer, with
- * the same edges and pipes as the direct-RPC job on Cloudflare.
+ * Test harness: run a hash-partitioned graph in this process (scans, reducers and the
+ * finalizer) with the same edges and pipes as the direct-RPC job on Cloudflare.
  */
 
-import { type ExecutionPlan } from "./execution-graph.ts";
-import { runHashJob, type HashJobTiming, type HashScanDestination, type RunnableTask } from "./run-hash-job.ts";
+import { type ExecutionPlan } from "../../src/runtime/coordinator/execution-graph.ts";
+import {
+  runHashJob,
+  type HashJobTiming,
+  type HashScanDestination,
+  type RunnableTask,
+} from "../../src/runtime/coordinator/run-hash-job.ts";
 import {
   readDictTraffic,
   readMemGrowth,
@@ -12,19 +17,19 @@ import {
   type DictTraffic,
   type MemGrowthSample,
   type SpillBoundary,
-} from "../host/run-wcol-engine.ts";
-import type { R2OutputBucket } from "../../../cloudflare/src/r2.ts";
-import { createSharedBytePool } from "../host/shared-byte-pool.ts";
-import { concatBytes } from "../host/bytes.ts";
-import { runScanStreamPool } from "../host/run-scan-stream-pool.ts";
-import { createBoundedBytePipe } from "../host/ports/rpc.ts";
-import { createPoolInputLatch, streamFromBytes } from "../host/pool-streams.ts";
-import { createReducerIngressSession } from "../host/scan-edge-session.ts";
-import { type ReadAt } from "./plan-dispatch.ts";
-import { claimingReadAt, localWork } from "./unit-claims.ts";
-import { instantiateNodeWasm, wasmInstanceId } from "../host/wasm.ts";
-import { createMemoryR2SpillBucket } from "../../../tests/helpers/memory-r2-spill-bucket.ts";
-import type { LocalGraphWasm } from "./run-local-graph.ts";
+} from "../../src/runtime/host/run-wcol-engine.ts";
+import type { R2OutputBucket } from "../../src/runtime/host/ports/r2-bucket.ts";
+import { createSharedBytePool } from "../../src/runtime/host/shared-byte-pool.ts";
+import { concatBytes } from "../../src/runtime/host/bytes.ts";
+import { runScanStreamPool } from "../../src/runtime/host/run-scan-stream-pool.ts";
+import { createBoundedBytePipe } from "../../src/runtime/host/ports/rpc.ts";
+import { createPoolInputLatch, streamFromBytes } from "../../src/runtime/host/pool-streams.ts";
+import { createReducerIngressSession } from "../../src/runtime/host/scan-edge-session.ts";
+import { type ReadAt } from "../../src/runtime/coordinator/plan-dispatch.ts";
+import { claimingReadAt, localWork } from "../../src/runtime/coordinator/unit-claims.ts";
+import { instantiateNodeWasm, wasmInstanceId } from "../../src/runtime/host/wasm.ts";
+import type { GraphWasm, WcolStreamWasm } from "../../src/runtime/host/wasm-stream.ts";
+import { createMemoryR2SpillBucket } from "./memory-r2-spill-bucket.ts";
 
 /** Shared host byte budget (pipes, adapters). */
 const LOCAL_HOST_BUDGET = 32 * 1024 * 1024;
@@ -45,8 +50,6 @@ export type LocalHashScheduling = {
   maxActiveIngress?: number;
 };
 
-export type LocalSpillR2 = R2OutputBucket;
-
 export type LocalHashGraphHooks = {
   scheduling?: LocalHashScheduling;
   /** Wrap one scan's reads, eg. to simulate R2 latency and bandwidth per scan node. */
@@ -55,9 +58,7 @@ export type LocalHashGraphHooks = {
   maxHostBytes?: number;
   /** Reducer → finalizer bounded pipe (default 1 MiB). Finalizer consumes concurrently. */
   reducerEgressPipeBytes?: number;
-  /** Artificial delay per finalizer output chunk (stress/backpressure tests). */
-  finalizerWriteDelayMs?: number;
-  /** Test hook: fail the coordinator finalizer on first output write. */
+  /** Fail the coordinator finalizer when it takes its first output. */
   simulateFinalizerError?: Error;
   onScanProgress?: (info: {
     taskId: number;
@@ -88,7 +89,7 @@ export type LocalHashGraphHooks = {
    */
   isolatedNodeWasm?: boolean;
   /** In-memory R2 for sorted spill runs. Default: fresh memory bucket per job. */
-  spillR2Bucket?: LocalSpillR2;
+  spillR2Bucket?: R2OutputBucket;
   /** Called while reducer egress is backpressured into the finalizer pipe. */
   onReducerOutputMetrics?: (info: {
     taskId: number;
@@ -115,9 +116,19 @@ export type RunLocalHashGraphResult = {
   nodeWasmScope: "shared_singleton" | "per_task_isolate";
 };
 
+/** The coordinator module, except that its first output take throws `error`. */
+function failingFinalizerWasm(wasm: WcolStreamWasm, error: Error): WcolStreamWasm {
+  return {
+    ...wasm,
+    wcs_sp_out_ptr: () => {
+      throw error;
+    },
+  };
+}
+
 /** Scanners open a pipe only for partitions that receive rows. */
 export async function runLocalHashGraph(
-  wasm: LocalGraphWasm,
+  wasm: GraphWasm,
   plan: Extract<ExecutionPlan, { kind: "graph" }>,
   readAt: ReadAt,
   hooks?: LocalHashGraphHooks,
@@ -131,7 +142,6 @@ export async function runLocalHashGraph(
   const scheduling = hooks?.scheduling;
   const maxHostBytes = hooks?.maxHostBytes ?? LOCAL_HOST_BUDGET;
   const egressPipeBytes = reducerEgressPipeBytes(hooks);
-  const finalizerWriteDelayMs = hooks?.finalizerWriteDelayMs ?? 0;
   const isolatedNodeWasm = hooks?.isolatedNodeWasm !== false;
   const wcsInputBytesByReducer = new Map<number, number>();
   const ingressRetainedPeakByReducer = new Map<number, number>();
@@ -154,13 +164,13 @@ export async function runLocalHashGraph(
     return entry;
   };
   const bytePool = createSharedBytePool(maxHostBytes);
+  const coordinator = hooks?.simulateFinalizerError
+    ? failingFinalizerWasm(wasm.coordinator, hooks.simulateFinalizerError)
+    : wasm.coordinator;
   const result = await runHashJob({
-    wasm,
+    wasm: { node: wasm.node, coordinator },
     plan,
     readAt,
-    maxHostBytes,
-    finalizerWriteDelayMs,
-    simulateFinalizerError: hooks?.simulateFinalizerError,
     openingConcurrency: scheduling?.openingConcurrency,
     maxActiveScans: scheduling?.maxActiveScans,
     maxActiveIngress: scheduling?.maxActiveIngress,
@@ -244,7 +254,7 @@ export async function runLocalHashGraph(
           scratchBytes: 1024 * 1024,
           layout: { inputs: expectedScans, outputs: 1 },
           inputLatch,
-          readAt: (_source, offset, length) => readAt(Number(offset), length),
+          readAt: (_source, offset, length) => readAt(offset, length),
           onProgress: (info) => {
             onReducerProgress?.({
               taskId: task.taskId,
@@ -256,7 +266,6 @@ export async function runLocalHashGraph(
             });
           },
           host: {
-            abortOutputs: () => (writer ? writer.abort("shutdown") : undefined),
             writePort: async (_port, chunk) => {
               if (discardReducerOutput) return;
               if (exportWriter) {
@@ -363,9 +372,10 @@ export async function runLocalHashGraph(
         };
         return handle;
       },
-      runScan: async (task: RunnableTask, scanIndex: number, destinations: HashScanDestination[]) => {
+      runScan: async (task: RunnableTask, scanIndex: number, destinations: HashScanDestination[], open) => {
         const scanRead = hooks?.scanReadAt ? hooks.scanReadAt(task.taskId, readAt) : readAt;
-        const scanWasm = isolatedNodeWasm ? await instantiateNodeWasm() : wasm.node;
+        // Opening a scan here is taking its isolate; it then runs outside the opening limit.
+        const scanWasm = await open(async () => (isolatedNodeWasm ? instantiateNodeWasm() : wasm.node));
         const wasmAtScanStart = scanWasm.memory.buffer.byteLength;
         const openedPartitions: number[] = [];
         const partitionCount = Math.max(...destinations.map((d) => d.partition)) + 1;
@@ -375,7 +385,7 @@ export async function runLocalHashGraph(
           scratchBytes: 1024 * 1024,
           partitionCount,
           readAt: claimingReadAt(
-            (_source, offset, length) => scanRead(Number(offset), length),
+            (_source, offset, length) => scanRead(offset, length),
             () => nextUnit(task.taskId),
           ),
           onPartitionStream: async (partition, body) => {

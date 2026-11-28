@@ -250,7 +250,10 @@ impl AggregateOp {
         if flush_first && matches!(self.query.flush_live_run()?, SpillProgress::AwaitHost) {
             return Ok(SpillProgress::AwaitHost);
         }
-        let out = self.query.finish_partial_state();
+        let out = match self.query.try_finish_partial_state()? {
+            SpillProgress::Ready(out) => out,
+            SpillProgress::AwaitHost => return Ok(SpillProgress::AwaitHost),
+        };
         self.finish = None;
         if matches!(self.query.close_spill()?, SpillProgress::AwaitHost) {
             return Ok(SpillProgress::AwaitHost);

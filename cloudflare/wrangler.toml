@@ -61,6 +61,16 @@ WCOL_DO_LOCATION_HINT = "eeur"
 WCOL_MAX_NODES = "32"
 WCOL_MAX_ACTIVE_SCANS = "32"
 WCOL_MAX_ACTIVE_INGRESS = "32"
-# Every scan and reducer opens at once: accepts are held open until consumed, so
-# reducers stay live under full fan-in (tested with 32 scans x 16 reducers).
-WCOL_DISPATCH_CONCURRENCY = "64"
+# Scan and reducer RPCs opened at once. Accepts are held open until consumed, so reducers
+# stay live under full fan-in either way; 32 is what the deployed ladder runs used.
+WCOL_DISPATCH_CONCURRENCY = "32"
+# High-cardinality spill can go minutes between task progress records.
+WCOL_STALL_MS = "300000"
+# Explicit `hashReducers` above this are refused. Container reducers count against
+# `max_instances` in wrangler.node.toml, so keep the two in step.
+WCOL_MAX_REDUCERS = "128"
+# Largest container instance a job may ask for (`reducerInstance`); `standard-4` only if set.
+WCOL_MAX_CONTAINER_INSTANCE = "standard-3"
+# Hostnames a job's `{ "url": ... }` sources may name, comma-separated. Unset or empty:
+# URL sources are refused, so a job cannot make the coordinator fetch arbitrary hosts.
+WCOL_URL_SOURCE_HOSTS = ""

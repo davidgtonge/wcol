@@ -8,12 +8,13 @@ import { Miniflare } from "miniflare";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /**
- * Pins the Workers RPC behaviour behind the silent scan hang: an RPC that is given a
- * streaming ReadableStream and throws without reading it never settles for the caller.
- * Returning an error value settles. `acceptScanEdge` therefore returns a typed refusal.
+ * The Workers RPC behaviour behind the silent scan hang: on deployed Workers, an RPC that is
+ * given a streaming ReadableStream and throws without reading it never settled for the
+ * caller, so `acceptScanEdge` returns a typed refusal instead. Miniflare settles the thrown
+ * case too, so only the refusal the code relies on is pinned here.
  */
 describe("RPC with a stream argument", () => {
-  it("settles a returned refusal, not a thrown one", { timeout: 60_000 }, async () => {
+  it("settles a returned refusal and a read stream", { timeout: 60_000 }, async () => {
     const outfile = path.join(root, "cloudflare", "dist", "rpc-stream-reject-worker.js");
     await build({
       entryPoints: [path.join(root, "tests", "rpc-stream-reject-worker.ts")],
@@ -42,8 +43,6 @@ describe("RPC with a stream argument", () => {
       assert.deepEqual(read, { settled: true, value: { accepted: true, bytes: 64 * 64 * 1024 } });
       const returned = await outcome("return");
       assert.deepEqual(returned, { settled: true, value: { accepted: false, error: "not the active node session" } });
-      const thrown = await outcome("throw");
-      console.log(JSON.stringify({ thrownSettled: thrown.settled, thrownError: thrown.error }));
     } finally {
       await mf.dispose();
     }

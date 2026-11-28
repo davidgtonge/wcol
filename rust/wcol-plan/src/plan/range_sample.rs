@@ -5,7 +5,7 @@ use crate::plan::range_sort::SampledSortBoundaries;
 use crate::program::types::{SortKey, SortTarget};
 use wcol_engine::ir::Scalar;
 
-/// Reservoir sample size per scan fragment (Phase 2 default).
+/// Reservoir sample size per scan fragment.
 pub const DEFAULT_SAMPLE_SIZE: usize = 8192;
 
 /// Plan range boundaries: footer-derived quantile samples, optional node samples, then
@@ -103,7 +103,7 @@ fn scalar_at_quantile(
         }
     }
 
-    if matches!(physical, 4 | 5) {
+    if crate::ops::query::physical_type::is_float(physical) {
         if let (Some(min_b), Some(max_b)) = (
             metadata.leaf_min_bytes.get(column).and_then(|v| v.as_ref()),
             metadata.leaf_max_bytes.get(column).and_then(|v| v.as_ref()),
@@ -116,7 +116,7 @@ fn scalar_at_quantile(
         }
     }
 
-    if matches!(physical, 6 | 7) {
+    if crate::ops::query::physical_type::is_bytes(physical) {
         if let (Some(min_b), Some(max_b)) = (
             metadata.leaf_min_bytes.get(column).and_then(|v| v.as_ref()),
             metadata.leaf_max_bytes.get(column).and_then(|v| v.as_ref()),

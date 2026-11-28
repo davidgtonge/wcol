@@ -25,7 +25,6 @@ default = ["sqlite"]
 # static binary with no C toolchain.
 sqlite = ["dep:rusqlite"]
 # Streaming `wcol_reduce_*` exports. The node cdylib leaves this off.
-reduce-ffi = []
 coordinator-iterative-ffi = []
 alloc-track-native = []
 memory-plateau = ["alloc-track-native"]

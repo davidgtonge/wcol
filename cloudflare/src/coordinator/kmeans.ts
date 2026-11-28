@@ -17,10 +17,11 @@ import type { GraphRun } from "./run.ts";
 import type { AttemptReport } from "./attempt-timing.ts";
 import { rememberSlots } from "./slots.ts";
 
+/** The last committed round. `state` is stored as bytes: a JSON number array is 4x larger. */
 type KMeansCheckpoint = {
-  version: 2;
+  version: 3;
   iteration: number;
-  state: number[];
+  state: Uint8Array;
   inertia: number;
   converged: boolean;
 };
@@ -48,10 +49,9 @@ export async function runKMeansModel(
   const saved = await ctx.store.get(checkpointKey) as KMeansCheckpoint | undefined;
   const checkpoint = saved == null ? undefined : saved;
   if (checkpoint && (
-    checkpoint.version !== 2 ||
+    checkpoint.version !== 3 ||
     !Number.isInteger(checkpoint.iteration) || checkpoint.iteration < 0 || checkpoint.iteration > modelOptions.maxIterations ||
-    !Array.isArray(checkpoint.state) || checkpoint.state.length === 0 ||
-    checkpoint.state.some((value) => !Number.isInteger(value) || value < 0 || value > 255) ||
+    !(checkpoint.state instanceof Uint8Array) || checkpoint.state.byteLength === 0 ||
     !Number.isFinite(checkpoint.inertia) || checkpoint.inertia < 0 || typeof checkpoint.converged !== "boolean"
   )) throw new Error("stored K-means barrier checkpoint is invalid");
   const sessionId = `a${attempt}-${crypto.randomUUID()}`;
@@ -123,9 +123,7 @@ export async function runKMeansModel(
     maxIterations: modelOptions.maxIterations,
     tolerance: modelOptions.tolerance,
   };
-  const initialState = checkpoint
-    ? new Uint8Array(checkpoint.state)
-    : preparation.state;
+  const initialState = checkpoint ? checkpoint.state : preparation.state;
   let inertia = checkpoint?.inertia ?? 0;
   let roundInertia = inertia;
   const kernel = {
@@ -165,16 +163,17 @@ export async function runKMeansModel(
       async load() {
         return checkpoint ? {
           iteration: checkpoint.iteration,
-          state: new Uint8Array(checkpoint.state),
+          state: checkpoint.state,
           converged: checkpoint.converged,
         } : null;
       },
       async commit({ attempt: committingAttempt, iteration: committedIteration, state, converged: committedConverged }) {
         inertia = roundInertia;
         const committed: KMeansCheckpoint = {
-          version: 2,
+          version: 3,
           iteration: committedIteration,
-          state: Array.from(state),
+          // A copy: storage clones a view's whole buffer, not just the view.
+          state: state.slice(),
           inertia,
           converged: committedConverged,
         };

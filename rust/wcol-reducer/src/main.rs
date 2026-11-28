@@ -53,17 +53,55 @@ struct Job {
 #[derive(Default)]
 struct PortStat {
     bytes: AtomicU64,
+    /// A [`PortState`], stored as its discriminant so HTTP threads can update it lock-free.
     state: AtomicU8,
 }
 
-const PORT_WAITING: u8 = 0;
-const PORT_RECEIVING: u8 = 1;
-/// The edge's request has arrived; no bytes yet.
-const PORT_OPENED: u8 = 5;
-/// The edge's channel is full: the engine has not taken this port's last chunks.
-const PORT_BLOCKED: u8 = 2;
-const PORT_ENDED: u8 = 3;
-const PORT_ABSENT: u8 = 4;
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+enum PortState {
+    Waiting = 0,
+    /// The edge's request has arrived; no bytes yet.
+    Opened = 1,
+    Receiving = 2,
+    /// The edge's channel is full: the engine has not taken this port's last chunks.
+    Blocked = 3,
+    Ended = 4,
+    Absent = 5,
+}
+
+impl PortStat {
+    fn set(&self, state: PortState) {
+        self.state.store(state as u8, Ordering::Relaxed);
+    }
+
+    fn get(&self) -> PortState {
+        match self.state.load(Ordering::Relaxed) {
+            0 => PortState::Waiting,
+            1 => PortState::Opened,
+            2 => PortState::Receiving,
+            3 => PortState::Blocked,
+            4 => PortState::Ended,
+            _ => PortState::Absent,
+        }
+    }
+}
+
+impl PortState {
+    /// The `/status` name of a port still open, or `None` once it has finished.
+    fn open_name(self) -> Option<&'static str> {
+        match self {
+            Self::Waiting => Some("waiting"),
+            Self::Opened => Some("opened"),
+            Self::Receiving => Some("receiving"),
+            Self::Blocked => Some("blocked"),
+            Self::Ended | Self::Absent => None,
+        }
+    }
+}
+
+/// Scan edges one reducer accepts; a reducer's fan-in is one edge per scan.
+const MAX_INPUTS: usize = 4096;
 
 struct State {
     job: Mutex<Job>,
@@ -111,17 +149,37 @@ fn start(state: &Arc<State>, url: &str, body: &mut dyn Read) -> Reply {
         .split_once("inputs=")
         .and_then(|(_, rest)| rest.split('&').next())
         .and_then(|n| n.parse::<usize>().ok())
+        .filter(|&n| n <= MAX_INPUTS)
     else {
-        return text(400, "start needs ?inputs=N");
+        return text(
+            400,
+            &format!("start needs ?inputs=N with N <= {MAX_INPUTS}"),
+        );
     };
-    let mut program = Vec::new();
-    if let Err(e) = body.read_to_end(&mut program) {
-        return text(400, &format!("program body: {e}"));
+    // Claim the process before reading the program: a second `/start` must not replace
+    // the job (and its edges) of a reducer that is already running.
+    {
+        let mut status = state.status.lock().expect("status");
+        if !matches!(*status, Status::Idle) {
+            return text(409, "reducer already started");
+        }
+        *status = Status::Running;
     }
-    let spill = match LocalSpill::new(state.spill_dir.join(format!("{}", std::process::id()))) {
-        Ok(spill) => spill,
-        Err(e) => return text(500, &e),
-    };
+    match open_job(state, inputs, body) {
+        Ok(()) => text(200, "started"),
+        Err((code, message)) => {
+            *state.status.lock().expect("status") = Status::Failed(message.clone());
+            text(code, &message)
+        }
+    }
+}
+
+fn open_job(state: &Arc<State>, inputs: usize, body: &mut dyn Read) -> Result<(), (u16, String)> {
+    let mut program = Vec::new();
+    body.read_to_end(&mut program)
+        .map_err(|e| (400, format!("program body: {e}")))?;
+    let spill = LocalSpill::new(state.spill_dir.join(format!("{}", std::process::id())))
+        .map_err(|e| (500, e))?;
     let (edge_tx, edge_rx): (Vec<_>, Vec<_>) =
         (0..inputs).map(|_| sync_channel(EDGE_CHUNKS)).unzip();
     let (wake_tx, wake_rx) = sync_channel(1);
@@ -132,7 +190,6 @@ fn start(state: &Arc<State>, url: &str, body: &mut dyn Read) -> Reply {
         output: Some(out_rx),
         ports: Arc::new((0..inputs).map(|_| PortStat::default()).collect()),
     };
-    *state.status.lock().expect("status") = Status::Running;
     let state = Arc::clone(state);
     thread::spawn(move || {
         let result = engine::run(&program, edge_rx, &wake_rx, &out_tx, spill);
@@ -151,7 +208,7 @@ fn start(state: &Arc<State>, url: &str, body: &mut dyn Read) -> Reply {
         };
         drop(out_tx);
     });
-    text(200, "started")
+    Ok(())
 }
 
 fn input(state: &State, port: Option<usize>, reader: &mut dyn Read) -> Reply {
@@ -159,7 +216,7 @@ fn input(state: &State, port: Option<usize>, reader: &mut dyn Read) -> Reply {
         return text(400, "bad input port");
     };
     if let Some(stat) = state.job.lock().expect("job").ports.get(port) {
-        stat.state.store(PORT_OPENED, Ordering::Relaxed);
+        stat.set(PortState::Opened);
     }
     let mut buf = vec![0u8; READ_CHUNK];
     loop {
@@ -192,16 +249,16 @@ fn send(state: &State, port: Option<usize>, edge: Edge) -> Result<(), String> {
     let after = match &edge {
         Edge::Bytes(bytes) => {
             stat.bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            PORT_RECEIVING
+            PortState::Receiving
         }
-        Edge::End => PORT_ENDED,
-        Edge::Absent => PORT_ABSENT,
+        Edge::End => PortState::Ended,
+        Edge::Absent => PortState::Absent,
     };
-    stat.state.store(PORT_BLOCKED, Ordering::Relaxed);
+    stat.set(PortState::Blocked);
     sender
         .send(edge)
         .map_err(|_| "reducer is not running".to_string())?;
-    stat.state.store(after, Ordering::Relaxed);
+    stat.set(after);
     if let Some(wake) = wake {
         let _ = wake.try_send(());
     }
@@ -272,14 +329,7 @@ fn status_text(state: &State) -> String {
                 .iter()
                 .enumerate()
                 .fold("running".into(), |mut out, (i, port)| {
-                    let open = match port.state.load(Ordering::Relaxed) {
-                        PORT_WAITING => Some("waiting"),
-                        PORT_OPENED => Some("opened"),
-                        PORT_RECEIVING => Some("receiving"),
-                        PORT_BLOCKED => Some("blocked"),
-                        _ => None,
-                    };
-                    if let Some(open) = open {
+                    if let Some(open) = port.get().open_name() {
                         let _ = write!(out, " {i}:{open}:{}", port.bytes.load(Ordering::Relaxed));
                     }
                     out
@@ -292,4 +342,25 @@ fn status_text(state: &State) -> String {
 
 fn text(code: u16, body: &str) -> Reply {
     Reply::Text(code, body.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_states_round_trip_through_the_atomic() {
+        let stat = PortStat::default();
+        assert_eq!(stat.get(), PortState::Waiting);
+        for state in [
+            PortState::Opened,
+            PortState::Receiving,
+            PortState::Blocked,
+            PortState::Ended,
+            PortState::Absent,
+        ] {
+            stat.set(state);
+            assert_eq!(stat.get(), state);
+        }
+    }
 }

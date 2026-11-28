@@ -1,16 +1,38 @@
-import { chooseReducers, containerRequestBody, type ReducerChoice, type ReducerRequest } from "./reducer-choice.ts";
-import { jobSources } from "../../../src/runtime/coordinator/plan-dispatch.ts";
+/**
+ * `POST /jobs` on the coordinator, and alarm recovery. Both claim an attempt and run it
+ * through `runClaimedAttempt`; the physical graph is executed by `runPrepared`, so this file
+ * does not schedule tasks. Storage holds job and task status only; the immutable graph and
+ * its programs live in R2.
+ */
+import { chooseReducers, type ReducerChoice } from "./reducer-choice.ts";
+import { createLimiter } from "../../../src/runtime/concurrency.ts";
+import { jobSources, type JobSources } from "../../../src/runtime/coordinator/plan-dispatch.ts";
 import type { StageSpan, StageSummary } from "../../../src/runtime/coordinator/stage-timeline.ts";
+import type { AttemptUsage } from "../../../src/runtime/coordinator/attempt-usage.ts";
 import { FATAL_TASK_MARK, isFatalTaskError } from "../../../src/runtime/coordinator/task-errors.ts";
 import { shouldArmAlarm, sinkTaskIds, sinksToReplay, type GraphPlan } from "../../../src/runtime/coordinator/job-replay.ts";
 import { preferHashFailure, type ObjectPart } from "../../../src/runtime/coordinator/run-hash-job.ts";
+import { sha256Hex } from "../digest.ts";
 import { r2Bucket } from "../node/node.ts";
 import type { R2OutputBucket } from "../r2.ts";
-import { allowUnpinned, loadDescriptor, loadGraph, loadWasm, pinsMatch, prepare, type Prepared, preparedFromStorage, rejectUnexecutable, unpinned, writeImmutable } from "./plan.ts";
-import { failJob, publishParquet } from "./publish.ts";
+import { jobLimits, refuseUrlSources, withContainerReducers, type JobRequest } from "./job-request.ts";
+import {
+  allowUnpinned,
+  loadDescriptor,
+  loadPrepared,
+  loadWasm,
+  pinSources,
+  pinsMatch,
+  planPinned,
+  type PinnedFooter,
+  type Prepared,
+  unpinned,
+  writeImmutable,
+} from "./plan.ts";
+import { failJob } from "./publish.ts";
 import { finishPrepared } from "./finish.ts";
 import { startRenewal } from "./renewal.ts";
-import { runPrepared, type GraphRun } from "./run.ts";
+import { runPrepared } from "./run.ts";
 import {
   ALARM_MS,
   type CommittedObject,
@@ -22,30 +44,91 @@ import {
   jobKey,
   LEASE_MS,
   MAX_ATTEMPTS,
-  parseHostExecutionHints,
   readJobRecord,
   requireJobRecord,
-  sha256Hex,
   taskKey,
   taskRows,
 } from "./record.ts";
 
-/**
- * Alarm recovery. `rerun` is the same execution path as the first attempt.
- * This module does not import the HTTP entry, which calls back into here.
- */
-
-
-/** Run one claimed attempt of an already prepared graph. */
-export type RerunJob = (
-  ctx: GraphJobContext,
-  record: GraphJobRecord,
-  prepared: Prepared,
-  attempt: number,
-) => Promise<void>;
-
 export async function arm(ctx: GraphJobContext, when = Date.now() + ALARM_MS): Promise<void> {
   await ctx.setAlarm(when);
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+function jsonText(body: string, status = 200): Response {
+  return new Response(body, { status, headers: { "content-type": "application/json" } });
+}
+
+// --- one attempt -------------------------------------------------------------------------------
+
+/**
+ * Claim `attempt`, fenced on the previous one still being current: an alarm and an in-process
+ * retry cannot both claim the same attempt. `failed`: the previous attempt failed here, and
+ * counts against the job; `lost`: its coordinator went away mid-run, which does not.
+ */
+async function claimAttempt(ctx: GraphJobContext, jobId: string, attempt: number, previous: "failed" | "lost"): Promise<boolean> {
+  return ctx.transaction(async (txn) => {
+    const current = requireJobRecord(await txn.get(jobKey(jobId)));
+    if (current.executionAttempt !== attempt - 1 || current.state === "completed" || current.state === "failed") return false;
+    current.executionAttempt = attempt;
+    current.state = "running";
+    if (previous === "failed") current.failedAttempts += 1;
+    current.leaseUntil = Date.now() + LEASE_MS;
+    current.updatedAt = Date.now();
+    await txn.put(jobKey(jobId), current);
+    await txn.setAlarm?.(Date.now() + ALARM_MS);
+    return true;
+  });
+}
+
+type AttemptOptions = {
+  failTaskId?: number;
+  /** Footer reads and planning, recorded on the first attempt's timeline. */
+  planSpan?: StageSpan;
+  /** Awaited after the run and before its commit. */
+  beforeCommit?: () => Promise<void>;
+  /** Whether a JSON result is answered on the request rather than stored in R2. */
+  deliverInline: () => boolean;
+};
+
+/** Run a claimed attempt and commit it. Null when a newer attempt took the job meanwhile. */
+async function runClaimedAttempt(
+  ctx: GraphJobContext,
+  jobId: string,
+  prepared: Prepared,
+  attempt: number,
+  options: AttemptOptions,
+): Promise<string | null> {
+  const renewal = startRenewal(ctx, jobId, attempt);
+  try {
+    const latest = requireJobRecord(await ctx.store.get(jobKey(jobId)));
+    if (latest.executionAttempt !== attempt) return null;
+    latest.state = "running";
+    latest.leaseUntil = Date.now() + LEASE_MS;
+    latest.updatedAt = Date.now();
+    await ctx.store.put(jobKey(jobId), latest);
+    const ran = await runPrepared(ctx, latest, prepared, attempt, options.failTaskId, renewal.stalled, options.planSpan);
+    await options.beforeCommit?.();
+    const after = requireJobRecord(await ctx.store.get(jobKey(jobId)));
+    if (after.executionAttempt !== attempt) return null;
+    return await finishPrepared(ctx, after, prepared, ran, attempt, options.deliverInline());
+  } finally {
+    renewal.stop();
+  }
+}
+
+// --- alarm recovery ----------------------------------------------------------------------------
+
+/** The job this coordinator holds: one coordinator per job. */
+async function storedJob(ctx: GraphJobContext): Promise<GraphJobRecord | undefined> {
+  for (const value of (await ctx.list("graph-job:")).values()) {
+    const record = readJobRecord(value);
+    if (record) return record;
+  }
+  return undefined;
 }
 
 /** Each durable task's committed objects, read from the attempt lists its rows name. */
@@ -55,73 +138,66 @@ async function durableOutputs(ctx: GraphJobContext, jobId: string, graph: GraphP
   for (const task of graph.tasks) {
     const row = readDurableRow(await ctx.store.get(taskKey(jobId, task.id)));
     if (!row) continue;
-    if (!lists.has(row.outputsKey)) {
+    let list = lists.get(row.outputsKey);
+    if (!list) {
       const object = await bucket.get(row.outputsKey);
-      lists.set(row.outputsKey, object?.body ? (JSON.parse(await object.text()) as CommittedObject[]) : []);
+      list = object?.body ? (JSON.parse(await object.text()) as CommittedObject[]) : [];
+      lists.set(row.outputsKey, list);
     }
-    const objects = lists.get(row.outputsKey)!.filter((object) => object.taskId === task.id);
+    const objects = list.filter((object) => object.taskId === task.id);
     if (objects.length > 0) byTask.set(task.id, objects);
   }
   return byTask;
 }
 
-/** Tasks whose committed objects are all still in R2 at their recorded size. */
-async function durableIds(bucket: R2OutputBucket, outputs: ReadonlyMap<number, CommittedObject[]>): Promise<Set<number>> {
-  const ids = new Set<number>();
+/** Of `outputs`, the tasks whose committed objects are all still in R2 at their recorded size. */
+async function verifiedOutputs(bucket: R2OutputBucket, outputs: ReadonlyMap<number, CommittedObject[]>): Promise<Map<number, CommittedObject[]>> {
+  // A `partitionBy` export can commit thousands of objects: check a few at a time.
+  const limit = createLimiter(16);
+  const present = (object: CommittedObject) =>
+    limit(async () => {
+      const found = bucket.head ? await bucket.head(object.objectKey) : await bucket.get(object.objectKey, { range: { suffix: 1 } });
+      return found != null && (found.size == null || found.size === object.bytes);
+    });
+  const verified = new Map<number, CommittedObject[]>();
   for (const [taskId, objects] of outputs) {
-    const verified = await Promise.all(
-      objects.map(async ({ objectKey, bytes }) => {
-        const object = bucket.head ? await bucket.head(objectKey) : await bucket.get(objectKey);
-        return object != null && (object.size == null || object.size === bytes);
-      }),
-    );
-    if (verified.every(Boolean)) ids.add(taskId);
+    if ((await Promise.all(objects.map(present))).every(Boolean)) verified.set(taskId, objects);
   }
-  return ids;
+  return verified;
 }
 
-function ledgerOutputs(graph: GraphPlan, outputs: ReadonlyMap<number, CommittedObject[]>): ObjectPart[] {
-  return sinkTaskIds(graph).flatMap((taskId) => (outputs.get(taskId) ?? []).map((object) => ({ ...object, parts: 1 })));
+/**
+ * A Parquet job whose every sink output survived the lost attempt is committed through the
+ * normal finish, so a single-file export is concatenated and published exactly as the first
+ * attempt would. True when that happened.
+ */
+async function publishSurvivors(ctx: GraphJobContext, record: GraphJobRecord, prepared: Prepared): Promise<boolean> {
+  const { graph, descriptor } = prepared;
+  if (!graph || !descriptor.bucket || prepared.plan.kind !== "parquet") return false;
+  const bucket = r2Bucket(ctx.env, descriptor.bucket);
+  const survivors = await verifiedOutputs(bucket, await durableOutputs(ctx, record.jobId, graph, bucket));
+  if (sinksToReplay(graph, new Set(survivors.keys())).length > 0) return false;
+  const outputs: ObjectPart[] = sinkTaskIds(graph).flatMap((taskId) => (survivors.get(taskId) ?? []).map((object) => ({ ...object, parts: 1 })));
+  await finishPrepared(ctx, record, prepared, { outputs }, record.executionAttempt, false);
+  const terminal = requireJobRecord(await ctx.store.get(jobKey(record.jobId)));
+  if (terminal.state === "completed" || terminal.state === "failed") await ctx.deleteAlarm().catch(() => {});
+  return true;
 }
 
-/** Alarm entry. Reschedules itself after a recoverable failure. */
-export async function recoverJob(ctx: GraphJobContext, rerun: RerunJob): Promise<void> {
-  const listed = await ctx.list("graph-job:");
-  let record: GraphJobRecord | undefined;
-  for (const [key, value] of listed) {
-    if (!key.startsWith("graph-job:") || key.startsWith("graph-job-idempotency:") || key.startsWith("graph-job-task:") || key.startsWith("graph-job-test:")) continue;
-    const candidate = readJobRecord(value);
-    if (!candidate) continue;
-    record = candidate;
-    break;
-  }
-  if (!record) {
+/** Alarm entry: continue a job whose attempt was lost. Reschedules itself after a recoverable failure. */
+export async function recoverGraphJob(ctx: GraphJobContext): Promise<void> {
+  const record = await storedJob(ctx);
+  if (!record || record.state === "completed" || record.state === "failed") {
     await ctx.deleteAlarm().catch(() => {});
     return;
   }
+  if ((record.leaseUntil ?? 0) > Date.now()) {
+    await arm(ctx, record.leaseUntil);
+    return;
+  }
   try {
-    if (record.state === "completed" || record.state === "failed") {
-      await ctx.deleteAlarm().catch(() => {});
-      return;
-    }
-    if (ctx.env.WCOL_JOB_TEST_HOOKS === "1" && (await ctx.store.get("graph-job-test:throw"))) {
-      await ctx.store.delete?.("graph-job-test:throw");
-      throw new Error("injected handler failure");
-    }
-    if (record.publishing) {
-      await failJob(ctx, record.jobId, "incomplete publish from removed concat path");
-      return;
-    }
-    if ((record.leaseUntil ?? 0) > Date.now()) {
-      await arm(ctx, record.leaseUntil);
-      return;
-    }
-    if (record.kind === "concat") {
-      // Records written before the concat path changed can still say "publishing".
-      const stored: string = record.state;
-      if (stored === "publishing") {
-        await failJob(ctx, record.jobId, "incomplete publish from removed concat path");
-      }
+    if (!record.graphDigest) {
+      await failJob(ctx, record.jobId, "job record has no graph digest");
       return;
     }
     const descriptor = await loadDescriptor(ctx, record.jobId, record.graphDigest);
@@ -129,44 +205,8 @@ export async function recoverJob(ctx: GraphJobContext, rerun: RerunJob): Promise
       await failJob(ctx, record.jobId, "source object changed since the job was planned");
       return;
     }
-    const graph = await loadGraph(ctx, record.jobId, descriptor, record.graphDigest);
-    const prepared = await preparedFromStorage(ctx, record.jobId, descriptor, graph, record.graphDigest);
-    const committed =
-      graph && descriptor.bucket
-        ? await durableOutputs(ctx, record.jobId, graph, r2Bucket(ctx.env, descriptor.bucket))
-        : new Map<number, CommittedObject[]>();
-    const durable = descriptor.bucket ? await durableIds(r2Bucket(ctx.env, descriptor.bucket), committed) : new Set<number>();
-    const only = graph ? new Set(sinksToReplay(graph, durable)) : undefined;
-    if (only && only.size === 0 && descriptor.kind !== "json") {
-      if (descriptor.kind === "parquet") {
-        const outputs = ledgerOutputs(graph!, committed);
-        await publishParquet(ctx, record, descriptor.prefix ?? "", descriptor.bucket ?? "", outputs, record.executionAttempt, graph!.output?.layout);
-      } else {
-        await failJob(ctx, record.jobId, "concat output cannot execute; plan a hash-partitioned json or parquet job");
-        return;
-      }
-      const done = requireJobRecord(await ctx.store.get(jobKey(record.jobId)));
-      if (
-        done.executionAttempt === record.executionAttempt &&
-        done.state !== "completed" &&
-        done.state !== "failed"
-      ) {
-        await ctx.transaction(async (txn) => {
-          const current = requireJobRecord(await txn.get(jobKey(record.jobId)));
-          if (current.executionAttempt !== record.executionAttempt) return;
-          if (current.state === "completed" || current.state === "failed") return;
-          current.state = "completed";
-          current.leaseUntil = 0;
-          current.updatedAt = Date.now();
-          await txn.put(jobKey(record.jobId), current);
-        });
-      }
-      const terminal = requireJobRecord(await ctx.store.get(jobKey(record.jobId)));
-      if (terminal.executionAttempt === record.executionAttempt && (terminal.state === "completed" || terminal.state === "failed")) {
-        await ctx.deleteAlarm().catch(() => {});
-      }
-      return;
-    }
+    const prepared = await loadPrepared(ctx, record.jobId, descriptor, record.graphDigest);
+    if (await publishSurvivors(ctx, record, prepared)) return;
     if (record.error && isFatalTaskError(record.error)) {
       await failJob(ctx, record.jobId, record.error);
       return;
@@ -176,62 +216,40 @@ export async function recoverJob(ctx: GraphJobContext, rerun: RerunJob): Promise
       await failJob(ctx, record.jobId, `failed after ${MAX_ATTEMPTS} attempts`);
       return;
     }
-    let start = false;
-    await ctx.transaction(async (txn) => {
-      const current = requireJobRecord(await txn.get(jobKey(record!.jobId)));
-      if (current.publishing) return;
-      if (current.state === "completed" || current.state === "failed") return;
-      current.executionAttempt = attempt;
-      current.state = "running";
-      current.leaseUntil = Date.now() + LEASE_MS;
-      current.updatedAt = Date.now();
-      await txn.put(jobKey(record!.jobId), current);
-      await txn.setAlarm?.(Date.now() + ALARM_MS);
-      start = true;
-    });
-    if (!start) return;
+    if (!(await claimAttempt(ctx, record.jobId, attempt, "lost"))) return;
     // The alarm invocation itself is limited to 15 minutes. The attempt keeps running
-    // on waitUntil, and the durable alarm above fires again if that invocation is cut.
+    // on waitUntil, and the durable alarm the claim set fires again if that invocation is cut.
     ctx.waitUntil(
-      rerun(ctx, { ...record, executionAttempt: attempt }, prepared, attempt).catch(async (error) => {
-        const current = readJobRecord(await ctx.store.get(jobKey(record.jobId)));
-        if (!current || current.state === "completed" || current.state === "failed" || current.publishing) return;
-        if (isFatalTaskError(error)) {
-          await failJob(ctx, record.jobId, errorMessage(error));
-          return;
-        }
-        current.error = errorMessage(error);
-        current.failedAttempts += 1;
-        current.updatedAt = Date.now();
-        await ctx.store.put(jobKey(record.jobId), current);
-        await arm(ctx);
-      }),
+      runClaimedAttempt(ctx, record.jobId, prepared, attempt, { deliverInline: () => false }).catch((error) =>
+        recordRecoveryFailure(ctx, record.jobId, error),
+      ),
     );
   } catch (error) {
-    const current = readJobRecord(await ctx.store.get(jobKey(record.jobId)));
-    if (current && current.state !== "completed" && current.state !== "failed") {
-      if (isFatalTaskError(error)) {
-        await failJob(ctx, record.jobId, errorMessage(error));
-        return;
-      }
-      current.error = errorMessage(error);
-      current.failedAttempts += 1;
-      current.updatedAt = Date.now();
-      await ctx.store.put(jobKey(record.jobId), current);
-      await arm(ctx);
-    }
+    await recordRecoveryFailure(ctx, record.jobId, error);
   }
 }
 
 /**
- * `POST /jobs` on the coordinator: validate, plan, persist a recoverable job, and answer HTTP.
- * Pinning, execution, publication, and alarm recovery live in the modules next to this file.
- * The physical graph is executed by `runExecutionGraph`. This file does not schedule tasks.
- *
- * Storage holds job and task status only. The immutable graph and its programs live in R2.
+ * Note a failed recovery and re-arm the alarm, or fail the job. Counting here matters: a
+ * failure before an attempt is claimed (a missing descriptor, an unreachable source) never
+ * advances `executionAttempt`, so the attempt limit alone would re-arm forever.
  */
+async function recordRecoveryFailure(ctx: GraphJobContext, jobId: string, error: unknown): Promise<void> {
+  const current = readJobRecord(await ctx.store.get(jobKey(jobId)));
+  if (!current || current.state === "completed" || current.state === "failed") return;
+  const message = errorMessage(error);
+  if (isFatalTaskError(message) || current.failedAttempts + 1 >= MAX_ATTEMPTS) {
+    await failJob(ctx, jobId, isFatalTaskError(message) ? message : `failed after ${MAX_ATTEMPTS} attempts: ${message}`);
+    return;
+  }
+  current.error = message;
+  current.failedAttempts += 1;
+  current.updatedAt = Date.now();
+  await ctx.store.put(jobKey(jobId), current);
+  await arm(ctx);
+}
 
-
+// --- submission --------------------------------------------------------------------------------
 
 export type HashScheduleSummary = {
   coordinatorShuffleBytes?: number;
@@ -242,7 +260,7 @@ export type HashScheduleSummary = {
 type AttemptTiming = {
   schedule?: HashScheduleSummary;
   stages?: StageSummary[];
-  usage?: import("../../../src/runtime/coordinator/attempt-usage.ts").AttemptUsage;
+  usage?: AttemptUsage;
 };
 
 async function readAttemptTiming(ctx: GraphJobContext, jobId: string): Promise<AttemptTiming> {
@@ -268,94 +286,56 @@ async function readAttemptTiming(ctx: GraphJobContext, jobId: string): Promise<A
   }
 }
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
-}
-
-function jsonText(body: string, status = 200): Response {
-  return new Response(body, { status, headers: { "content-type": "application/json" } });
-}
-
-async function rerun(
-  ctx: GraphJobContext,
-  record: GraphJobRecord,
-  prepared: Prepared,
-  attempt: number,
-): Promise<void> {
-  const renewal = startRenewal(ctx, record.jobId, attempt);
-  try {
-    const ran = await runPrepared(ctx, record, prepared, attempt, undefined, renewal.stalled);
-    const latest = requireJobRecord(await ctx.store.get(jobKey(record.jobId)));
-    if (latest.executionAttempt !== attempt) return;
-    await finishPrepared(ctx, latest, prepared, ran, attempt, false);
-  } finally {
-    renewal.stop();
-  }
-}
-
-/** Alarm entry. Reschedules itself after a recoverable failure. */
-export function recoverGraphJob(ctx: GraphJobContext): Promise<void> {
-  return recoverJob(ctx, rerun);
-}
-
 /**
- * Plan the job and decide where its reducers run. `auto` plans with node budgets first; when
- * the estimated group state needs containers it plans again with the container's budget.
+ * Plan the job and decide where its reducers run, reading each footer once. `auto` plans
+ * with node budgets first; when the estimated group state needs containers it plans again
+ * with the container's budget.
  */
 async function planReducers(
   ctx: GraphJobContext,
-  body: string,
+  request: JobRequest,
+  pinned: readonly PinnedFooter[],
   fingerprint: string,
-  request: ReducerRequest,
 ): Promise<{ prepared: Prepared; reducers: ReducerChoice }> {
   const planFor = (choice: ReducerChoice) =>
-    prepare(ctx, choice.runtime === "container" ? containerRequestBody(body, choice.instance) : body, fingerprint);
-  if (request.runtime !== "auto") {
-    const reducers = chooseReducers(request, 0);
+    planPinned(ctx.env, choice.runtime === "container" ? withContainerReducers(request, choice.instance) : request, pinned, fingerprint);
+  if (request.reducers.runtime !== "auto") {
+    const reducers = chooseReducers(request.reducers, 0);
     return { prepared: await planFor(reducers), reducers };
   }
-  const nodePlan = await prepare(ctx, body, fingerprint);
+  const nodePlan = await planPinned(ctx.env, request, pinned, fingerprint);
   const plan = nodePlan.plan;
   const groupBytes = plan.kind === "json" || plan.kind === "parquet" ? (plan.groupBytes ?? 0) : 0;
-  const reducers = chooseReducers(request, groupBytes);
+  const reducers = chooseReducers(request.reducers, groupBytes);
   return { prepared: reducers.runtime === "container" ? await planFor(reducers) : nodePlan, reducers };
 }
 
-/** `POST /jobs`. `jobId` is the coordinator's name for this job. */
-type SubmitOptions = { failTaskId?: number; hold?: boolean; crashBeforeComplete?: boolean };
-
-export async function submitGraphJob(
-  ctx: GraphJobContext,
-  body: string,
-  jobId: string,
-  options: SubmitOptions = {},
-): Promise<Response> {
-  let request: ReturnType<typeof jobSources>;
+/** `POST /jobs`: validate, plan, persist a recoverable job, run it, and answer HTTP. */
+export async function submitGraphJob(ctx: GraphJobContext, request: JobRequest): Promise<Response> {
+  const { jobId } = request;
+  let sources: JobSources;
   try {
-    request = jobSources(await loadWasm(), body);
+    sources = jobSources(await loadWasm(), request.body);
   } catch (error) {
     return json({ error: errorMessage(error) }, 400);
   }
-  const fingerprint = await sha256Hex(new TextEncoder().encode(body));
-  if (request.idempotencyKey) {
-    const existing = (await ctx.store.get(idempotencyKey(request.idempotencyKey))) as { jobId: string; fingerprint: string } | undefined;
+  const refused = refuseUrlSources(sources.sources, jobLimits(ctx.env));
+  if (refused) return json({ error: refused }, 400);
+  const fingerprint = await sha256Hex(new TextEncoder().encode(request.body));
+  if (sources.idempotencyKey) {
+    const existing = (await ctx.store.get(idempotencyKey(sources.idempotencyKey))) as { jobId: string; fingerprint: string } | undefined;
     if (existing) {
       if (existing.fingerprint !== fingerprint) return json({ error: "idempotency key was used with a different request" }, 409);
       const status = await graphJobStatus(ctx, existing.jobId);
       return json({ ...status, idempotent: true });
     }
   }
-  let hints = parseHostExecutionHints(undefined);
-  try {
-    hints = parseHostExecutionHints(JSON.parse(body) as unknown);
-  } catch {
-    hints = parseHostExecutionHints(undefined);
-  }
   let prepared: Prepared;
   let reducers: ReducerChoice;
   const planStartMs = Date.now();
   try {
-    ({ prepared, reducers } = await planReducers(ctx, body, fingerprint, hints.reducers));
+    const pinned = await pinSources(ctx.env, sources.sources);
+    ({ prepared, reducers } = await planReducers(ctx, request, pinned, fingerprint));
   } catch (error) {
     return json({ error: errorMessage(error) }, 400);
   }
@@ -363,13 +343,10 @@ export async function submitGraphJob(
     const existing = await ctx.env.OUTPUT?.get(`_models/${prepared.plan.name}/model.json`);
     if (existing) return json({ error: `model ${prepared.plan.name} already exists` }, 409);
   }
-  // Footer reads and planning; recorded on the first attempt's timeline.
   const planSpan: StageSpan = { stage: "plan", startMs: planStartMs, endMs: Date.now(), outcome: "ok" };
   if (unpinned(prepared.descriptor) && !allowUnpinned(prepared.plan, ctx.env)) {
     return json({ error: "source has no etag; a recoverable job needs a pinned object" }, 400);
   }
-  const rejected = rejectUnexecutable(prepared);
-  if (rejected) return json({ error: rejected }, 400);
   const digest = await sha256Hex(prepared.graphWire);
   const now = Date.now();
   const record: GraphJobRecord = {
@@ -385,28 +362,22 @@ export async function submitGraphJob(
     syncOnly: unpinned(prepared.descriptor),
     requestFingerprint: fingerprint,
     graphDigest: digest,
-    ...(hints.maxActiveIngress != null ? { maxActiveIngress: hints.maxActiveIngress } : {}),
+    ...(request.maxActiveIngress != null ? { maxActiveIngress: request.maxActiveIngress } : {}),
     ...(reducers.runtime === "container" ? { reducerRuntime: "container", reducerInstance: reducers.instance } : {}),
     reducerReason: reducers.reason,
   };
+  const key = sources.idempotencyKey;
   const inserted = await ctx.transaction(async (txn) => {
-    if (request.idempotencyKey) {
-      const race = (await txn.get(idempotencyKey(request.idempotencyKey))) as { jobId: string } | undefined;
-      if (race) return false;
-    }
+    if (key && (await txn.get(idempotencyKey(key)))) return false;
     if (await txn.get(jobKey(jobId))) return false;
     await txn.put(jobKey(jobId), record);
-    if (request.idempotencyKey) {
-      await txn.put(idempotencyKey(request.idempotencyKey), { jobId, fingerprint });
-    }
+    if (key) await txn.put(idempotencyKey(key), { jobId, fingerprint });
     for (const row of taskRows(jobId, prepared.graph, 1)) await txn.put(row.key, row.value);
     await txn.setAlarm?.(now + ALARM_MS);
     return true;
   });
   if (!inserted) {
-    const existingId = request.idempotencyKey
-      ? ((await ctx.store.get(idempotencyKey(request.idempotencyKey))) as { jobId: string }).jobId
-      : jobId;
+    const existingId = key ? ((await ctx.store.get(idempotencyKey(key))) as { jobId: string }).jobId : jobId;
     const existing = readJobRecord(await ctx.store.get(jobKey(existingId)));
     if (existing?.requestFingerprint && existing.requestFingerprint !== fingerprint) {
       return json({ error: "job id was used with a different request" }, 409);
@@ -425,59 +396,23 @@ export async function submitGraphJob(
     // Not retryable: another attempt would commit a job that cannot be recovered either.
     if (failed !== undefined) throw new Error(`${FATAL_TASK_MARK} recovery artefacts not written: ${errorMessage(failed)}`);
   };
-  if (options.crashBeforeComplete && ctx.env.WCOL_JOB_TEST_HOOKS === "1") {
-    await recoverable();
-    await ctx.store.put(`graph-job-test:crash:${jobId}`, { crash: true });
-  }
-  if (options.hold) {
-    try {
-      await recoverable();
-    } catch (error) {
-      await failJob(ctx, jobId, errorMessage(error));
-      return json({ error: errorMessage(error) }, 500);
-    }
-    return json({ jobId, kind: prepared.plan.kind, state: "accepted" }, 202);
-  }
-
   const deadline = prepared.plan.kind === "json" ? Number(ctx.env.WCOL_JOB_SYNC_MS ?? 10_000) : 0;
   // A json job that will not answer on this request must leave its body in R2.
   let deliverInline = prepared.plan.kind === "json" && deadline > 0;
 
-  const run = async (attempt: number, stalled: Promise<string>) => {
-    const latest = requireJobRecord(await ctx.store.get(jobKey(jobId)));
-    if (latest.executionAttempt !== attempt) return null;
-    latest.state = "running";
-    latest.leaseUntil = Date.now() + LEASE_MS;
-    latest.updatedAt = Date.now();
-    await ctx.store.put(jobKey(jobId), latest);
-    const ran = await runPrepared(ctx, latest, prepared, attempt, options.failTaskId, stalled,
-      attempt === 1 ? planSpan : undefined);
-    await recoverable();
-    const after = requireJobRecord(await ctx.store.get(jobKey(jobId)));
-    if (after.executionAttempt !== attempt) return null;
-    return finishPrepared(ctx, after, prepared, ran, attempt, deliverInline);
-  };
-
   const finished = (async () => {
     let last: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const renewal = startRenewal(ctx, jobId, attempt);
       try {
-        if (attempt > 1) {
-          await ctx.transaction(async (txn) => {
-            const current = requireJobRecord(await txn.get(jobKey(jobId)));
-            current.executionAttempt = attempt;
-            current.failedAttempts += 1;
-            current.leaseUntil = Date.now() + LEASE_MS;
-            current.updatedAt = Date.now();
-            await txn.put(jobKey(jobId), current);
-            await txn.setAlarm?.(Date.now() + ALARM_MS);
-          });
-        }
-        return await run(attempt, renewal.stalled);
+        // The alarm may have claimed a later attempt, or ended the job, meanwhile.
+        if (attempt > 1 && !(await claimAttempt(ctx, jobId, attempt, "failed"))) return null;
+        return await runClaimedAttempt(ctx, jobId, prepared, attempt, {
+          failTaskId: request.failTaskId,
+          planSpan: attempt === 1 ? planSpan : undefined,
+          beforeCommit: recoverable,
+          deliverInline: () => deliverInline,
+        });
       } catch (error) {
-        const current = readJobRecord(await ctx.store.get(jobKey(jobId)));
-        if (current?.publishing) return null;
         last = preferHashFailure(last, error);
         const message = errorMessage(last);
         if (isFatalTaskError(message) || message.includes("stalled:") || attempt >= MAX_ATTEMPTS) {
@@ -487,8 +422,6 @@ export async function submitGraphJob(
           await failJob(ctx, jobId, terminal);
           throw last;
         }
-      } finally {
-        renewal.stop();
       }
     }
     throw last;
@@ -525,17 +458,35 @@ export async function submitGraphJob(
   } finally {
     clearTimeout(timer);
   }
-  if (record.syncOnly) {
-    ctx.waitUntil(finished.catch((error) => settleBackground(ctx, jobId, error)));
-    return json({ jobId, error: "unpinned source cannot be recovered" }, 500);
-  }
-  ctx.waitUntil(finished.catch((error) => settleBackground(ctx, jobId, error)));
+  // The deadline can pass after the attempt chose to answer inline, so it may finish with the
+  // rows only in memory: keep them for `GET /jobs/:id`.
+  const settled = finished.then(
+    (text) => (text == null ? undefined : keepInlineResult(ctx, jobId, text)),
+    (error) => settleBackground(ctx, jobId, error),
+  );
+  ctx.waitUntil(settled);
+  if (record.syncOnly) return json({ jobId, error: "unpinned source cannot be recovered" }, 500);
   return json({ jobId, kind: "json", state: "running" }, 202);
+}
+
+/** Store a completed JSON result that was meant for the request, unless it is stored already. */
+async function keepInlineResult(ctx: GraphJobContext, jobId: string, text: string): Promise<void> {
+  const current = readJobRecord(await ctx.store.get(jobKey(jobId)));
+  if (!current || current.state !== "completed" || current.resultKey || !ctx.env.OUTPUT) return;
+  const key = `_jobs/${jobId}/result.json`;
+  await ctx.env.OUTPUT.put(key, text);
+  await ctx.transaction(async (txn) => {
+    const record = requireJobRecord(await txn.get(jobKey(jobId)));
+    if (record.state !== "completed" || record.resultKey) return;
+    record.resultKey = key;
+    record.updatedAt = Date.now();
+    await txn.put(jobKey(jobId), record);
+  });
 }
 
 async function settleBackground(ctx: GraphJobContext, jobId: string, error: unknown): Promise<void> {
   const current = readJobRecord(await ctx.store.get(jobKey(jobId)));
-  if (!current || current.publishing || current.state === "completed" || current.state === "failed") return;
+  if (!current || current.state === "completed" || current.state === "failed") return;
   await failJob(ctx, jobId, errorMessage(error));
 }
 

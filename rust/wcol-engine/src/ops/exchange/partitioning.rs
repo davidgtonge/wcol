@@ -1,18 +1,6 @@
 //! Physical exchange partitioning (placement-agnostic; host wires WCS1 edges).
 
-/// How rows are routed across logical output partitions.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExchangePartitioning {
-    Single,
-    Broadcast,
-    Hash {
-        keys: Vec<u32>,
-        partitions: u32,
-        hash_version: u32,
-    },
-}
-
-/// Hash shuffle parameters for [`super::HashPartitionOp`].
+/// Hash shuffle parameters for [`super::split_owned_batch`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HashPartitionPlan {
     pub keys: Vec<u32>,
@@ -33,16 +21,6 @@ impl HashPartitionPlan {
             partitions,
             hash_version,
         })
-    }
-}
-
-impl From<HashPartitionPlan> for ExchangePartitioning {
-    fn from(plan: HashPartitionPlan) -> Self {
-        ExchangePartitioning::Hash {
-            keys: plan.keys,
-            partitions: plan.partitions,
-            hash_version: plan.hash_version,
-        }
     }
 }
 

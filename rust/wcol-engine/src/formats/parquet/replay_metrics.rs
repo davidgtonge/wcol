@@ -15,11 +15,6 @@ pub struct ScanReplayMetrics {
 }
 
 impl ScanReplayMetrics {
-    /// `page_events_visited / max(1, page_events_committed)` for this column scan (chunk lifetime).
-    pub fn replay_amplification(&self) -> f64 {
-        self.page_events_visited as f64 / self.page_events_committed.max(1) as f64
-    }
-
     pub fn merge(&mut self, other: Self) {
         self.page_replay_count = self
             .page_replay_count
@@ -86,6 +81,5 @@ mod tests {
         assert_eq!(t.page_replay_count, 2);
         assert_eq!(t.page_events_visited, 110);
         assert_eq!(t.page_events_committed, 50);
-        assert!((t.replay_amplification() - 2.2).abs() < 0.001);
     }
 }

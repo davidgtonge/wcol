@@ -97,7 +97,7 @@ impl ExchangeHashCache {
     }
 }
 
-pub fn exchange_hash_seed(hash_version: u32) -> u64 {
+fn exchange_hash_seed(hash_version: u32) -> u64 {
     HASH_SEED_BASE ^ ((hash_version as u64) << 32)
 }
 
@@ -131,7 +131,7 @@ pub fn hash_row_keys_at(
     row: usize,
     hash_version: u32,
 ) -> Result<u64, String> {
-    let buf = join_key_fingerprint_at(batch, keys, row)?;
+    let buf = key_fingerprint_at(batch, keys, row)?;
     Ok(hash_row_keys_from_fingerprint(&buf, hash_version))
 }
 
@@ -186,12 +186,8 @@ impl CombinerRoute {
     }
 }
 
-/// Canonical key bytes for equality checks (same encoding as [`hash_row_keys_at`]).
-pub fn join_key_fingerprint_at(
-    batch: &WcolBatch<'_>,
-    keys: &[u32],
-    row: usize,
-) -> Result<Vec<u8>, String> {
+/// Canonical bytes of a row's key tuple: what [`hash_row_keys_at`] hashes.
+fn key_fingerprint_at(batch: &WcolBatch<'_>, keys: &[u32], row: usize) -> Result<Vec<u8>, String> {
     if row >= batch.row_count {
         return Err("hash row out of range".to_string());
     }
@@ -201,43 +197,6 @@ pub fn join_key_fingerprint_at(
     }
     buf.push(TAG_COMPOSITE_END);
     Ok(buf)
-}
-
-/// Inner-join semantics: any null key column → not matchable.
-pub fn join_key_is_null(batch: &WcolBatch<'_>, keys: &[u32], row: usize) -> Result<bool, String> {
-    if row >= batch.row_count {
-        return Err("join key row out of range".to_string());
-    }
-    for &key in keys {
-        let Some(col) = find_column(batch, key) else {
-            return Err(format!("join key column {key} missing"));
-        };
-        let null = match col {
-            WcolColumn::I64 { nulls, .. }
-            | WcolColumn::F64 { nulls, .. }
-            | WcolColumn::DictId { nulls, .. }
-            | WcolColumn::Utf8 { nulls, .. } => nulls[row],
-        };
-        if null == 0 {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-pub fn join_keys_equal(
-    build: &WcolBatch<'_>,
-    build_keys: &[u32],
-    build_row: usize,
-    probe: &WcolBatch<'_>,
-    probe_keys: &[u32],
-    probe_row: usize,
-) -> Result<bool, String> {
-    if build_keys.len() != probe_keys.len() {
-        return Err("join key arity mismatch".to_string());
-    }
-    Ok(join_key_fingerprint_at(build, build_keys, build_row)?
-        == join_key_fingerprint_at(probe, probe_keys, probe_row)?)
 }
 
 fn feed_key_component_row(

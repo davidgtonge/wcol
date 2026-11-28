@@ -56,10 +56,6 @@ impl DictionaryStore {
         self.entries.len()
     }
 
-    pub fn clear_build(&mut self) {
-        self.byte_build = None;
-    }
-
     pub fn begin_dict_page(&mut self) {
         self.entries.clear();
         self.arena.clear();
@@ -278,11 +274,6 @@ impl DictionaryStore {
         }
     }
 
-    /// Borrow dictionary entries for install / on-demand resolve (colocated path).
-    pub fn entry_count(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Copy integer/bool dictionary entries for WCOL dictionary install (no data-page ids).
     pub fn copy_int_entries(&self) -> Result<Vec<i64>, Error> {
         let mut out = Vec::with_capacity(self.entries.len());
@@ -302,9 +293,6 @@ impl DictionaryStore {
 
     /// Copy FLOAT/DOUBLE dictionary entries widened to `f64`.
     pub fn copy_float_entries(&self) -> Result<Vec<f64>, Error> {
-        if self.entries.is_empty() {
-            return Err(Error::Message("dictionary has no float entries"));
-        }
         let mut out = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             match entry {
@@ -346,8 +334,6 @@ impl DictionaryStore {
         Ok((offsets, bytes))
     }
 }
-
-pub use crate::stream::dictionary::chunk_has_dictionary_page;
 
 #[cfg(test)]
 mod tests {

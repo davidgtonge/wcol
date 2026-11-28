@@ -18,24 +18,31 @@ use wcol::plan::page_compaction::{
 use wcol::stream::core::Action;
 
 fn write_three_row_group_fixture(path: &PathBuf) {
-    let columns = [Column {
-        name: "v",
-        rows: 4,
-        codec: UNCOMPRESSED,
-        present: None,
-        values: ColumnValues::I64(&[1, 2, 3, 4]),
-    }];
+    write_fixture(
+        path,
+        &[Column {
+            name: "v",
+            rows: 4,
+            codec: UNCOMPRESSED,
+            present: None,
+            values: ColumnValues::I64(&[1, 2, 3, 4]),
+        }],
+    );
+}
+
+/// Three identical row groups of `columns`, uncompressed and without dictionaries.
+fn write_fixture(path: &PathBuf, columns: &[Column<'_>]) {
     let mut scratch = vec![0u8; 4096];
     let mut snappy = [0u32; 4096];
     let mut out = vec![0u8; 64 * 1024];
     let mut at = write_magic(&mut out).unwrap();
-    let mut all_places: Vec<[ChunkPlace; 1]> = Vec::new();
+    let mut all_places: Vec<Vec<ChunkPlace>> = Vec::new();
     for _ in 0..3 {
-        let mut places = [ChunkPlace::default()];
+        let mut places = vec![ChunkPlace::default(); columns.len()];
         let rg_len = write_row_group(
             &mut out[at..],
             4,
-            &columns,
+            columns,
             &mut places,
             &mut scratch,
             &mut snappy,
@@ -55,20 +62,18 @@ fn write_three_row_group_fixture(path: &PathBuf) {
         .iter()
         .map(|places| RowGroupFooter {
             num_rows: 4,
-            columns: &columns,
+            columns,
             places,
         })
         .collect();
-    let footer_len = write_footer(&mut out[at..], &columns, &footers).unwrap();
+    let footer_len = write_footer(&mut out[at..], columns, &footers).unwrap();
     out.truncate(at + footer_len);
     std::fs::write(path, &out).unwrap();
 }
 
-#[test]
-fn page_compact_merges_three_row_groups_into_one() {
-    let path = std::env::temp_dir().join("wcol-page-compact-src.parquet");
-    write_three_row_group_fixture(&path);
-    let (mut file, plan) = open_plan(&path).unwrap();
+/// Compact `path`'s row groups into one part; the output file and the reads it took.
+fn compact_file(path: &std::path::Path) -> (Vec<u8>, usize) {
+    let (mut file, plan) = open_plan(path).unwrap();
     let file_size = file.metadata().unwrap().len();
     read_footer(&mut file, file_size).unwrap();
     let inputs = vec![CompactionInputFile {
@@ -132,55 +137,99 @@ fn page_compact_merges_three_row_groups_into_one() {
             Action::Failed => panic!("compact host failed: {:?}", host.error()),
         }
     }
-    assert!(
-        output.len() > 50,
-        "output len {} reads {}",
-        output.len(),
-        reads.len()
-    );
-    assert!(output.starts_with(b"PAR1"));
+    assert!(output.starts_with(b"PAR1"), "output len {}", output.len());
+    (output, reads.len())
+}
+
+fn footer_plan(output: &[u8]) -> wcol::formats::parquet::Plan {
     let tail: [u8; 8] = output[output.len() - 8..].try_into().unwrap();
     let range = footer_range(output.len() as u64, &tail).unwrap();
-    let meta = &output[range.start as usize..range.end as usize];
-    let out_plan = wcol::formats::parquet::plan_footer(meta).expect("plan footer");
-    assert_eq!(out_plan.rows, 12);
-    assert_eq!(out_plan.chunks.len(), 1);
-    assert_eq!(reads.len(), 3);
+    wcol::formats::parquet::plan_footer(&output[range.start as usize..range.end as usize])
+        .expect("plan footer")
 }
 
 #[test]
-fn page_compact_three_r2_export_parts() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../data/page-compact-trial/compact-trial-e2e-v2");
-    if !root.is_dir() {
-        return;
-    }
-    let names = [
-        "hits-eq0-bench-w16-1-w16-part-01.parquet",
-        "hits-eq0-bench-w16-1-w16-part-02.parquet",
-        "hits-eq0-bench-w16-1-w16-part-03.parquet",
-    ];
-    let mut inputs = Vec::new();
-    let mut files = Vec::new();
-    for name in names {
-        let path = root.join(name);
-        if !path.is_file() {
-            return;
-        }
-        let file_size = std::fs::metadata(&path).unwrap().len();
-        let (file, plan) = open_plan(&path).unwrap();
-        inputs.push(CompactionInputFile {
-            object_key: name.to_string(),
-            file_size,
-            plan,
-        });
-        files.push((file, path));
-    }
+fn page_compact_merges_three_row_groups_into_one() {
+    let path = std::env::temp_dir().join("wcol-page-compact-src.parquet");
+    write_three_row_group_fixture(&path);
+    let (output, reads) = compact_file(&path);
+    let out_plan = footer_plan(&output);
+    assert_eq!(out_plan.rows, 12);
+    assert_eq!(out_plan.chunks.len(), 1);
+    assert_eq!(reads, 3);
+}
+
+#[test]
+fn page_compact_keeps_each_column_type_in_the_built_footer() {
+    let path = std::env::temp_dir().join("wcol-page-compact-typed.parquet");
+    let words: [&[u8]; 4] = [b"a", b"bb", b"ccc", b"dddd"];
+    write_fixture(
+        &path,
+        &[
+            Column {
+                name: "n",
+                rows: 4,
+                codec: UNCOMPRESSED,
+                present: None,
+                values: ColumnValues::I32(&[1, 2, 3, 4]),
+            },
+            Column {
+                name: "s",
+                rows: 4,
+                codec: UNCOMPRESSED,
+                present: None,
+                values: ColumnValues::Bytes(&words),
+            },
+            Column {
+                name: "f",
+                rows: 4,
+                codec: UNCOMPRESSED,
+                present: None,
+                values: ColumnValues::F64(&[0.5, 1.5, 2.5, 3.5]),
+            },
+        ],
+    );
+    let (output, _) = compact_file(&path);
+    let out_plan = footer_plan(&output);
+    let types: Vec<(String, i32)> = out_plan
+        .leaves
+        .iter()
+        .map(|leaf| (leaf.name.clone(), leaf.physical))
+        .collect();
+    assert_eq!(
+        types,
+        [
+            ("n".to_string(), 1),
+            ("s".to_string(), 6),
+            ("f".to_string(), 5)
+        ]
+    );
+    assert_eq!(out_plan.rows, 12);
+}
+
+/// Real ClickBench row groups: the committed sample's groups merge into one file that keeps
+/// every row, read range by range.
+#[test]
+#[ignore = "page copy needs uncompressed, dictionary-free pages; the committed sample is Snappy-compressed"]
+fn page_compact_merges_hits_sample_row_groups() {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/hits_subset_500k.parquet");
+    let file_size = std::fs::metadata(&path).unwrap().len();
+    let (file, plan) = open_plan(&path).unwrap();
+    let input_rows = plan.rows;
+    let input_chunks = plan.chunks.len();
+    assert!(input_chunks > plan.leaves.len(), "one row group");
+    let inputs = vec![CompactionInputFile {
+        object_key: "hits_subset_500k.parquet".to_string(),
+        file_size,
+        plan,
+    }];
+    let mut files = [(file, path)];
     let compact_plan = plan_page_compaction(
         SourceVersion {
             object_key_hash: 42,
         },
-        "three-parts",
+        "hits-sample",
         inputs,
         PageCompactionPolicy {
             target_output_bytes: 600 * 1024 * 1024,
@@ -242,5 +291,11 @@ fn page_compact_three_r2_export_parts() {
         reads.len(),
         actions
     );
-    assert!(output.len() > 1_000_000, "output {}", output.len());
+    let out_plan = footer_plan(&output);
+    assert_eq!(out_plan.rows, input_rows);
+    assert!(
+        out_plan.chunks.len() < input_chunks,
+        "{} of {input_chunks} column chunks",
+        out_plan.chunks.len()
+    );
 }

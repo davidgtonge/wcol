@@ -18,6 +18,7 @@ dist/
 pkg/
 pkg-web/
 .wrangler/
+/cloudflare/dist-*/
 *.wasm
 *.zip
 *.tsbuildinfo
@@ -26,7 +27,8 @@ pkg-web/
 perf/
 .cursor/
 
-# IDE / OS
+# IDE / OS / agents
+.claude/
 .vscode/
 .idea/
 .DS_Store
@@ -38,33 +40,16 @@ Thumbs.db
 .dev.vars
 *.log
 
-# Internal planning docs (not for public repo)
-docs/repo-file-action-plan.md
-docs/prototype-plan-index.md
-docs/prototype-*-plan.md
+# Internal planning docs kept locally (not for the public repo)
 docs/PLAN_STATUS.md
 docs/ec2-clickbench.md
-docs/synth-groupby-runner.md
-docs/scaling-proof.md
-docs/thread-engine-v3.md
 docs/local-disk-pressure.md
-docs/AGENTS.md
-docs/PERF_BASELINE.md
-docs/SAV_ANALYSIS.md
-docs/SIZE_ANALYSIS.md
-docs/demo-and-validation-plan.md
-docs/deployable-prototype-plan.md
-docs/design.md
-docs/groupby-memory-cache-flow.md
-docs/minimal-wcol-stabilization-plan.md
-docs/next-steps.md
-docs/q34-q35-group-hotspots.md
-docs/query-ast-and-engine-plan.md
-docs/repo-reset-and-triage-plan.md
-docs/sql-vs-microbench-handoff.md
-docs/string-*.md
-docs/technical-*.md
-docs/tasks/
+docs/prototype-*-plan.md
+docs/prototype-plan-index.md
+docs/repo-file-action-plan.md
+docs/scaling-proof.md
+docs/synth-groupby-runner.md
+docs/thread-engine-v3.md
 
 # Scratch SQL at repo root
 *.sql

@@ -15,14 +15,16 @@ import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { Miniflare } from "miniflare";
-import { buildWorkers, coordinatorOut, distDir, nodeOut, ROOT } from "./build-workers.ts";
+import { buildWorkers, coordinatorOut, distDir, nodeOut } from "./build-workers.ts";
+import { tsvQueries, UNSUPPORTED } from "./clickbench-catalog.ts";
+import { oracleFor, rowsMatch } from "./clickbench-oracle.ts";
+import { assert, asText, hashPartitions, type JobRecord, jobRows, localDuckDb, ROOT, scheduleOf, waitForJob } from "./harness.ts";
 
 const parquet = process.argv[2] ?? path.join(ROOT, "data/hits_subset_500k.parquet");
 const only = (process.env.CLICKBENCH_ONLY ?? "")
   .split(",")
   .map((label) => label.trim())
   .filter((label) => label.length > 0);
-const EXPECTED_UNSUPPORTED = ["Q18", "Q35", "Q42"];
 /** Production full-hits shape is 32 scans and 64 reducers. The default stays small. */
 const HASH_REDUCERS = Number(process.env.HASH_REDUCERS ?? 2);
 const MAX_NODES = process.env.MAX_NODES ?? "2";
@@ -30,6 +32,8 @@ const MAX_ACTIVE_SCANS = process.env.WCOL_MAX_ACTIVE_SCANS ?? MAX_NODES;
 const QUERY_TIMEOUT_MS = Number(process.env.CLICKBENCH_TIMEOUT_MS ?? 180_000);
 /** `parquet`: export each query to R2 instead of returning rows; reports memory, not rows. */
 const OUTPUT_PARQUET = process.env.CLICKBENCH_OUTPUT === "parquet";
+/** Rows a JSON answer may print, so a checked answer is never cut short. */
+const ROW_CAP = 100_000;
 /** Below the sample's widest row group, so a `SELECT *` top-k reads its rows late. */
 const LATE_WIDE_BYTES = process.env.CLICKBENCH_LATE_WIDE_BYTES
   ? Number(process.env.CLICKBENCH_LATE_WIDE_BYTES)
@@ -37,28 +41,6 @@ const LATE_WIDE_BYTES = process.env.CLICKBENCH_LATE_WIDE_BYTES
 const TARGET_GROUP_BYTES = process.env.CLICKBENCH_TARGET_GROUP_BYTES
   ? Number(process.env.CLICKBENCH_TARGET_GROUP_BYTES)
   : undefined;
-
-type Cell = string | null;
-type Query = { label: string; sql: string };
-type JobBody = {
-  jobId?: string;
-  state?: string;
-  error?: string;
-  nodeCount?: number;
-  columns?: string[];
-  rows?: unknown[][];
-  result?: { rows?: unknown[][] };
-  schedule?: { openedEdges?: number };
-};
-
-/** Grouped and distinct queries must take the hash exchange. An ungrouped approx sketch does not. */
-function expectsHashExchange(sql: string): boolean {
-  return /\bgroup\s+by\b/i.test(sql) || /count\s*\(\s*distinct\b/i.test(sql);
-}
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
 
 /**
  * Spill runs every task of `jobId` committed, and the largest task Wasm memory, from its
@@ -91,115 +73,6 @@ async function spillStatsOf(
     // The last boundary is the state the peak task flushed from; earlier ones repeat it.
     ...(peak.wasmMemoryBytes ? { peakTask: { ...peakTask, lastSpill: spillBoundaries?.at(-1) } } : {}),
   };
-}
-
-function loadQueries(): Query[] {
-  const tsv = fs.readFileSync(path.join(ROOT, "scripts/clickbench-queries.tsv"), "utf8");
-  return tsv
-    .split("\n")
-    .filter((line) => line.includes("\t"))
-    .map((line) => {
-      const [label, sql] = line.split("\t");
-      return { label: label!, sql: sql!.trim().replace(/;$/, "") };
-    })
-    .filter((query) => only.length === 0 || only.includes(query.label));
-}
-
-function splitCommas(text: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (char === "(") depth++;
-    else if (char === ")") depth--;
-    else if (char === "," && depth === 0) {
-      parts.push(text.slice(start, i).trim());
-      start = i + 1;
-    }
-  }
-  parts.push(text.slice(start).trim());
-  return parts.filter((part) => part.length > 0);
-}
-
-function selectItems(sql: string): string[] {
-  const match = sql.match(/^\s*select\s+([\s\S]+?)\s+from\s+/i);
-  if (!match) return [];
-  return splitCommas(match[1]!);
-}
-
-function approxIndexes(selects: string[]): number[] {
-  return selects.flatMap((item, index) => (/approx_count_distinct\s*\(/i.test(item) ? [index] : []));
-}
-
-function orderSpec(sql: string, selects: string[]): { index: number } | null {
-  const match = sql.match(/\border\s+by\s+([\s\S]+?)(?:\blimit\b|\boffset\b|$)/i);
-  if (!match) return null;
-  const raw = match[1]!.trim();
-  const name = raw.replace(/\s+(?:asc|desc)\s*$/i, "").trim();
-  const index = selects.findIndex((item) => {
-    const alias = item.match(/\bas\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/i);
-    if (alias && alias[1]!.toLowerCase() === name.toLowerCase()) return true;
-    if (item.toLowerCase() === name.toLowerCase()) return true;
-    return name.toLowerCase() === "count(*)" && /count\s*\(\s*\*\s*\)/i.test(item);
-  });
-  return index < 0 ? null : { index };
-}
-
-function dayNumber(value: unknown): string | null {
-  if (value == null) return null;
-  if (value instanceof Date) return String(Math.round(value.getTime() / 86_400_000));
-  if (typeof value === "bigint") return value.toString();
-  const text = String(value);
-  const date = /^(\d{4}-\d{2}-\d{2})(?:[T ].*)?$/.exec(text);
-  if (!date) return text;
-  const parsed = Date.parse(`${date[1]}T00:00:00Z`);
-  return Number.isNaN(parsed) ? text : String(Math.round(parsed / 86_400_000));
-}
-
-function rowsOf(value: unknown): Cell[][] {
-  if (!Array.isArray(value)) return [];
-  return value.map((row) => (Array.isArray(row) ? row.map((cell) => dayNumber(cell)) : []));
-}
-
-function mask(rows: Cell[][], indexes: number[]): Cell[][] {
-  if (indexes.length === 0) return rows;
-  const skip = new Set(indexes);
-  return rows.map((row) => row.map((cell, index) => (skip.has(index) ? "*" : cell)));
-}
-
-function multiset(rows: Cell[][]): string {
-  return JSON.stringify(rows.map((row) => JSON.stringify(row)).sort());
-}
-
-function rankingAgrees(ours: Cell[][], duck: Cell[][], spec: { index: number }): boolean {
-  if (ours.length !== duck.length) return false;
-  const value = (row: Cell[]) => row[spec.index];
-  if (JSON.stringify(ours.map(value)) !== JSON.stringify(duck.map(value))) return false;
-  if (ours.length === 0) return true;
-  const cutoff = value(duck[duck.length - 1]!);
-  const above = (rows: Cell[][]) => rows.filter((row) => value(row) !== cutoff);
-  return multiset(above(ours)) === multiset(above(duck));
-}
-
-function agrees(sql: string, ours: Cell[][], duck: Cell[][]): boolean {
-  const selects = selectItems(sql);
-  const approx = approxIndexes(selects);
-  const order = orderSpec(sql, selects);
-  const left = mask(ours, approx);
-  const right = mask(duck, approx);
-  if (order && approx.includes(order.index)) {
-    return ours.length === duck.length && ours.every((row) => row.length === (duck[0]?.length ?? row.length));
-  }
-  if (!order) {
-    if (left.length === right.length) return multiset(left) === multiset(right);
-    if (left.length === 1000 && left.length < right.length) {
-      const have = new Set(right.map((row) => JSON.stringify(row)));
-      return left.every((row) => have.has(JSON.stringify(row)));
-    }
-    return false;
-  }
-  return rankingAgrees(left, right, order);
 }
 
 function serveParquet(file: Buffer): Promise<{ url: string; close: () => Promise<void> }> {
@@ -267,6 +140,10 @@ function miniflare(): Miniflare {
           WCOL_MAX_ACTIVE_SCANS: MAX_ACTIVE_SCANS,
           WCOL_DISPATCH_CONCURRENCY: process.env.WCOL_DISPATCH_CONCURRENCY ?? "32",
           WCOL_JOB_SYNC_MS: String(QUERY_TIMEOUT_MS),
+          // Unbounded GROUP BYs on the sample print more than the 1 MiB default allows.
+          WCOL_JSON_MAX_BYTES: String(64 * 1024 * 1024),
+          // The sample is served from this process, as a URL source.
+          WCOL_URL_SOURCE_HOSTS: "127.0.0.1",
         },
         durableObjects: {
           WCOL_COORDINATOR: { className: "WcolCoordinator", useSQLite: true },
@@ -293,66 +170,30 @@ function miniflare(): Miniflare {
   });
 }
 
-async function postJob(mf: Miniflare, body: unknown): Promise<{ status: number; body: JobBody }> {
+async function postJob(mf: Miniflare, body: unknown): Promise<{ status: number; body: JobRecord }> {
   const response = await mf.dispatchFetch("http://wcol.local/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   const text = await response.text();
-  let parsed: JobBody = {};
+  let parsed: JobRecord = {};
   try {
-    parsed = JSON.parse(text) as JobBody;
+    parsed = JSON.parse(text) as JobRecord;
   } catch {
     parsed = { error: text.slice(0, 500) };
   }
   return { status: response.status, body: parsed };
 }
 
-/** `timing.json` is written after the job completes. Poll until the edge count lands. */
-async function openedEdgesOf(mf: Miniflare, jobId: string): Promise<number | undefined> {
-  const deadline = Date.now() + 5_000;
-  for (;;) {
-    const response = await mf.dispatchFetch(`http://wcol.local/jobs/${jobId}`);
-    const record = (await response.json()) as JobBody;
-    const edges = record.schedule?.openedEdges;
-    if (edges != null) return edges;
-    if (Date.now() > deadline) return undefined;
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-}
-
-async function waitFor(mf: Miniflare, jobId: string): Promise<JobBody> {
-  const started = Date.now();
-  for (;;) {
-    const response = await mf.dispatchFetch(`http://wcol.local/jobs/${jobId}`);
-    const record = (await response.json()) as JobBody;
-    if (record.state === "completed" || record.state === "failed") return record;
-    if (Date.now() - started > QUERY_TIMEOUT_MS) {
-      return { ...record, error: `timed out in ${record.state ?? "unknown"}` };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
-}
-
 assert(fs.existsSync(parquet), `missing ${parquet}`);
-const queries = loadQueries();
+const queries = tsvQueries(ROOT).filter((query) => only.length === 0 || only.includes(query.name));
 await buildWorkers();
 const file = fs.readFileSync(parquet);
 const served = await serveParquet(file);
 const mf = miniflare();
-const { DuckDBInstance } = await import("@duckdb/node-api");
-const duck = await (await DuckDBInstance.create(":memory:")).connect();
-// An uncapped DuckDB oracle on full hits once exhausted the machine.
-await duck.run("SET memory_limit='4GB'");
-const escaped = parquet.replaceAll("'", "''");
-await duck.run(`
-  CREATE VIEW hits AS
-  SELECT * REPLACE (
-    CAST(DATE '1970-01-01' + CAST(EventDate AS INTEGER) AS DATE) AS EventDate
-  )
-  FROM read_parquet('${escaped}')
-`);
+const getJob = async (jobId: string) => (await (await mf.dispatchFetch(`http://wcol.local/jobs/${jobId}`)).json()) as JobRecord;
+const duckRows = await localDuckDb(parquet);
 
 const unsupported: string[] = [];
 const failures: string[] = [];
@@ -360,7 +201,7 @@ const multiplexed: string[] = [];
 let ran = 0;
 
 try {
-  for (const { label, sql } of queries) {
+  for (const { name: label, sql } of queries) {
     const started = Date.now();
     const jobId = `clickbench-${label}-${Date.now().toString(36)}`;
     const posted = await postJob(mf, {
@@ -369,7 +210,7 @@ try {
       sql,
       output: OUTPUT_PARQUET
         ? { format: "parquet", bucket: "output", prefix: `clickbench/${jobId}/`, ...(process.env.CLICKBENCH_ROW_GROUP_ROWS ? { targetRowGroupRows: Number(process.env.CLICKBENCH_ROW_GROUP_ROWS) } : {}) }
-        : { format: "json" },
+        : { format: "json", rowCap: ROW_CAP },
       hashReducers: HASH_REDUCERS,
       maxNodes: Number(MAX_NODES),
       minBytesPerNode: 1,
@@ -384,42 +225,39 @@ try {
       console.log(JSON.stringify({ label, status: "unsupported", wallMs: Date.now() - started }));
       continue;
     }
-    if (OUTPUT_PARQUET && (posted.status === 200 || posted.status === 202)) {
-      const record = await waitFor(mf, posted.body.jobId ?? jobId);
-      if (record.state !== "completed") failures.push(`${label}: ${record.error ?? record.state}`);
-      console.log(JSON.stringify({
-        label,
-        status: record.state === "completed" ? "exported" : "failed",
-        error: record.error,
-        wallMs: Date.now() - started,
-        ...(await spillStatsOf(mf, posted.body.jobId ?? jobId)),
-      }));
+    if (posted.status !== 200 && posted.status !== 202) {
+      failures.push(`${label}: ${posted.status} ${message}`);
+      console.log(JSON.stringify({ label, status: posted.status, error: message, wallMs: Date.now() - started }));
       continue;
     }
-    let rows = posted.body.rows;
-    let nodeCount = posted.body.nodeCount ?? 0;
-    if (posted.status === 202 || (posted.status === 200 && !rows)) {
-      const record = await waitFor(mf, posted.body.jobId ?? jobId);
+    let record = posted.body;
+    if (posted.status === 202 || !record.rows) {
+      try {
+        record = await waitForJob(getJob, posted.body.jobId ?? jobId, QUERY_TIMEOUT_MS, 300);
+      } catch (error) {
+        record = { state: "timeout", error: String(error) };
+      }
       if (record.state !== "completed") {
         failures.push(`${label}: ${record.error ?? record.state ?? "did not complete"}`);
         console.log(JSON.stringify({ label, status: "failed", error: record.error, wallMs: Date.now() - started }));
         continue;
       }
-      rows = record.result?.rows ?? record.rows;
-      nodeCount = record.nodeCount ?? nodeCount;
-    } else if (posted.status !== 200) {
-      failures.push(`${label}: ${posted.status} ${message}`);
-      console.log(JSON.stringify({ label, status: posted.status, error: message, wallMs: Date.now() - started }));
+    }
+    if (OUTPUT_PARQUET) {
+      console.log(JSON.stringify({ label, status: "exported", wallMs: Date.now() - started, ...(await spillStatsOf(mf, posted.body.jobId ?? jobId)) }));
       continue;
     }
-    const duckRows = rowsOf((await duck.runAndReadAll(sql)).getRows());
-    const ours = rowsOf(rows);
+    const nodeCount = record.nodeCount ?? posted.body.nodeCount ?? 0;
+    const oracle = oracleFor(sql);
+    const ours = asText(jobRows(record));
     ran++;
-    if ((nodeCount ?? 0) > 1) multiplexed.push(label);
-    const ok = agrees(sql, ours, duckRows);
-    if (!ok) failures.push(`${label} rows ${ours.length} vs ${duckRows.length}`);
-    const openedEdges = expectsHashExchange(sql) ? await openedEdgesOf(mf, posted.body.jobId ?? jobId) : undefined;
-    const gathered = expectsHashExchange(sql) && !openedEdges;
+    if (nodeCount > 1) multiplexed.push(label);
+    const truncated = (record.truncated ?? record.result?.truncated) === true;
+    const ok = !truncated && rowsMatch(ours, await duckRows(oracle.sql), oracle);
+    if (!ok) failures.push(`${label} rows ${ours.length}${truncated ? " (truncated)" : ""} do not match DuckDB`);
+    const openedEdges = hashPartitions(sql) ? (await scheduleOf(getJob, posted.body.jobId ?? jobId))?.openedEdges : undefined;
+    // A GROUP BY or COUNT(DISTINCT) must take the hash exchange, even when its rows match.
+    const gathered = hashPartitions(sql) && !openedEdges;
     if (gathered) {
       failures.push(`${label} gathered instead of hash exchange (openedEdges ${openedEdges ?? "missing"})`);
     }
@@ -448,7 +286,8 @@ const summary = {
 };
 console.log(JSON.stringify(summary, null, 2));
 if (only.length === 0) {
-  assert(JSON.stringify(unsupported.sort()) === JSON.stringify(EXPECTED_UNSUPPORTED), `unsupported ${unsupported.join(",")}`);
+  const expected = [...UNSUPPORTED].sort();
+  assert(JSON.stringify(unsupported) === JSON.stringify(expected), `unsupported ${unsupported.join(",")}, expected ${expected.join(",")}`);
   assert(ran >= 47, `ran ${ran}`);
   assert(multiplexed.length >= 8, `only ${multiplexed.length} queries used more than one node`);
 }

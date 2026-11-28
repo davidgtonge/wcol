@@ -17,7 +17,7 @@ pub struct PhysicalPlannerConfig {
     /// When set, the plan ends in a Parquet sink with this many rows per row group.
     /// Placement follows the query: scan, filter, and projection sinks sit on the
     /// nodes; an aggregate, `ORDER BY`, or `LIMIT` sinks on the coordinator after
-    /// that final step. Joins are rejected.
+    /// that final step.
     pub parquet_row_group_rows: Option<u32>,
     /// Output ordinals for `partitionBy`, in request order. Empty means one file
     /// per node. Non-empty is allowed only when every node already emits final

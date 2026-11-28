@@ -91,7 +91,7 @@ pub fn default_layout_for_parquet_job(
         return OutputLayout::Partitioned;
     }
     if plan_has_global_sort_or_limit(plan) {
-        // Phase 1: coordinator still gathers; one writer → single file when not multi-part.
+        // The coordinator gathers a sorted or limited result: one writer, one file.
         return OutputLayout::SingleFile;
     }
     if estimated_output_bytes <= target_file_bytes.max(1) {

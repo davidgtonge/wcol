@@ -68,20 +68,11 @@ fn topk_only_runs_on_nodes_for_plain_row_scans() {
         table: "respondents".into(),
         columns: vec![0],
     };
-    let mut meta = catalog(
+    let meta = catalog(
         (0..4)
             .map(|row_group| chunk(0, row_group, u64::from(row_group) * 8_000, 100))
             .collect(),
     );
-    meta.tables.push(TableMeta {
-        table: "cities".into(),
-        objects: vec![ParquetObject {
-            object_id: "cities.parquet".into(),
-            chunks: (0..4)
-                .map(|row_group| chunk(1, row_group, u64::from(row_group) * 8_000, 100))
-                .collect(),
-        }],
-    });
     let lower = |logical: &WcolLogicalPlan| {
         lower_to_physical(logical, &meta, &nodes(2), &PhysicalPlannerConfig::default()).unwrap()
     };
@@ -106,39 +97,6 @@ fn topk_only_runs_on_nodes_for_plain_row_scans() {
             fetch: Some(3)
         }
     ));
-
-    // Join: every row of both sides must reach the join.
-    let join = || LogicalOp::Join {
-        left_keys: vec![0],
-        right_keys: vec![1],
-        left: Box::new(scan()),
-        right: Box::new(LogicalOp::Scan {
-            table: "cities".into(),
-            columns: vec![1],
-        }),
-    };
-    let joined = lower(&top(join()));
-    assert!(
-        topk_nodes(&joined).is_empty(),
-        "{}",
-        joined.canonical_text()
-    );
-
-    // Aggregate over a join, ordered by its group column: groups are not final on a node.
-    let grouped = lower(&top(LogicalOp::Aggregate {
-        input: Box::new(join()),
-        group_by: vec![0],
-        aggregates: vec![AggExpr {
-            kind: AggKind::CountStar,
-            column: None,
-            offset: 0,
-        }],
-    }));
-    assert!(
-        topk_nodes(&grouped).is_empty(),
-        "{}",
-        grouped.canonical_text()
-    );
 
     // Aggregate over a scan, ordered by its group column.
     let scan_grouped = lower(&top(LogicalOp::Aggregate {

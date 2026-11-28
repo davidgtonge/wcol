@@ -19,46 +19,28 @@
  */
 
 import { execFile } from "node:child_process";
-import { catalogQueries } from "./clickbench-catalog.ts";
+import { catalogQueries, tsvQueries } from "./clickbench-catalog.ts";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createLimiter } from "../src/runtime/concurrency.ts";
 import { oracleFor, rowsMatch, type Oracle } from "./clickbench-oracle.ts";
+import { assert, asText, hashPartitions, type JobRecord, jobRows, localDuckDb, ROOT, scheduleOf, waitForJob } from "./harness.ts";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+/** A ClickBench query's SQL from the TSV, by name. */
+function tsvSql(name: string): string {
+  const query = tsvQueries(ROOT).find((candidate) => candidate.name === name);
+  if (!query) throw new Error(`${name} is not in scripts/clickbench-queries.tsv`);
+  return query.sql;
+}
 
-const Q1 = "SELECT COUNT(*) FROM hits WHERE AdvEngineID <> 0";
-const Q3 = "SELECT AVG(UserID) FROM hits";
-const Q7 =
-  "SELECT AdvEngineID, COUNT(*) FROM hits WHERE AdvEngineID <> 0 GROUP BY AdvEngineID ORDER BY COUNT(*) DESC";
-const Q8 = "SELECT RegionID, COUNT(DISTINCT UserID) AS u FROM hits GROUP BY RegionID ORDER BY u DESC LIMIT 10";
+const [Q1, Q3, Q7, Q8, Q15, Q31] = ["Q1", "Q3", "Q7", "Q8", "Q15", "Q31"].map(tsvSql) as [string, string, string, string, string, string];
+/** Not a ClickBench query: a small top-k whose ties are broken, for the reducer-count ladder. */
 const REGION =
   "SELECT RegionID, COUNT(*) AS c FROM hits GROUP BY RegionID ORDER BY c DESC, RegionID LIMIT 5";
-const Q15 = "SELECT UserID, COUNT(*) FROM hits GROUP BY UserID ORDER BY COUNT(*) DESC LIMIT 10";
-const Q31 =
-  "SELECT WatchID, ClientIP, COUNT(*) AS c, SUM(IsRefresh), AVG(ResolutionWidth) FROM hits WHERE SearchPhrase <> '' GROUP BY WatchID, ClientIP ORDER BY c DESC LIMIT 10";
 
 type Stage = "a" | "b" | "c";
-type HashSchedule = { coordinatorShuffleBytes?: number; openedEdges?: number };
-type JobBody = {
-  rows?: unknown[][];
-  truncated?: boolean;
-  result?: { rows?: unknown[][]; truncated?: boolean };
-  outputObjects?: number;
-  outputBytes?: number;
-  nodeCount?: number;
-  jobId?: string;
-  error?: string;
-  state?: string;
-  schedule?: HashSchedule;
-};
-
-function hashPartitions(sql: string): boolean {
-  return /\bgroup\s+by\b/i.test(sql) || /count\s*\(\s*distinct\b/i.test(sql);
-}
 
 /**
  * `parquet` exports the result to R2 rather than answering in JSON: an unbounded GROUP BY
@@ -88,10 +70,6 @@ const STAGES: Record<Stage, { key: string; local: string; timeoutMs: number }> =
     timeoutMs: 600_000,
   },
 };
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
 
 function stageOf(value: string | undefined): Stage {
   if (value === "a" || value === "b" || value === "c") return value;
@@ -155,10 +133,6 @@ function queriesFor(stage: Stage, skipQ15: boolean, only: Set<string>): QuerySpe
   });
 }
 
-function asText(rows: unknown[][]): string[][] {
-  return rows.map((row) => row.map((value) => (value === null ? "null" : String(value))));
-}
-
 function quoted(file: string): string {
   return `'${file.replaceAll("'", "''")}'`;
 }
@@ -220,53 +194,22 @@ async function duckRows(sql: string, local: string, timeoutMs: number): Promise<
     fs.writeFileSync(cached, JSON.stringify(rows));
     return rows;
   }
-  const { DuckDBInstance } = await import("@duckdb/node-api");
-  const duck = await (await DuckDBInstance.create(":memory:")).connect();
-  const rewritten = sql.replace(/\bFROM hits\b/i, `FROM ${quoted(local)}`);
-  const result = await duck.runAndReadAll(rewritten);
-  return asText(result.getRows() as unknown[][]);
+  localOracle ??= localDuckDb(local);
+  return (await localOracle)(sql);
 }
+
+let localOracle: ReturnType<typeof localDuckDb> | undefined;
 
 /** `WCOL_API_TOKEN`: the coordinator's API token, when it requires one. */
 const auth: Record<string, string> = process.env.WCOL_API_TOKEN ? { authorization: `Bearer ${process.env.WCOL_API_TOKEN}` } : {};
 
-async function postJob(base: string, body: unknown): Promise<{ status: number; body: JobBody }> {
+async function postJob(base: string, body: unknown): Promise<{ status: number; body: JobRecord }> {
   const response = await fetch(`${base}/jobs`, {
     method: "POST",
     headers: { "content-type": "application/json", ...auth },
     body: JSON.stringify(body),
   });
-  return { status: response.status, body: (await response.json()) as JobBody };
-}
-
-async function getJob(base: string, jobId: string): Promise<JobBody> {
-  const response = await fetch(`${base}/jobs/${jobId}`, { headers: auth });
-  return (await response.json()) as JobBody;
-}
-
-/** `timing.json` is written in the background after a job completes; poll briefly for it. */
-async function timingOf(base: string, jobId: string): Promise<HashSchedule | undefined> {
-  for (let tries = 0; tries < 20; tries++) {
-    const schedule = (await getJob(base, jobId)).schedule;
-    if (schedule) return schedule;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  return undefined;
-}
-
-async function waitFor(base: string, jobId: string, timeoutMs: number): Promise<JobBody> {
-  const started = Date.now();
-  for (;;) {
-    const body = await getJob(base, jobId);
-    if (body.state === "completed") return body;
-    if (body.state === "failed") throw new Error(`job ${jobId} failed: ${body.error}`);
-    if (Date.now() - started > timeoutMs) throw new Error(`job ${jobId} timed out in ${body.state}`);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }
-}
-
-function jobRows(body: JobBody): unknown[][] {
-  return body.rows ?? body.result?.rows ?? [];
+  return { status: response.status, body: (await response.json()) as JobRecord };
 }
 
 const stage = stageOf(process.env.STAGE ?? "a");
@@ -276,7 +219,7 @@ const hitsKey = process.env.HITS_KEY ?? preset.key;
 const hitsLocal = process.env.HITS_LOCAL ?? preset.local;
 const skipQ15 = process.env.SKIP_Q15 === "1";
 const groupSpill = process.env.GROUP_SPILL === "1";
-/** Query `hits-parts/<N>/part-*.parquet` (from scripts/cf-partition-hits.ts) as one table. */
+/** Query `hits-parts/<N>/part-*.parquet`, uploaded beforehand, as one table. */
 const hitsParts = process.env.HITS_PARTS ? Number(process.env.HITS_PARTS) : undefined;
 const hitsSource = hitsParts
   ? { bucket: "output", keys: Array.from({ length: hitsParts }, (_, i) => `hits-parts/${hitsParts}/part-${String(i).padStart(4, "0")}.parquet`) }
@@ -307,6 +250,7 @@ assert(
 )
 
 const queries = queriesFor(stage, skipQ15, only);
+const getJob = async (jobId: string) => (await (await fetch(`${base}/jobs/${jobId}`, { headers: auth })).json()) as JobRecord;
 // Unique per process: two runs started together must not share an idempotency key.
 const runId = `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
 const results: Record<string, unknown>[] = [];
@@ -323,7 +267,7 @@ async function runQuery(
     output:
       query.output === "parquet"
         ? { format: "parquet", bucket: "output", prefix: `ladder/${stage}-${query.name}-${runId}/` }
-        : // The JSON default prints 1000 rows; A3 has about 9000 groups.
+        : // The JSON default prints 1000 rows; RegionID groups number about 9000.
           { format: "json", rowCap: ORACLE_ROW_CAP },
     ...(query.hashReducers != null ? { hashReducers: query.hashReducers } : {}),
     ...(groupSpill ? { groupSpill: true, targetGroupBytes, ...(hardGroupBytes ? { hardGroupBytes } : {}) } : {}),
@@ -342,7 +286,8 @@ async function runQuery(
   const jobId = String(body.jobId ?? "");
   assert(jobId.length > 0, `${query.name} missing jobId`);
   if (posted.status === 202 || body.state === "running" || body.state === "accepted") {
-    body = await waitFor(base, jobId, preset.timeoutMs);
+    body = await waitForJob(getJob, jobId, preset.timeoutMs);
+    if (body.state === "failed") throw new Error(`job ${jobId} failed: ${body.error}`);
   }
   const wallMs = Math.round(performance.now() - wallStart);
   if (query.output === "parquet") {
@@ -355,7 +300,7 @@ async function runQuery(
     const ours = asText(jobRows(body));
     assert(rowsMatch(ours, expected, oracle), `${query.name} DuckDB mismatch ${JSON.stringify(ours)} vs ${JSON.stringify(expected)}`);
   }
-  const schedule = body.schedule ?? (await timingOf(base, jobId));
+  const schedule = body.schedule ?? (await scheduleOf(getJob, jobId));
   // Only a grouped or distinct query hash-partitions; a bare COUNT(*) is answered from the
   // footer with no nodes, whatever `HASH_REDUCERS` says.
   if (query.hashReducers != null && query.hashReducers > 1 && hashPartitions(query.sql)) {
@@ -388,8 +333,8 @@ if (process.env.ORACLE === "print") {
   process.exit(0);
 }
 
-// CONCURRENCY=n runs n queries at once (default 1, the timing run). Concurrent jobs lease
-// disjoint pool slots, so their wall times include each other's load.
+// CONCURRENCY=n runs n queries at once (default 1, the timing run). Concurrent jobs run on
+// their own objects but share isolates and colos, so their wall times include each other's load.
 const limit = createLimiter(Math.max(1, Number(process.env.CONCURRENCY ?? 1)));
 await Promise.all(
   queries.map((query) =>

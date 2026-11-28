@@ -14,7 +14,7 @@ fn large_batch_splits_on_row_boundaries_and_round_trips() {
     batch.push_utf8_column(0, offsets, bytes, vec![1; ROWS]);
     batch.set_row_count(ROWS).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     egress.push_end().unwrap();
     let wire = egress.drain_to_vec().unwrap();
     let mut off = 0;
@@ -86,7 +86,9 @@ fn single_row_over_the_frame_limit_is_rejected() {
     let bytes = vec![b'a'; MAX_WCS_PAYLOAD];
     batch.push_utf8_column(0, vec![0, bytes.len() as u32], bytes, vec![1]);
     batch.set_row_count(1).unwrap();
-    let err = RowBatchWcsEgress::new().push_batch(&batch).unwrap_err();
+    let err = RowBatchWcsEgress::new()
+        .push_batch(batch.clone())
+        .unwrap_err();
     assert!(
         err.as_str().contains("single_row_too_large"),
         "{}",
@@ -105,7 +107,7 @@ fn dictionary_egress_holds_one_frame() {
     batch.push_dict_id_column(1, (0..20_000).collect(), vec![1; 20_000], dict);
     batch.set_row_count(20_000).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     let header = crate::stream::core::WCS_HEADER_BYTES;
     assert!(egress.pending_bytes() > 0);
     assert!(
@@ -127,7 +129,7 @@ fn oversized_dictionary_entry_fails_before_a_frame_is_queued() {
     batch.push_dict_id_column(1, vec![0], vec![1], dict);
     batch.set_row_count(1).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    let err = egress.push_batch(&batch).unwrap_err();
+    let err = egress.push_batch(batch.clone()).unwrap_err();
     assert!(err.as_str().contains("dictionary_entry_too_large"), "{err}");
     assert!(err.as_str().contains("index=0"), "{err}");
     assert_eq!(egress.pending_bytes(), 0);
@@ -142,7 +144,7 @@ fn later_oversized_dictionary_entry_keeps_failing() {
     batch.push_dict_id_column(1, vec![0, 0], vec![1, 1], dict);
     batch.set_row_count(2).unwrap();
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&batch).unwrap();
+    egress.push_batch(batch.clone()).unwrap();
     let err = egress.drain_to_vec().unwrap_err();
     assert!(err.as_str().contains("dictionary_entry_too_large"), "{err}");
     assert!(err.as_str().contains("index=1"), "{err}");
@@ -174,7 +176,7 @@ fn high_cardinality_streams_bound_frames_and_retain_dictionaries() {
         batch.push_dict_id_column(1, vec![0; ENTRIES], vec![1; ENTRIES], dict);
         batch.set_row_count(ENTRIES).unwrap();
         let mut egress = RowBatchWcsEgress::new();
-        egress.push_batch(&batch).unwrap();
+        egress.push_batch(batch.clone()).unwrap();
         egress.push_end().unwrap();
         peak_one = peak_one.max(egress.pending_bytes());
         simultaneous = simultaneous.saturating_add(egress.pending_bytes());

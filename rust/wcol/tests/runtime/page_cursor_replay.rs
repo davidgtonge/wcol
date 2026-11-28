@@ -79,18 +79,6 @@ fn collect_poll_batches(scan: &mut NumericScan, cap: usize) -> Vec<usize> {
                 scan.advance_batch(rows).unwrap();
                 out.push(rows);
             }
-            DecodeProgress::Advanced => {
-                for _ in 0..64 {
-                    if scan.decode_exhausted() {
-                        break;
-                    }
-                    match scan.poll(0).unwrap() {
-                        DecodeProgress::Finished | DecodeProgress::Advanced => continue,
-                        DecodeProgress::BatchReady { .. } => panic!("unexpected batch on drain"),
-                        DecodeProgress::NeedInput => panic!("unexpected need input"),
-                    }
-                }
-            }
             DecodeProgress::Finished => break,
             DecodeProgress::NeedInput => panic!("unexpected need input"),
         }
@@ -235,7 +223,6 @@ fn dict_id_multi_batch_zero_page_replays() {
     let replay = ingest_replay_totals();
     let _ = std::fs::remove_file(path);
     assert_eq!(replay.page_replay_count, 0);
-    assert!(replay.replay_amplification() <= 1.01);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Wasm ABI for the production operator bundle (same surface as `wcol-stream-core`).
+//! Wasm ABI for the production operator bundle.
 //!
 //! # Safety
 //!
@@ -10,15 +10,30 @@
 // The shared contract above covers each `unsafe extern "C"` export.
 #![allow(clippy::missing_safety_doc)]
 
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 #[cfg(feature = "coordinator-iterative-ffi")]
 use std::cell::RefCell;
 use std::ptr;
+
+#[cfg(feature = "coordinator-iterative-ffi")]
 use std::slice;
 
+#[cfg(feature = "coordinator-iterative-ffi")]
 use crate::error::{clear_last_error, set_last_error, WcolError};
 #[cfg(feature = "coordinator-iterative-ffi")]
 use crate::ops::iterative::{IterativeKernel, KMeansConfig, KMeansKernel};
+
+#[cfg(feature = "coordinator-iterative-ffi")]
+fn ffi_fail(msg: &'static str) -> u32 {
+    set_last_error(WcolError::from(msg));
+    0
+}
+
+#[cfg(feature = "coordinator-iterative-ffi")]
+fn ffi_fail_msg(msg: impl Into<String>) -> u32 {
+    set_last_error(WcolError::msg(msg));
+    0
+}
 
 #[cfg(feature = "coordinator-iterative-ffi")]
 use crate::ops::iterative::wire::{
@@ -298,7 +313,13 @@ pub extern "C" fn wcs_alloc(len: u32) -> *mut u8 {
         return ptr::null_mut();
     }
     let layout = Layout::from_size_align(len as usize, 1).unwrap();
-    unsafe { alloc(layout) }
+    // Hosts write through the pointer without checking it: out of memory must trap here,
+    // not hand back null.
+    let p = unsafe { alloc(layout) };
+    if p.is_null() {
+        handle_alloc_error(layout);
+    }
+    p
 }
 
 #[no_mangle]
@@ -322,51 +343,6 @@ pub unsafe extern "C" fn wcs_last_error_len() -> u32 {
     crate::error::last_error_bytes()
         .map(|(_, len)| len)
         .unwrap_or(0)
-}
-
-/// Decode a WCS partial payload (`PWCL`); first aggregate sum or `i64::MIN` on error.
-#[no_mangle]
-pub unsafe extern "C" fn wcol_partial_first_sum_i(ptr: *const u8, len: u32) -> i64 {
-    if ptr.is_null() || len == 0 {
-        ffi_fail("invalid partial buffer for first_sum");
-        return i64::MIN;
-    }
-    let bytes = slice::from_raw_parts(ptr, len as usize);
-    match crate::ops::query::partial_first_sum_i(bytes) {
-        Ok(value) => {
-            clear_last_error();
-            i64::try_from(value).unwrap_or(i64::MIN)
-        }
-        Err(e) => {
-            ffi_fail_msg(format!("partial_first_sum_i: {e}"));
-            i64::MIN
-        }
-    }
-}
-
-/// Returns `1` when two PWCL partials decode to equivalent aggregate state (including string group keys).
-#[no_mangle]
-pub unsafe extern "C" fn wcol_partials_wire_equivalent(
-    left_ptr: *const u8,
-    left_len: u32,
-    right_ptr: *const u8,
-    right_len: u32,
-) -> u32 {
-    if left_ptr.is_null() || left_len == 0 || right_ptr.is_null() || right_len == 0 {
-        return ffi_fail("invalid partials_wire_equivalent buffer");
-    }
-    let left = slice::from_raw_parts(left_ptr, left_len as usize);
-    let right = slice::from_raw_parts(right_ptr, right_len as usize);
-    match crate::ops::query::encoded_partials_equivalent(left, right) {
-        Ok(()) => {
-            clear_last_error();
-            1
-        }
-        Err(e) => {
-            set_last_error(WcolError::from(e));
-            0
-        }
-    }
 }
 
 /// Groups in the hash table at the last aggregate finish. Zero when the program did not group.
@@ -422,16 +398,6 @@ pub extern "C" fn wcs_last_spill_peak_interner_bytes() -> u64 {
     crate::ops::query::batch::last_spill_peak_interner_bytes()
 }
 
-/// Host-side SQLite write completed for the current spill append page.
-#[no_mangle]
-pub extern "C" fn wcs_spill_note_host_ack(
-    pending_ops: u32,
-    write_bytes: u32,
-    pending_sql_bytes: u32,
-) {
-    crate::ops::query::batch::note_spill_host_ack(pending_ops, write_bytes, pending_sql_bytes);
-}
-
 /// Little-endian records of 27 u32s, one per completed spill run. The pointer is
 /// valid until the next spill boundary or stream-pool open.
 #[no_mangle]
@@ -444,160 +410,6 @@ pub extern "C" fn wcs_spill_boundary_ptr() -> *const u8 {
     crate::ops::query::batch::spill_boundary_wire().0
 }
 
-/// Frame bytes not yet copied into the host output buffer.
-#[no_mangle]
-pub extern "C" fn wcs_last_egress_pending_bytes() -> u64 {
-    crate::exec::operators::egress_pending_bytes()
-}
-
-/// High-water mark of [`wcs_last_egress_pending_bytes`].
-#[no_mangle]
-pub extern "C" fn wcs_last_egress_peak_pending_bytes() -> u64 {
-    crate::exec::operators::egress_peak_pending_bytes()
-}
-
-/// After a Parquet ingest graph run: `[page_replay_count, page_events_visited, page_events_committed]`.
-#[no_mangle]
-pub unsafe extern "C" fn wcs_ingest_replay_totals(out: *mut u64) {
-    if out.is_null() {
-        return;
-    }
-    let totals = crate::formats::parquet::ingest_replay_totals();
-    out.write_unaligned(totals.page_replay_count);
-    out.add(1).write_unaligned(totals.page_events_visited);
-    out.add(2).write_unaligned(totals.page_events_committed);
-}
-
-/// Coordinator merge of worker PWCL partials, fed one partial at a time so only the
-/// merged state and the partial being pushed are resident.
-#[cfg(feature = "reduce-ffi")]
-pub struct CoordinatorReduce {
-    reduce: crate::ops::ReduceOp,
-    output: Vec<u8>,
-}
-
-#[cfg(feature = "reduce-ffi")]
-#[no_mangle]
-pub extern "C" fn wcol_reduce_open() -> *mut CoordinatorReduce {
-    Box::into_raw(Box::new(CoordinatorReduce {
-        reduce: crate::ops::ReduceOp::new(),
-        output: Vec::new(),
-    }))
-}
-
-#[cfg(feature = "reduce-ffi")]
-#[no_mangle]
-pub unsafe extern "C" fn wcol_reduce_close(p: *mut CoordinatorReduce) {
-    if !p.is_null() {
-        drop(Box::from_raw(p));
-    }
-}
-
-/// Decode one PWCL partial and merge it. Returns `1`, or `0` with the last error set.
-#[cfg(feature = "reduce-ffi")]
-#[no_mangle]
-pub unsafe extern "C" fn wcol_reduce_push(
-    p: *mut CoordinatorReduce,
-    ptr: *const u8,
-    len: u32,
-) -> u32 {
-    use crate::exec::runtime::wcol_stream::partial_state_from_wcs_bytes;
-
-    let Some(state) = p.as_mut() else {
-        return ffi_fail("null coordinator reduce");
-    };
-    if ptr.is_null() || len == 0 {
-        return ffi_fail("empty coordinator partial");
-    }
-    let partial = match partial_state_from_wcs_bytes(slice::from_raw_parts(ptr, len as usize)) {
-        Ok(partial) => partial,
-        Err(e) => return ffi_fail_msg(format!("partial decode: {e}")),
-    };
-    if let Err(e) = state.reduce.push(partial) {
-        return ffi_fail_msg(format!("coordinator reduce: {e}"));
-    }
-    clear_last_error();
-    1
-}
-
-/// Encode the merged PWCL. Returns its length (read it at [`wcol_reduce_output_ptr`]),
-/// or `0` with the last error set.
-#[cfg(feature = "reduce-ffi")]
-#[no_mangle]
-pub unsafe extern "C" fn wcol_reduce_finish(p: *mut CoordinatorReduce) -> u32 {
-    use crate::stream::partial_wcs::partial_state_to_wcs_payload;
-
-    let Some(state) = p.as_mut() else {
-        return ffi_fail("null coordinator reduce");
-    };
-    let merged = match state.reduce.finish_state() {
-        Ok(merged) => merged,
-        Err(e) => return ffi_fail_msg(format!("coordinator reduce: {e}")),
-    };
-    state.output = match partial_state_to_wcs_payload(&merged) {
-        Ok(bytes) => bytes,
-        Err(e) => return ffi_fail_msg(format!("partial encode: {e}")),
-    };
-    match u32::try_from(state.output.len()) {
-        Ok(len) => {
-            clear_last_error();
-            len
-        }
-        Err(_) => ffi_fail("merged partial exceeds 4 GiB"),
-    }
-}
-
-#[cfg(feature = "reduce-ffi")]
-#[no_mangle]
-pub unsafe extern "C" fn wcol_reduce_output_ptr(p: *mut CoordinatorReduce) -> *const u8 {
-    p.as_ref()
-        .map_or(ptr::null(), |state| state.output.as_ptr())
-}
-
-thread_local! {
-    static SPLIT_OUTPUT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Split a node partial-aggregate program into one program per row group.
-///
-/// The result is `u32` count, then each program as `u32` length plus bytes. Length `0` is an error.
-/// Valid until the next call.
-#[no_mangle]
-pub unsafe extern "C" fn wcol_split_row_group_programs(ptr: *const u8, len: u32) -> u32 {
-    if ptr.is_null() || len == 0 {
-        return ffi_fail("empty row-group split");
-    }
-    let program = slice::from_raw_parts(ptr, len as usize);
-    match crate::program::fragment::split_node_program_per_row_group(program) {
-        Ok(parts) => {
-            let mut out = Vec::new();
-            out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
-            for part in &parts {
-                let n = match u32::try_from(part.len()) {
-                    Ok(n) => n,
-                    Err(_) => return ffi_fail("row-group program exceeds 4 GiB"),
-                };
-                out.extend_from_slice(&n.to_le_bytes());
-                out.extend_from_slice(part);
-            }
-            match u32::try_from(out.len()) {
-                Ok(n) => {
-                    SPLIT_OUTPUT.with(|cell| *cell.borrow_mut() = out);
-                    clear_last_error();
-                    n
-                }
-                Err(_) => ffi_fail("row-group split exceeds 4 GiB"),
-            }
-        }
-        Err(err) => ffi_fail_msg(format!("row-group split: {err}")),
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn wcol_split_row_group_programs_ptr() -> *const u8 {
-    SPLIT_OUTPUT.with(|cell| cell.borrow().as_ptr())
-}
-
 /// Function address kept alive by the cdylib. `*const ()` is not `Sync`.
 /// The pointer is intentionally unread; the relocation is the point.
 #[allow(dead_code)]
@@ -607,18 +419,14 @@ unsafe impl Sync for FfiSymbol {}
 unsafe impl Send for FfiSymbol {}
 
 /// Node and coordinator cdylib exports. Stream pool plus diagnostics.
-/// The coordinator crate also keeps [`REDUCE_EXPORTED_FFI`].
 /// Length of [`NODE_EXPORTED_FFI`]; crates that keep the symbols alive size their copy by it.
-pub const NODE_EXPORTED_FFI_LEN: usize = 56;
+pub const NODE_EXPORTED_FFI_LEN: usize = 48;
 
 pub static NODE_EXPORTED_FFI: [FfiSymbol; NODE_EXPORTED_FFI_LEN] = [
     FfiSymbol(wcs_alloc as *const ()),
     FfiSymbol(wcs_dealloc as *const ()),
     FfiSymbol(wcs_last_error_ptr as *const ()),
     FfiSymbol(wcs_last_error_len as *const ()),
-    FfiSymbol(wcol_partial_first_sum_i as *const ()),
-    FfiSymbol(wcol_partials_wire_equivalent as *const ()),
-    FfiSymbol(wcs_ingest_replay_totals as *const ()),
     FfiSymbol(wcs_last_resident_groups as *const ()),
     FfiSymbol(wcs_last_resident_group_bytes as *const ()),
     FfiSymbol(wcs_last_spill_runs as *const ()),
@@ -631,11 +439,6 @@ pub static NODE_EXPORTED_FFI: [FfiSymbol; NODE_EXPORTED_FFI_LEN] = [
     FfiSymbol(wcs_mem_growth_ptr as *const ()),
     FfiSymbol(wcs_spill_boundary_len as *const ()),
     FfiSymbol(wcs_spill_boundary_ptr as *const ()),
-    FfiSymbol(wcs_spill_note_host_ack as *const ()),
-    FfiSymbol(wcs_last_egress_pending_bytes as *const ()),
-    FfiSymbol(wcs_last_egress_peak_pending_bytes as *const ()),
-    FfiSymbol(wcol_split_row_group_programs as *const ()),
-    FfiSymbol(wcol_split_row_group_programs_ptr as *const ()),
     FfiSymbol(crate::exec::runtime::stream_pool_ffi::wcs_sp_is_resident as *const ()),
     FfiSymbol(crate::exec::runtime::stream_pool_ffi::wcs_sp_command as *const ()),
     FfiSymbol(crate::exec::runtime::stream_pool_ffi::wcs_sp_response_ptr as *const ()),
@@ -680,23 +483,3 @@ pub static ITERATIVE_COORDINATOR_FFI: [FfiSymbol; 6] = [
     FfiSymbol(wcol_iterative_kmeans_update as *const ()),
     FfiSymbol(wcol_iterative_kmeans_centroids_json as *const ()),
 ];
-
-/// Coordinator-only engine exports. The node cdylib does not enable `reduce-ffi`.
-#[cfg(feature = "reduce-ffi")]
-pub static REDUCE_EXPORTED_FFI: [FfiSymbol; 5] = [
-    FfiSymbol(wcol_reduce_open as *const ()),
-    FfiSymbol(wcol_reduce_close as *const ()),
-    FfiSymbol(wcol_reduce_push as *const ()),
-    FfiSymbol(wcol_reduce_finish as *const ()),
-    FfiSymbol(wcol_reduce_output_ptr as *const ()),
-];
-
-fn ffi_fail(msg: &'static str) -> u32 {
-    set_last_error(WcolError::from(msg));
-    0
-}
-
-fn ffi_fail_msg(msg: impl Into<String>) -> u32 {
-    set_last_error(WcolError::msg(msg));
-    0
-}

@@ -24,7 +24,10 @@ pub fn decode_partial_group_payload(
     if bytes.first() != Some(&PAYLOAD_VERSION) {
         return Err("unsupported spill partial version".to_string());
     }
-    let n = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
+    let n = bytes
+        .get(1..5)
+        .map(|count| u32::from_le_bytes(count.try_into().expect("4 bytes")) as usize)
+        .ok_or("spill partial truncated")?;
     if n != aggs.len() {
         return Err("spill partial agg count mismatch".to_string());
     }
@@ -174,6 +177,13 @@ fn take_f64(bytes: &[u8], off: &mut usize) -> Result<f64, String> {
 mod tests {
     use super::*;
     use crate::ops::query::PartialKeyPart;
+
+    #[test]
+    fn a_short_payload_is_an_error_not_a_panic() {
+        for bytes in [&[PAYLOAD_VERSION][..], &[PAYLOAD_VERSION, 1, 0]] {
+            assert!(decode_partial_group_payload(bytes, Vec::new(), &[]).is_err());
+        }
+    }
 
     fn stat(flags: u8, count: u64, sum_i: i128, min_i: i128, max_i: i128) -> PartialStat {
         use crate::ops::query::exact_f64;

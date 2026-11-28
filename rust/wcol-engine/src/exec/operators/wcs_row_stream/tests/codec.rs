@@ -96,9 +96,9 @@ fn dictionary_is_sent_once_and_scopes_do_not_mix() {
     other.set_row_count(2).unwrap();
 
     let mut egress = RowBatchWcsEgress::new();
-    egress.push_batch(&first).unwrap();
-    egress.push_batch(&second).unwrap();
-    egress.push_batch(&other).unwrap();
+    egress.push_batch(first.clone()).unwrap();
+    egress.push_batch(second.clone()).unwrap();
+    egress.push_batch(other.clone()).unwrap();
     egress.push_end().unwrap();
     let wire = egress.drain_to_vec().unwrap();
     let mut dict_frames = 0usize;

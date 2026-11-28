@@ -23,15 +23,12 @@ pub enum DecodeProgress {
     BatchReady { rows: usize },
     /// More compressed bytes are required before decode can continue.
     NeedInput,
-    /// Parser state advanced with no rows emitted (e.g. end-of-page after a full output batch).
-    Advanced,
     /// All assigned compressed input for this column chunk has been consumed.
     Finished,
 }
 
-/// Hard caps for one column scan inside an execution group (I-04 guardrails).
-///
-/// **I-05** (bounded streaming decoder) is not satisfied by counts alone; see [`ScanMemoryBudget`].
+/// Hard caps for one column scan inside an execution group. Counts alone do not bound memory;
+/// see [`ScanMemoryBudget`] for the byte budgets.
 #[derive(Debug, Clone, Copy)]
 pub struct ScanLimits {
     /// Max rows returned per `next_batch_into` call.
@@ -91,7 +88,7 @@ impl ScanLimits {
         limits
     }
 
-    /// I-09 restrictive gate: tight [`ScanMemoryBudget::q3_acceptance_restrictive`] per execution group.
+    /// Tight [`ScanMemoryBudget::q3_acceptance_restrictive`] per execution group.
     pub fn for_q3_restrictive_acceptance(batch_rows: usize) -> Self {
         let mut limits = Self::for_batch_rows_and_budget(
             batch_rows,

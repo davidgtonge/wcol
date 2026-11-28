@@ -11,5 +11,5 @@ name = "wcol_coordinator"
 crate-type = ["cdylib"]
 
 [dependencies]
-wcol-engine = { path = "../wcol-engine", features = ["reduce-ffi", "coordinator-iterative-ffi"] }
+wcol-engine = { path = "../wcol-engine", features = ["coordinator-iterative-ffi"] }
 wcol-plan = { path = "../wcol-plan" }

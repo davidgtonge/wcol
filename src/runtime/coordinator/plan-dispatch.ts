@@ -1,29 +1,18 @@
 /**
- * Run a query from the WCOL physical plan. Rust plans the query from SQL and the Parquet footer
- * (`wcol_plan_query`): placement, reads and operators all come from that one plan. This module
- * only moves bytes: it runs each node's program, then merges their partials with `ReduceOp`.
+ * The coordinator Wasm's planning calls: job sources, job plans, late read-backs, concat
+ * programs and result JSON. Rust plans from SQL and the Parquet footers; placement, reads and
+ * operators all come from that one plan. This module only encodes requests and decodes plans.
  */
 
 import { decodeExecutionPlanWire, type ExecutionPlan } from "./execution-graph.ts";
 import { readWasmLastError, wasmMemoryOffset, wasmMemoryU8 } from "../host/wasm.ts";
-import type { WcolStreamWasm } from "../host/wasm-stream.ts";
+import { plannerWasm, type PlannerWasm, type WcolStreamWasm } from "../host/wasm-stream.ts";
 
+/** Range reads of one object. */
 export type ReadAt = (offset: number, length: number) => Promise<Uint8Array>;
 
-export type PlannedNode = {
-  node: number;
-  /** Stream-pool program: the node's plan fragment, no SQL. */
-  program: Uint8Array;
-  /** Object-store reads the plan expects this node to make. */
-  requestCount: number;
-  fetchedBytes: number;
-};
-
-/** Result of `planQueryDispatch` (immutable execution graph or footer partial). */
-export type QueryDispatch = ExecutionPlan;
-
 /** Footer bytes of a Parquet object: the last 8 bytes are `u32 footer length` + `PAR1`. */
-export async function readParquetFooter(read: ReadAt, fileSize: number): Promise<Uint8Array> {
+export async function readParquetFooter(read: (offset: number, length: number) => Uint8Array | Promise<Uint8Array>, fileSize: number): Promise<Uint8Array> {
   if (fileSize < 12) throw new Error("file is too small to be Parquet");
   const tail = await read(fileSize - 8, 8);
   const magic = String.fromCharCode(tail[4]!, tail[5]!, tail[6]!, tail[7]!);
@@ -81,23 +70,9 @@ export function planQueryDispatch(
     /** Plan over the first row groups only (0 or absent: all). */
     maxRowGroups?: number;
   },
-): QueryDispatch {
-  if (!wasm.wcol_plan_query || !wasm.wcol_plan_output_ptr) {
-    throw new Error("wasm missing wcol_plan_query");
-  }
+): ExecutionPlan {
   const request = encodePlanRequest({ ...options, batchRows: options.batchRows ?? 32_768 });
-  const ptr = wasm.wcs_alloc(request.byteLength);
-  if (!ptr) throw new Error("wcs_alloc failed");
-  let out: Uint8Array;
-  try {
-    wasmMemoryU8(wasm, ptr, request.byteLength).set(request);
-    const n = wasm.wcol_plan_query(ptr, request.byteLength);
-    if (!n) throw new Error(readWasmLastError(wasm, "query planning failed"));
-    out = wasmMemoryU8(wasm, wasm.wcol_plan_output_ptr(), n).slice();
-  } finally {
-    wasm.wcs_dealloc(ptr, request.byteLength);
-  }
-  return decodeExecutionPlanWire(out);
+  return decodeExecutionPlanWire(callPlanner(wasm, "wcol_plan_query", request));
 }
 
 /**
@@ -105,20 +80,18 @@ export function planQueryDispatch(
  * named by the plan's result columns. Serialization only; the graph already sorted and limited.
  */
 export function resultJson(
-  wasm: WcolStreamWasm,
-  plan: QueryDispatch,
+  module: WcolStreamWasm,
+  plan: ExecutionPlan,
   data: { rows: Uint8Array } | { partial: Uint8Array },
   rowCap = 0,
 ): string {
-  if (!wasm.wcol_result_json || !wasm.wcol_result_output_ptr) {
-    throw new Error("wasm missing wcol_result_json (coordinator Wasm only)");
-  }
+  const wasm = plannerWasm(module, "wcol_result_json");
   if (plan.resultColumns.byteLength === 0) throw new Error("plan has no result columns");
   const kind = "rows" in data ? 0 : 1;
   const bytes = "rows" in data ? data.rows : data.partial;
   const total = plan.resultColumns.byteLength + bytes.byteLength;
   const ptr = wasm.wcs_alloc(total);
-  if (!ptr) throw new Error("wcs_alloc failed");
+  if (!ptr) throw new Error(`wcs_alloc failed for ${total} bytes`);
   try {
     const mem = wasmMemoryU8(wasm, ptr, total);
     mem.set(plan.resultColumns, 0);
@@ -137,7 +110,7 @@ export type JobSourceLocation = { bucket: string; key: string } | { url: string 
 
 /** What `POST /jobs` asks for, and the objects whose footers the planner needs (in order). */
 export type JobSources = {
-  kind: "json" | "parquet" | "concat" | "model";
+  kind: "json" | "parquet" | "model";
   sources: JobSourceLocation[];
   idempotencyKey?: string;
   modelName?: string;
@@ -153,30 +126,27 @@ export type JobPlan =
    * `groupBytes`: the planner's estimate of the aggregate's group state, which picks where
    * reducers run. Fresh planning sets it; a plan read back from storage has no use for it.
    */
-  | { kind: "json"; rowCap: number; graph: QueryDispatch; graphWire: Uint8Array; late: boolean; groupBytes?: number }
-  | { kind: "parquet"; bucket: string; prefix: string; graph: QueryDispatch; graphWire: Uint8Array; groupBytes?: number }
+  | { kind: "json"; rowCap: number; graph: ExecutionPlan; graphWire: Uint8Array; late: boolean; groupBytes?: number }
+  | { kind: "parquet"; bucket: string; prefix: string; graph: ExecutionPlan; graphWire: Uint8Array; groupBytes?: number }
   | {
       kind: "model";
       name: string;
       options: { numClusters: number; maxIterations: number; seed: number; tolerance: number };
-      graph: QueryDispatch;
+      graph: ExecutionPlan;
       graphWire: Uint8Array;
-    }
-  | { kind: "concat"; bucket: string; key: string; programs: Uint8Array[] };
+    };
 
-function callPlanner(
-  wasm: WcolStreamWasm,
-  fn: ((ptr: number, len: number) => number) | undefined,
-  input: Uint8Array,
-  what: string,
-): Uint8Array {
-  if (!fn || !wasm.wcol_plan_output_ptr) throw new Error(`wasm missing ${what} (coordinator Wasm only)`);
+/** Planner calls that take one request buffer and answer at `wcol_plan_output_ptr`. */
+type PlannerCall = "wcol_plan_query" | "wcol_job_sources" | "wcol_plan_job" | "wcol_plan_late_read" | "wcol_concat_program";
+
+function callPlanner(module: WcolStreamWasm, call: PlannerCall, input: Uint8Array): Uint8Array {
+  const wasm: PlannerWasm = plannerWasm(module, call);
   const ptr = wasm.wcs_alloc(input.byteLength);
-  if (!ptr) throw new Error("wcs_alloc failed");
+  if (!ptr) throw new Error(`wcs_alloc failed for a ${input.byteLength}-byte ${call} request`);
   try {
     wasmMemoryU8(wasm, ptr, input.byteLength).set(input);
-    const n = fn.call(wasm, ptr, input.byteLength);
-    if (!n) throw new Error(readWasmLastError(wasm, `${what} failed`));
+    const n = wasm[call](ptr, input.byteLength);
+    if (!n) throw new Error(readWasmLastError(wasm, `${call} failed`));
     return wasmMemoryU8(wasm, wasm.wcol_plan_output_ptr(), n).slice();
   } finally {
     wasm.wcs_dealloc(ptr, input.byteLength);
@@ -185,7 +155,7 @@ function callPlanner(
 
 /** Validate a `POST /jobs` body; returns its kind and the sources to read footers from. */
 export function jobSources(wasm: WcolStreamWasm, body: string): JobSources {
-  const out = callPlanner(wasm, wasm.wcol_job_sources, encoder.encode(body), "wcol_job_sources");
+  const out = callPlanner(wasm, "wcol_job_sources", encoder.encode(body));
   return JSON.parse(new TextDecoder().decode(out)) as JobSources;
 }
 
@@ -236,7 +206,7 @@ function encodeJobPlanRequest(options: JobPlanRequest): Uint8Array {
 }
 
 export function planJob(wasm: WcolStreamWasm, options: JobPlanRequest): JobPlan {
-  const out = callPlanner(wasm, wasm.wcol_plan_job, encodeJobPlanRequest(options), "wcol_plan_job");
+  const out = callPlanner(wasm, "wcol_plan_job", encodeJobPlanRequest(options));
   const outView = new DataView(out.buffer, out.byteOffset, out.byteLength);
   let pos = 1;
   const read32 = () => {
@@ -266,13 +236,6 @@ export function planJob(wasm: WcolStreamWasm, options: JobPlanRequest): JobPlan 
       const graphWire = readBytes().slice();
       return { kind: "parquet", bucket, prefix, graph: decodeExecutionPlanWire(graphWire), graphWire, groupBytes: groupBytes() };
     }
-    case 2: {
-      const bucket = text();
-      const key = text();
-      const programs: Uint8Array[] = [];
-      for (let count = read32(); count > 0; count--) programs.push(readBytes().slice());
-      return { kind: "concat", bucket, key, programs };
-    }
     case 3: {
       const name = text();
       const numClusters = read32();
@@ -301,13 +264,13 @@ export function planLateRead(
   wasm: WcolStreamWasm,
   request: JobPlanRequest,
   picked: Uint8Array,
-): { graph: QueryDispatch | null; resultColumns: Uint8Array } {
+): { graph: ExecutionPlan | null; resultColumns: Uint8Array } {
   const job = encodeJobPlanRequest(request);
   const input = new Uint8Array(4 + picked.byteLength + job.byteLength);
   new DataView(input.buffer).setUint32(0, picked.byteLength, true);
   input.set(picked, 4);
   input.set(job, 4 + picked.byteLength);
-  const out = callPlanner(wasm, wasm.wcol_plan_late_read, input, "wcol_plan_late_read");
+  const out = callPlanner(wasm, "wcol_plan_late_read", input);
   if (out[0] === 0) return { graph: null, resultColumns: out.slice(1) };
   const graph = decodeExecutionPlanWire(out.slice(1));
   return { graph, resultColumns: graph.resultColumns };
@@ -315,18 +278,16 @@ export function planLateRead(
 
 /** Client JSON of a late row job: the read-back's rows in the pick's order. */
 export function rowsByIdJson(
-  wasm: WcolStreamWasm,
+  module: WcolStreamWasm,
   pick: { resultColumns: Uint8Array; rows: Uint8Array },
   read: { resultColumns: Uint8Array; rows: Uint8Array },
   rowCap: number,
 ): string {
-  if (!wasm.wcol_rows_by_id_json || !wasm.wcol_result_output_ptr) {
-    throw new Error("wasm missing wcol_rows_by_id_json (coordinator Wasm only)");
-  }
+  const wasm = plannerWasm(module, "wcol_rows_by_id_json");
   const parts = [pick.resultColumns, pick.rows, read.resultColumns, read.rows];
   const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
   const ptr = wasm.wcs_alloc(Math.max(total, 1));
-  if (!ptr) throw new Error("wcs_alloc failed");
+  if (!ptr) throw new Error(`wcs_alloc failed for ${total} bytes`);
   try {
     const mem = wasmMemoryU8(wasm, ptr, total);
     const at: number[] = [];
@@ -350,26 +311,21 @@ export function rowsByIdJson(
   }
 }
 
-/** Build opcode-11 concat program from shard footers (preserve row groups). */
+/** Build the opcode-11 concat program from shard footers (row groups are kept as written). */
 export function planConcatProgram(
   wasm: WcolStreamWasm,
   footers: { fileSize: number; footer: Uint8Array }[],
 ): Uint8Array {
-  if (!wasm.wcol_concat_program) throw new Error("wasm missing wcol_concat_program");
-  const parts: number[] = [];
-  const pushU32 = (n: number) => {
-    parts.push(n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >> 24) & 255);
-  };
-  const pushU64 = (n: number) => {
-    const view = new DataView(new ArrayBuffer(8));
-    view.setBigUint64(0, BigInt(n), true);
-    parts.push(...new Uint8Array(view.buffer));
-  };
-  pushU32(footers.length);
+  // `u32` count, then per shard `u64` file size, `u32` footer length and the footer.
+  const input = new Uint8Array(4 + footers.reduce((n, item) => n + 12 + item.footer.byteLength, 0));
+  const view = new DataView(input.buffer);
+  view.setUint32(0, footers.length, true);
+  let at = 4;
   for (const item of footers) {
-    pushU64(item.fileSize);
-    pushU32(item.footer.byteLength);
-    parts.push(...item.footer);
+    view.setBigUint64(at, BigInt(item.fileSize), true);
+    view.setUint32(at + 8, item.footer.byteLength, true);
+    input.set(item.footer, at + 12);
+    at += 12 + item.footer.byteLength;
   }
-  return callPlanner(wasm, wasm.wcol_concat_program, new Uint8Array(parts), "wcol_concat_program");
+  return callPlanner(wasm, "wcol_concat_program", input);
 }

@@ -129,22 +129,32 @@ impl BatchQuery {
         })
     }
 
-    /// Typed partial state, written straight into its columns (no per-group allocation).
+    /// Typed partial state of a query that holds everything in memory. A query that has
+    /// spilled finishes with [`Self::try_finish_partial_state`], which may wait on the host.
     pub fn finish_partial_state(&mut self) -> PartialStateWcol {
-        if self.spill_finalization_needed() {
-            match self.flush_live_run().expect("spill flush") {
-                SpillProgress::Ready(()) => {}
-                SpillProgress::AwaitHost => panic!("spill flush suspended during finish"),
-            }
+        assert!(
+            !self.spill_finalization_needed(),
+            "a spilled query finishes with try_finish_partial_state"
+        );
+        self.finish_partial_state_eager()
+    }
+
+    /// Typed partial state, written straight into its columns (no per-group allocation).
+    /// With spilled runs it first flushes the live table, which can wait on the host.
+    pub fn try_finish_partial_state(&mut self) -> Result<SpillProgress<PartialStateWcol>, String> {
+        if self.spill_finalization_needed()
+            && matches!(self.flush_live_run()?, SpillProgress::AwaitHost)
+        {
+            return Ok(SpillProgress::AwaitHost);
         }
         if self
             .spill
             .as_ref()
             .is_some_and(|spill| spill.spill_finalization_needed())
         {
-            return finish_stream::finish_partial_state_streaming(self).expect("spill finish");
+            return finish_stream::finish_partial_state_streaming(self).map(SpillProgress::Ready);
         }
-        self.finish_partial_state_eager()
+        Ok(SpillProgress::Ready(self.finish_partial_state_eager()))
     }
 
     pub(crate) fn finish_partial_state_eager(&mut self) -> PartialStateWcol {

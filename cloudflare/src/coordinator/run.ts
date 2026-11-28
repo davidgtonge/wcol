@@ -9,21 +9,17 @@ import { loadWasm, outputBucket, type Prepared, readSources } from "./plan.ts";
 import { attemptObjectKeyJobs } from "../../../src/runtime/host/parquet-attempt-key.ts";
 import { uploadParquetBuffer } from "../../../src/runtime/host/parquet-upload-sink.ts";
 import { r2BindingSession } from "../r2.ts";
-import { runStandaloneConcatJob } from "./finalizer-concat.ts";
 import { type GraphJobContext, type GraphJobRecord, type LiveAttempt } from "./record.ts";
 import { liveGraph } from "./live.ts";
 import { isHashReducer } from "../../../src/runtime/coordinator/execution-graph.ts";
 import { type AttemptReport, writeAttemptTiming } from "./attempt-timing.ts";
 import { readLateRows, runGatherPrepared, runParquetGatherPrepared } from "./gather.ts";
 import { runKMeansModel } from "./kmeans.ts";
-import { createHashRemote } from "./hash-remote.ts";
+import { abortAttempt, createHashRemote } from "./hash-remote.ts";
 import { recordStall } from "./renewal.ts";
 import { rememberGraphSlots, rememberSlots } from "./slots.ts";
 
-/**
- * One execution of a prepared graph, then the coordinator commits that attempt's outputs.
- * Recovery calls this same pair; it does not grow a second runner.
- */
+/** What one execution of a prepared graph produced, for `finishPrepared` to commit. */
 export type GraphRun = {
   jsonText?: string;
   outputs: ObjectPart[];
@@ -32,9 +28,6 @@ export type GraphRun = {
     summary: { iterations: number; converged: boolean; inertia: number };
   };
 };
-
-/** Jobs whose latest attempt a coordinator keeps for the console. */
-const LIVE_JOBS = 8;
 
 /** Show this attempt in the console, replacing the job's previous one. */
 function registerLive(ctx: GraphJobContext, jobId: string, attempt: number, prepared: Prepared, report: AttemptReport): void {
@@ -48,9 +41,8 @@ function registerLive(ctx: GraphJobContext, jobId: string, attempt: number, prep
     coordinatorColo: null,
     sourceBytes: prepared.descriptor.sources.reduce((sum, source) => sum + source.size, 0),
   };
-  ctx.live.delete(jobId);
+  // One coordinator per job, so this holds that job's latest attempt only.
   ctx.live.set(jobId, entry);
-  for (const oldest of [...ctx.live.keys()].slice(0, Math.max(0, ctx.live.size - LIVE_JOBS))) ctx.live.delete(oldest);
   void coloOnce().then((colo) => {
     entry.coordinatorColo = colo;
   });
@@ -70,6 +62,8 @@ export async function runPrepared(
   stalled?: Promise<string>,
   planSpan?: StageSpan,
 ): Promise<GraphRun> {
+  // Retry and recovery both arrive here: stop the attempt this one supersedes first.
+  if (attempt > 1 && prepared.graph) await abortAttempt(ctx.env, job, prepared.graph, attempt - 1, `superseded by attempt ${attempt}`);
   const timeline = createStageTimeline();
   if (planSpan) timeline.record(planSpan);
   // Queue each balancing scan's planned units for this attempt before any scan asks.
@@ -108,24 +102,6 @@ async function runAttempt(
   report: AttemptReport,
 ): Promise<GraphRun> {
   const wasm = await loadWasm();
-  if (prepared.plan.kind === "concat") {
-    const program = prepared.plan.programs[0];
-    if (!program) throw new Error("concat job has no program");
-    const inputKeys = prepared.descriptor.sources.map((source) => {
-      if (!("key" in source.location)) throw new Error("concat inputs must be bucket objects");
-      return source.location.key;
-    });
-    const part = await runStandaloneConcatJob(
-      ctx,
-      job.jobId,
-      attempt,
-      prepared.plan.bucket,
-      prepared.plan.key,
-      program,
-      inputKeys,
-    );
-    return { outputs: [part] };
-  }
   if (prepared.plan.kind === "model") {
     if (!prepared.graph || prepared.plan.graph.kind !== "graph") throw new Error("CREATE MODEL requires a row execution graph");
     const run = () => runKMeansModel(ctx, job, prepared, attempt, report, wasm);
@@ -156,7 +132,7 @@ async function runAttempt(
     // Non-hash plans only: each task output is held in memory until the root runs.
     // Hash-partitioned jobs must use runHashJob (streaming scan → reducer → finalizer).
     if (prepared.plan.kind === "parquet") {
-      const outputs = await runParquetGatherPrepared(ctx, job, prepared, wasm, attempt, failTaskId, report.facts);
+      const outputs = await runParquetGatherPrepared(ctx, job, prepared, wasm, attempt, failTaskId, limits.maxActiveScans, report.facts);
       await rememberGraphSlots(ctx, job.jobId, prepared.graph);
       return { outputs };
     }
@@ -212,7 +188,7 @@ async function runAttempt(
             };
           }
         : undefined,
-    hashRemote: createHashRemote({ ctx, job, prepared, attempt, failTaskId, stalled, report, limits }),
+    hashRemote: createHashRemote({ ctx, job, prepared, attempt, failTaskId, stalled, report }),
   });
   await rememberSlots(ctx, job.jobId, result.invokedSlots);
   report.schedule = result.timing;

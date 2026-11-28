@@ -18,6 +18,8 @@ struct SchemaCol {
     name: String,
     codec: i32,
     max_def: u8,
+    physical: i32,
+    type_length: i32,
 }
 
 struct CopyJob {
@@ -96,6 +98,8 @@ impl PageCompact {
                 name: col.name.clone(),
                 codec: 0,
                 max_def: col.max_def,
+                physical: col.physical,
+                type_length: col.type_length,
             })
             .collect::<Vec<_>>();
         let rg_count = cur.u32()? as usize;
@@ -157,16 +161,6 @@ impl PageCompact {
             }
             tag => return Err(format!("unknown page-copy footer tag {tag}")),
         };
-        // A built footer types every column as plain INT64 (see `write_footer_once`), so any other
-        // column would be mislabelled in the output. Typed inputs need a verbatim footer.
-        if matches!(footer, FooterSource::Build) {
-            if let Some(col) = catalog.iter().find(|col| col.physical != 2) {
-                return Err(format!(
-                    "page copy can only build a footer for INT64 columns; `{}` has physical type {}",
-                    col.name, col.physical
-                ));
-            }
-        }
         let footer_buf = match footer {
             FooterSource::Build => vec![0u8; FOOTER_BUDGET],
             FooterSource::Verbatim(_) => Vec::new(),
@@ -353,18 +347,20 @@ impl PageCompact {
             per_rg_cols.push(
                 self.schema
                     .iter()
-                    .map(|col| Column {
-                        name: col.name.as_str(),
-                        rows,
-                        codec: col.codec,
-                        present: if col.max_def > 0 {
-                            Some(&[] as &[u8])
-                        } else {
-                            None
-                        },
-                        values: ColumnValues::I64(&[]),
+                    .map(|col| {
+                        Ok(Column {
+                            name: col.name.as_str(),
+                            rows,
+                            codec: col.codec,
+                            present: if col.max_def > 0 {
+                                Some(&[] as &[u8])
+                            } else {
+                                None
+                            },
+                            values: empty_values(col)?,
+                        })
                     })
-                    .collect(),
+                    .collect::<Result<_, String>>()?,
             );
         }
         let footers: Vec<RowGroupFooter<'_>> = self
@@ -530,4 +526,29 @@ pub fn open_page_compact_graph(
     graph.attach_sink(Box::new(compact));
     graph.mark_sink_eof();
     Ok(graph)
+}
+
+/// No values, typed as the column, so a built footer declares each column's physical type.
+/// Converted types are not carried by the catalog, except that byte arrays are UTF-8 as the
+/// engine writes them elsewhere.
+fn empty_values(col: &SchemaCol) -> Result<ColumnValues<'static>, String> {
+    Ok(match col.physical {
+        0 => ColumnValues::Bool(&[]),
+        1 => ColumnValues::I32(&[]),
+        2 => ColumnValues::I64(&[]),
+        4 => ColumnValues::F32(&[]),
+        5 => ColumnValues::F64(&[]),
+        6 => ColumnValues::Bytes(&[]),
+        7 => ColumnValues::Fixed {
+            width: u32::try_from(col.type_length)
+                .map_err(|_| format!("column {} has a negative width", col.name))?,
+            values: &[],
+        },
+        other => {
+            return Err(format!(
+                "column {} has unsupported physical type {other}",
+                col.name
+            ))
+        }
+    })
 }

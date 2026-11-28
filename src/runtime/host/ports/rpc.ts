@@ -1,5 +1,5 @@
 /**
- * Bounded byte pipe for WCS1 transport (Milestone B).
+ * Bounded byte pipe for WCS1 transport.
  * Producer `write` blocks when local buffered bytes exceed the cap, or when a
  * shared {@link SharedBytePool} is full. Pool bytes are released when the
  * consumer dequeues, or on cancel/abort.
@@ -28,9 +28,9 @@ export type BoundedBytePipe = {
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
   /**
-   * Close the pipe now, also while a write is blocked on the cap. `writable.abort()` waits
+   * Fail the pipe now, also while a write is blocked on the cap. `writable.abort()` waits
    * for that write, which only a reader can release. Queued bytes are dropped and the
-   * readable ends.
+   * readable errors with `reason`: a reader must not take a cut edge for a complete one.
    */
   abort: (reason?: unknown) => void;
   metrics: () => BoundedBytePipeMetrics;
@@ -39,9 +39,13 @@ export type BoundedBytePipe = {
 export type BoundedBytePipeOptions = {
   maxBufferedBytes: number;
   pool?: SharedBytePool;
-  /** Label for the first close/abort audit entry. */
+  /** Names the pipe in its errors, eg. `scan-3-p1`. */
   owner?: string;
 };
+
+function reasonText(reason: unknown, fallback: string): string {
+  return reason instanceof Error ? reason.message : String(reason ?? fallback);
+}
 
 export function createBoundedBytePipe(
   maxBufferedBytes: number | BoundedBytePipeOptions,
@@ -53,7 +57,7 @@ export function createBoundedBytePipe(
       : maxBufferedBytes;
   const cap = options.maxBufferedBytes;
   const shared = options.pool;
-  const owner = options.owner ?? "bounded-byte-pipe";
+  const owner = options.owner ?? "bounded byte pipe";
   if (cap < 1) throw new Error("maxBufferedBytes must be >= 1");
   let buffered = 0;
   let acquired = 0;
@@ -66,10 +70,11 @@ export function createBoundedBytePipe(
   let writeWait: (() => void) | null = null;
   let blockedWriters = 0;
   let closeReason: PipeCloseReason | undefined;
+  let readController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
-  const formatCloseDetail = (): string => {
-    if (!closeReason) return "";
-    return ` (${closeReason.action}: ${closeReason.message})`;
+  const closedError = (): Error => {
+    const detail = closeReason ? ` (${closeReason.action}: ${closeReason.message})` : "";
+    return new Error(`write to closed bounded pipe${detail} [${owner}]`);
   };
 
   const notifyRead = () => {
@@ -102,19 +107,25 @@ export function createBoundedBytePipe(
   };
 
   const abort = (reason?: unknown) => {
-    if (closed && queue.length === 0) return;
+    // Already failed, or closed by the writer with every byte taken: nothing is cut.
+    if (closeReason && (closeReason.action !== "close" || queue.length === 0)) return;
     closed = true;
-    closeReason = {
-      action: "abort",
-      message: reason instanceof Error ? reason.message : String(reason ?? "abort"),
-    };
+    closeReason = { action: "abort", message: reasonText(reason, "abort") };
     releaseHeld();
-    notifyRead();
+    readWait = null;
+    try {
+      readController?.error(reason ?? new Error(`${owner} aborted`));
+    } catch {
+      // The readable had already ended; there is no reader left to tell.
+    }
     notifyWrite();
   };
 
   const readable = new ReadableStream<Uint8Array>(
     {
+      start(controller) {
+        readController = controller;
+      },
       pull(controller) {
         const chunk = dequeue();
         if (chunk) {
@@ -127,19 +138,13 @@ export function createBoundedBytePipe(
         }
         readWait = () => {
           const next = dequeue();
-          if (!next) {
-            if (closed) controller.close();
-            return;
-          }
-          controller.enqueue(next);
+          if (next) controller.enqueue(next);
+          else if (closed) controller.close();
         };
       },
       cancel(reason) {
         closed = true;
-        closeReason = {
-          action: "cancel",
-          message: reason instanceof Error ? reason.message : String(reason ?? "cancel"),
-        };
+        closeReason = { action: "cancel", message: reasonText(reason, "cancel") };
         releaseHeld();
         notifyRead();
         notifyWrite();
@@ -150,14 +155,12 @@ export function createBoundedBytePipe(
 
   const writable = new WritableStream<Uint8Array>({
     async write(chunk) {
-      if (closed) {
-        throw new Error(`write to closed bounded pipe${formatCloseDetail()}`);
-      }
+      if (closed) throw closedError();
       if (shared && chunk.byteLength > 0) {
         await shared.acquire(chunk.byteLength);
         if (closed) {
           shared.release(chunk.byteLength);
-          throw new Error(`write to closed bounded pipe${formatCloseDetail()}`);
+          throw closedError();
         }
         acquired += chunk.byteLength;
       }
@@ -200,28 +203,6 @@ export function createBoundedBytePipe(
       blockedWriters,
     }),
   };
-}
-
-/** Deterministic payload generator for transport benchmarks. */
-export async function pumpSyntheticBytes(
-  writable: WritableStream<Uint8Array>,
-  totalBytes: number,
-  chunkSize: number,
-): Promise<void> {
-  const writer = writable.getWriter();
-  let sent = 0;
-  try {
-    while (sent < totalBytes) {
-      const n = Math.min(chunkSize, totalBytes - sent);
-      const chunk = new Uint8Array(n);
-      for (let i = 0; i < n; i++) chunk[i] = (sent + i) & 0xff;
-      await writer.write(chunk);
-      sent += n;
-    }
-    await writer.close();
-  } finally {
-    writer.releaseLock();
-  }
 }
 
 export async function drainReadable(

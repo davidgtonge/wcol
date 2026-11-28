@@ -113,11 +113,22 @@ let timelineHit: TimelineHit | null = null;
 let matrixHit: MatrixHit | null = null;
 let finalView: LiveJobView | null = null;
 let lastFrame = 0;
+/** Something shown changed (a snapshot, the moment, a selection); a still view is not redrawn. */
+let stale = true;
+const redraw = (): void => {
+  stale = true;
+};
+addEventListener("resize", redraw);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
 
 function frame(time: number): void {
   requestAnimationFrame(frame);
   const snapshot = view.snapshot;
   if (!snapshot || time - lastFrame < FRAME_MS) return;
+  // A running or playing job moves on between polls; anything else waits for a change.
+  const moving = view.playing || (view.follow && !ended(snapshot));
+  if (!moving && !stale) return;
+  stale = false;
   lastFrame = time;
   const at = moment(snapshot);
   if (view.playing && at >= snapshot.now) {
@@ -158,6 +169,7 @@ requestAnimationFrame(frame);
 
 /** Panels drawn once per snapshot rather than per frame. */
 function onSnapshot(snapshot: LiveSnapshot): void {
+  redraw();
   view.snapshot = snapshot;
   view.fetchedAt = Date.now();
   const playing = view.recording !== null && !view.recording.revealed;
@@ -192,6 +204,7 @@ function onSnapshot(snapshot: LiveSnapshot): void {
 // --- replay controls ----------------------------------------------------------------------------
 
 function setPlaying(playing: boolean): void {
+  redraw();
   view.playing = playing;
   ui.play.textContent = playing ? "Pause" : "Replay";
 }
@@ -215,6 +228,7 @@ ui.slider.addEventListener("input", () => {
   setPlaying(false);
   view.follow = false;
   view.at = view.snapshot.startedAt + Number(ui.slider.value);
+  redraw();
 });
 ui.follow.addEventListener("click", () => {
   setPlaying(false);
@@ -234,6 +248,7 @@ ui.timeline.addEventListener("mousemove", (event) => {
 ui.timeline.addEventListener("click", (event) => {
   const hit = timelineHit?.(...local(event, ui.timeline));
   if (hit?.task) view.selected = hit.task.id;
+  redraw();
 });
 ui.matrix.addEventListener("mousemove", (event) => {
   const hit = matrixHit?.(...local(event, ui.matrix));
@@ -246,10 +261,12 @@ ui.matrix.addEventListener("mousemove", (event) => {
 ui.matrix.addEventListener("click", (event) => {
   const hit = matrixHit?.(...local(event, ui.matrix));
   if (hit) view.selected = event.shiftKey ? hit.to.id : hit.from.id;
+  redraw();
 });
 ui.matrixMode.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
   button.addEventListener("click", () => {
     view.matrixMode = button.dataset.mode === "finish" ? "finish" : "bytes";
+    redraw();
     ui.matrixMode.querySelectorAll("button").forEach((other) => other.classList.toggle("active", other === button));
   });
 });

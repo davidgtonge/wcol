@@ -93,8 +93,15 @@ fn approx(agg: &Agg, sum: Sum, min: Extreme, max: Extreme, count: u64, nulls: u6
 fn flat_file_aggregates_match_the_encoder() {
     let bytes = fixture();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/flat.parquet");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(&path, &bytes).unwrap();
+    // Other tests read the committed fixture, so this one compares rather than rewrites it.
+    if std::env::var_os("WCOL_REGENERATE_FIXTURES").is_some() {
+        fs::write(&path, &bytes).unwrap();
+    }
+    assert!(
+        fs::read(&path).unwrap() == bytes,
+        "the encoder no longer writes tests/fixtures/flat.parquet; \
+         rerun with WCOL_REGENERATE_FIXTURES=1 if the change is intended"
+    );
 
     let (_file, plan) = open_plan(&path).unwrap();
     assert_eq!(plan.rows, 4);

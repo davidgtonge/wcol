@@ -8,28 +8,8 @@ use crate::plan::sql_parser::{
     AggKind, Aggregate, Filter, GroupSortTarget, PlanError, QueryPlan, Scalar,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LowerQueryPlanError {
-    Unsupported,
-    UnknownColumn,
-    TextForNumber,
-}
-
-impl From<PlanError> for LowerQueryPlanError {
-    fn from(value: PlanError) -> Self {
-        match value {
-            PlanError::Unsupported => Self::Unsupported,
-            PlanError::UnknownColumn => Self::UnknownColumn,
-            PlanError::TextForNumber => Self::TextForNumber,
-        }
-    }
-}
-
 /// Build a logical plan from `table` (the `FROM` name) and a compiled hand-parser plan.
-pub fn lower_query_plan(
-    table: &str,
-    plan: &QueryPlan<'_>,
-) -> Result<WcolLogicalPlan, LowerQueryPlanError> {
+pub fn lower_query_plan(table: &str, plan: &QueryPlan<'_>) -> Result<WcolLogicalPlan, PlanError> {
     let mut columns = column_ids(plan);
     columns.sort_unstable();
     columns.dedup();
@@ -141,37 +121,16 @@ pub fn logical_plan_and_output_from_footer(
         .iter()
         .map(|leaf| Column {
             name: leaf.name.as_str(),
-            kind: if matches!(leaf.physical, 6 | 7) {
+            kind: if crate::ops::query::physical_type::is_bytes(leaf.physical) {
                 ColumnKind::Text
             } else {
                 ColumnKind::Number
             },
         })
         .collect();
-    let planned = plan_query(&query, &columns).map_err(|err| match err {
-        PlanError::Unsupported => {
-            "sql is not supported by the planner: unsupported sql".to_string()
-        }
-        PlanError::UnknownColumn => {
-            "sql is not supported by the planner: unknown column".to_string()
-        }
-        PlanError::TextForNumber => {
-            "sql is not supported by the planner: a text literal is compared with a numeric column"
-                .to_string()
-        }
-    })?;
-    let logical = lower_query_plan(query.from.0, &planned).map_err(|err| match err {
-        LowerQueryPlanError::Unsupported => {
-            "sql is not supported by the planner: unsupported sql".to_string()
-        }
-        LowerQueryPlanError::UnknownColumn => {
-            "sql is not supported by the planner: unknown column".to_string()
-        }
-        LowerQueryPlanError::TextForNumber => {
-            "sql is not supported by the planner: a text literal is compared with a numeric column"
-                .to_string()
-        }
-    })?;
+    let unsupported = |err: PlanError| format!("sql is not supported by the planner: {err}");
+    let planned = plan_query(&query, &columns).map_err(unsupported)?;
+    let logical = lower_query_plan(query.from.0, &planned).map_err(unsupported)?;
     Ok((logical, planned.output))
 }
 
@@ -180,9 +139,9 @@ pub fn lower_sql_v0_to_logical(
     sql: &str,
     columns: &[crate::plan::sql_parser::Column<'_>],
     table: &str,
-) -> Result<WcolLogicalPlan, LowerQueryPlanError> {
-    let query =
-        crate::plan::sql_parser::parse_sql_v0(sql).map_err(|_| LowerQueryPlanError::Unsupported)?;
+) -> Result<WcolLogicalPlan, PlanError> {
+    let query = crate::plan::sql_parser::parse_sql_v0(sql)
+        .map_err(|_| PlanError::Unsupported("sql does not parse"))?;
     let plan = crate::plan::sql_parser::plan_query(&query, columns)?;
     lower_query_plan(table, &plan)
 }
@@ -220,7 +179,7 @@ fn column_ids(plan: &QueryPlan<'_>) -> Vec<u32> {
     ids
 }
 
-fn filter_to_predicate(filter: &Filter<'_>) -> Result<Predicate, LowerQueryPlanError> {
+fn filter_to_predicate(filter: &Filter<'_>) -> Result<Predicate, PlanError> {
     Ok(match filter {
         Filter::Compare { column, op, value } => Predicate::Compare(Compare {
             column: *column,

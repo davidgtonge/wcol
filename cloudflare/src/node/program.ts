@@ -145,7 +145,6 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
   const startedAt = Date.now();
   let pool: StreamPool | undefined;
   let outcome: "ok" | "failed" = "failed";
-  let inputWaitMs = 0;
   let writeWaitMs = 0;
   let lastProgressAt = 0;
   let progressInFlight = false;
@@ -158,8 +157,6 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
       at: Date.now(),
       wallMs: performance.now() - started,
       ...partial,
-      retainedIngressBytes: 0,
-      ingressLocks: 0,
     };
     const now = performance.now();
     if (progressInFlight || (lastProgressAt > 0 && now - lastProgressAt < 2000)) return;
@@ -227,14 +224,7 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
       readAt: (source, offset, length) => readSource(source, Number(offset), length),
       yieldToEventLoop: heartbeat,
       onProgress: (info) => {
-        const rows = info.spillBoundaries ?? [];
-        while (spillBoundaries.length < rows.length) {
-          const row = rows[spillBoundaries.length]!;
-          spillBoundaries.push({
-            ...row,
-            hostRetainedBytes: 0,
-          });
-        }
+        spillBoundaries.push(...(info.spillBoundaries ?? []).slice(spillBoundaries.length));
         publishProgress({
           pollIterations: info.pollIterations,
           inputBytes: info.inputBytes,
@@ -283,10 +273,7 @@ export async function runProgram(options: RunProgramOptions): Promise<TaskTiming
       sourceReads: profile?.reads ?? 0,
       sourceReadBytes: profile?.readBytes ?? 0,
       wasmLoadMs,
-      inputWaitMs,
       writeWaitMs,
-      readAtWaitMs: 0,
-      readAtCalls: 0,
       inputBytes: stats.inputBytes,
       outputBytes: stats.outputBytes,
       wasmMemoryBytes: stats.maxWasmMemoryBytes,

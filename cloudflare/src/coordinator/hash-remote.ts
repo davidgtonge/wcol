@@ -1,15 +1,16 @@
 /** The coordinator's side of a hash job: reducer and scan RPCs to node objects. */
-import { isHashReducer } from "../../../src/runtime/coordinator/execution-graph.ts";
-import type { HashRemote, ObjectPart, PreparedHashReducer, RunnableTask } from "../../../src/runtime/coordinator/run-hash-job.ts";
+import { createLimiter } from "../../../src/runtime/concurrency.ts";
+import { COORDINATOR_SLOT, isHashReducer } from "../../../src/runtime/coordinator/execution-graph.ts";
+import type { GraphPlan } from "../../../src/runtime/coordinator/job-replay.ts";
+import type { HashRemote, ObjectPart, PreparedHashReducer } from "../../../src/runtime/coordinator/run-hash-job.ts";
 import { concatBytes } from "../../../src/runtime/host/bytes.ts";
 import { attemptObjectKeyJobs } from "../../../src/runtime/host/parquet-attempt-key.ts";
-import { graphNodeStub } from "../node/node.ts";
-import { reducerStub, type ReducerRuntime } from "../node/session.ts";
+import { graphNodeStub, type GraphTaskEnv } from "../node/node.ts";
+import { reducerStub } from "../node/session.ts";
+import { raceTimeout } from "../timeout.ts";
 import type { AttemptReport } from "./attempt-timing.ts";
 import type { Prepared } from "./plan.ts";
 import type { GraphJobContext, GraphJobRecord } from "./record.ts";
-
-export type HashLimits = { openingConcurrency: number; maxActiveIngress: number };
 
 type HashRemoteContext = {
   ctx: GraphJobContext;
@@ -19,8 +20,38 @@ type HashRemoteContext = {
   failTaskId: number | undefined;
   stalled: Promise<string> | undefined;
   report: AttemptReport;
-  limits: HashLimits;
 };
+
+/** A task's object in one attempt: reducers run where the job asked, every other task on nodes. */
+function taskStub(env: GraphTaskEnv, job: GraphJobRecord, attempt: number, task: { slot: number; program: Uint8Array }) {
+  return isHashReducer(task.program)
+    ? reducerStub(env, job.jobId, attempt, task.slot, job.reducerRuntime ?? "node")
+    : graphNodeStub(env, job.jobId, attempt, task.slot);
+}
+
+/** Abort RPCs in flight at once, and how long each may take. */
+const ABORT_CONCURRENCY = 16;
+const ABORT_TIMEOUT_MS = 5_000;
+
+/**
+ * Abort every task object of a superseded attempt, so its scans, reducers and containers stop
+ * before the next attempt starts beside them. Attempt objects are named by attempt, so this
+ * frees resources rather than fencing results (the attempt fence does that): an abort that
+ * fails or times out is logged and the next attempt goes ahead.
+ */
+export async function abortAttempt(env: GraphTaskEnv, job: GraphJobRecord, graph: GraphPlan, attempt: number, reason: string): Promise<void> {
+  const limit = createLimiter(ABORT_CONCURRENCY);
+  const tasks = graph.tasks.filter((task) => task.slot !== COORDINATOR_SLOT);
+  const outcomes = await Promise.all(
+    tasks.map((task) =>
+      limit(() =>
+        raceTimeout(taskStub(env, job, attempt, task).abortHashAttempt({ jobId: job.jobId, executionAttempt: attempt, error: reason }), ABORT_TIMEOUT_MS),
+      ),
+    ),
+  );
+  const missed = outcomes.filter((outcome) => outcome.kind !== "ok").length;
+  if (missed > 0) console.warn(JSON.stringify({ event: "abort_attempt_incomplete", jobId: job.jobId, attempt, missed, tasks: tasks.length }));
+}
 
 type RpcTarget = { taskId: number; slot: number };
 type RpcCaller = { taskId: number | null; scanIndex: number | null };
@@ -132,16 +163,11 @@ function reducerCalls(
 }
 
 export function createHashRemote(context: HashRemoteContext): HashRemote {
-  const { ctx, job, prepared, attempt, failTaskId, stalled, report, limits } = context;
+  const { ctx, job, prepared, attempt, failTaskId, stalled, report } = context;
   const trace = ctx.env.WCOL_DISPATCH_TRACE === "1";
   const etags = () => prepared.descriptor.sources.map((source) => source.etag);
   const recordFirstRpc = firstRpcRecorder(ctx, job.jobId, attempt);
-  // Reducers run where the job asked; scans and every other task run on nodes.
-  const reducerRuntime: ReducerRuntime = job.reducerRuntime ?? "node";
-  const taskStub = (task: RunnableTask) =>
-    isHashReducer(task.program)
-      ? reducerStub(ctx.env, job.jobId, attempt, task.slot, reducerRuntime)
-      : graphNodeStub(ctx.env, job.jobId, attempt, task.slot);
+  const reducerRuntime = job.reducerRuntime ?? "node";
   const callRpc: CallRpc = async (method, caller, target, started, work) => {
     try {
       return await work();
@@ -176,8 +202,6 @@ export function createHashRemote(context: HashRemoteContext): HashRemote {
           ...(job.reducerInstance ? { containerInstance: job.reducerInstance } : {}),
           failTaskId: attempt === 1 ? failTaskId : undefined,
           trace,
-          openingConcurrency: limits.openingConcurrency,
-          maxActiveIngress: limits.maxActiveIngress,
           etags: etags(),
           exportProgram,
           exportObjectKey,
@@ -213,7 +237,7 @@ export function createHashRemote(context: HashRemoteContext): HashRemote {
     },
     abortTask: async (task, error) => {
       await callRpc("abortHashAttempt", { taskId: null, scanIndex: null }, { taskId: task.taskId, slot: task.slot }, Date.now(), () =>
-        taskStub(task).abortHashAttempt({
+        taskStub(ctx.env, job, attempt, task).abortHashAttempt({
           jobId: job.jobId,
           executionAttempt: attempt,
           error: message(error),
@@ -236,8 +260,6 @@ export function createHashRemote(context: HashRemoteContext): HashRemote {
           hashScanIndex: scanIndex,
           failTaskId: attempt === 1 ? failTaskId : undefined,
           trace,
-          openingConcurrency: limits.openingConcurrency,
-          maxActiveIngress: limits.maxActiveIngress,
           etags: etags(),
         }),
       );

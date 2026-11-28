@@ -2,6 +2,7 @@
 import { readMemGrowth } from "../../../src/runtime/host/run-wcol-engine.ts";
 import { claimingReadAt } from "../../../src/runtime/coordinator/unit-claims.ts";
 import { coloOnce, isolateId } from "../colo.ts";
+import { sha256Hex } from "../digest.ts";
 import { runScanStreamPool } from "../../../src/runtime/host/run-scan-stream-pool.ts";
 import { createIsolatePeak, joinIsolate } from "./isolate-load.ts";
 import { type BoundedBytePipe, createBoundedBytePipe } from "../../../src/runtime/host/ports/rpc.ts";
@@ -30,14 +31,6 @@ export function destinationForPort<T extends { partition: number }>(destinations
  */
 const SCAN_PIPE_BUDGET_BYTES = 16 * 1024 * 1024;
 const SCAN_PIPE_CAP_BYTES = 2 * 1024 * 1024;
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  );
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 async function acceptHashPartition(
   env: GraphTaskEnv,

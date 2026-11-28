@@ -1,4 +1,4 @@
-//! SQL + one Parquet footer → what the coordinator dispatches: one `wcs_open` program per node
+//! SQL + one Parquet footer → what the coordinator dispatches: one stream-pool program per node
 //! slot, or (for a footer-only count) the finished partial. This is the single entry hosts use;
 //! placement, reads and operators all come from [`lower_to_physical`].
 
@@ -51,7 +51,7 @@ pub fn catalog_from_footer(footer: &Plan) -> Vec<CatalogColumn> {
         .iter()
         .map(|leaf| CatalogColumn {
             name: leaf.name.clone(),
-            kind: if matches!(leaf.physical, 6 | 7) {
+            kind: if crate::ops::query::physical_type::is_bytes(leaf.physical) {
                 ColumnKind::Text
             } else {
                 ColumnKind::Number
@@ -69,7 +69,7 @@ fn row_id_catalog_column() -> CatalogColumn {
     CatalogColumn {
         name: "__row_id".to_string(),
         kind: ColumnKind::Number,
-        physical: 2,
+        physical: crate::ops::query::physical_type::INT64,
         type_length: 0,
         max_def: 0,
         max_rep: 0,
@@ -104,8 +104,8 @@ pub fn plan_query_job(
         return Err("query needs at least one node slot".to_string());
     }
     let footer = same_schema(objects)?;
-    let (logical, output) = logical_plan_and_output_from_footer(sql, footer)
-        .map_err(|err| format!("sql: sql is not supported by the planner: {err}"))?;
+    let (logical, output) =
+        logical_plan_and_output_from_footer(sql, footer).map_err(|err| format!("sql: {err}"))?;
     let (dispatch, plan) = dispatch_prepared(&logical, objects, node_count, batch_rows, config)?;
     let names: Vec<String> = footer.leaves.iter().map(|leaf| leaf.name.clone()).collect();
     let columns = result_columns(&plan, Some(output.as_slice()), &names)?;
@@ -137,7 +137,7 @@ pub(crate) fn dispatch_prepared(
 ) -> Result<(QueryDispatch, WcolPhysicalPlan), String> {
     let footer = same_schema(objects)?;
     let mut catalog = catalog_from_footer(footer);
-    let table = scan_table_name(&logical.root)?;
+    let table = scan_table_name(&logical.root);
     let metadata = ParquetMetadataCatalog::from_footers(table, objects);
     let nodes: Vec<NodeId> = (0..node_count).map(NodeId).collect();
     let plan =
@@ -260,15 +260,14 @@ pub(crate) fn dispatch_prepared(
     Ok((QueryDispatch::Nodes(programs), plan))
 }
 
-fn scan_table_name(op: &LogicalOp) -> Result<&str, String> {
+fn scan_table_name(op: &LogicalOp) -> &str {
     match op {
-        LogicalOp::Scan { table, .. } => Ok(table.as_str()),
+        LogicalOp::Scan { table, .. } => table.as_str(),
         LogicalOp::Filter { input, .. }
         | LogicalOp::Project { input, .. }
         | LogicalOp::Aggregate { input, .. }
         | LogicalOp::Sort { input, .. }
         | LogicalOp::Limit { input, .. } => scan_table_name(input),
-        LogicalOp::Join { .. } => Err("query is not a single table scan".into()),
     }
 }
 

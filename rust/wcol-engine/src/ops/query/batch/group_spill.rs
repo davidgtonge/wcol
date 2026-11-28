@@ -292,36 +292,9 @@ impl GroupSpill {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spill::{HostSpillBridge, HostSpillStore, SPILL_OP_BEGIN};
+    use crate::spill::HostSpillBridge;
     use std::cell::RefCell;
     use std::rc::Rc;
-
-    #[test]
-    fn ensure_session_marks_begun_on_spill_await_host() {
-        let bridge = Rc::new(RefCell::new(HostSpillBridge::new(99)));
-        let store = Box::new(HostSpillStore::new(bridge.clone()));
-        let config = SpillConfig {
-            combined_budget_bytes: 4096,
-            scratch_reserve_bytes: 512,
-            max_batch_rows: 64,
-            max_batch_bytes: 4096,
-            scan_page_rows: 8,
-            finalize_batch_rows: 4,
-        };
-        let mut spill = GroupSpill::open(config, store).unwrap();
-        assert!(matches!(
-            spill.ensure_session().unwrap(),
-            SpillProgress::AwaitHost
-        ));
-        assert!(spill.session_begun);
-        bridge
-            .borrow_mut()
-            .complete_begin()
-            .expect("begin complete");
-        assert!(spill.ensure_session().is_ok());
-        let pending = bridge.borrow().pending_request();
-        assert!(pending.is_none() || pending.unwrap().op != SPILL_OP_BEGIN);
-    }
 
     fn open_r2_spill() -> (GroupSpill, Rc<RefCell<HostSpillBridge>>) {
         let bridge = Rc::new(RefCell::new(HostSpillBridge::new(7)));

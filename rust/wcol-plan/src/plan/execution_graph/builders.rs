@@ -371,7 +371,7 @@ pub(super) fn build_parquet_parts(nodes: &[NodeProgram]) -> Result<ExecutionPlan
     ))
 }
 
-/// Phase 2: range-partitioned global sort export (scan → range tasks → concat finaliser).
+/// Range-partitioned global sort export (scan → range tasks → concat finaliser).
 pub fn build_range_sort_graph(
     programs: &[NodeProgram],
     _plan: &WcolPhysicalPlan,

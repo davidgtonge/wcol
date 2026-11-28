@@ -1,4 +1,4 @@
-//! I-05: PWCL serialization only at physical boundaries (not between colocated query stages).
+//! PWCL serialization only at physical boundaries (not between colocated query stages).
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -8,7 +8,7 @@ use wcol::columns_for_sql;
 use wcol::formats::parquet::open_plan;
 use wcol::ingest_groups_from_plan;
 use wcol::ops::query::partial_first_sum_i;
-use wcol::stream::partial_wcs::{partial_wire_format, PartialWireFormat};
+use wcol::stream::PWCL_MAGIC;
 use wcol::{GraphPump, LinearColocatedGraph};
 
 fn fixture_path() -> PathBuf {
@@ -61,6 +61,6 @@ fn typed_graph_finishes_in_memory_before_pwcl_edge() {
     }
 
     let wire = graph.finish_wire_partial_bytes().unwrap();
-    assert_eq!(partial_wire_format(&wire), PartialWireFormat::PwclV1);
+    assert_eq!(&wire[..4], PWCL_MAGIC);
     assert_eq!(partial_first_sum_i(&wire).unwrap(), 20);
 }

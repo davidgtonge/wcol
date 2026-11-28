@@ -1,5 +1,5 @@
 import { readWasmLastError, wasmMemoryU8 } from "./wasm.ts";
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import { plannerWasm, type WcolStreamWasm } from "./wasm-stream.ts";
 
 export type KMeansWireConfig = {
   dimensions: number;
@@ -30,9 +30,7 @@ function withWasmInput<T>(
 }
 
 function copyWasmOutput(wasm: WcolStreamWasm, length: number): Uint8Array {
-  const outputPtr = wasm.wcol_iterative_kmeans_output_ptr;
-  if (!outputPtr) throw new Error("Wasm is missing iterative output export");
-  return wasmMemoryU8(wasm, outputPtr(), length).slice();
+  return wasmMemoryU8(wasm, plannerWasm(wasm, "K-means output").wcol_iterative_kmeans_output_ptr(), length).slice();
 }
 
 export function mergeResidentKMeansMoments(
@@ -41,8 +39,7 @@ export function mergeResidentKMeansMoments(
   right: Uint8Array,
   dimensions: number,
 ): Uint8Array {
-  const fn = wasm.wcol_iterative_kmeans_merge_moments;
-  if (!fn) throw new Error("coordinator wasm is missing K-means moments merge export");
+  const fn = plannerWasm(wasm, "wcol_iterative_kmeans_merge_moments").wcol_iterative_kmeans_merge_moments;
   return withWasmInput(wasm, [left, right], (ptr, lengths) => {
     const length = fn(ptr, lengths[0]!, ptr + lengths[0]!, lengths[1]!, dimensions);
     if (!length) throw new Error(readWasmLastError(wasm, "K-means moments merge failed"));
@@ -55,8 +52,7 @@ export function prepareResidentKMeans(
   moments: Uint8Array,
   config: KMeansWireConfig & { seed: number },
 ): { state: Uint8Array; normalization: Uint8Array } {
-  const fn = wasm.wcol_iterative_kmeans_prepare;
-  if (!fn) throw new Error("coordinator wasm is missing K-means preparation export");
+  const fn = plannerWasm(wasm, "wcol_iterative_kmeans_prepare").wcol_iterative_kmeans_prepare;
   return withWasmInput(wasm, [moments], (ptr, [length]) => {
     const outputLength = fn(
       ptr, length!, config.dimensions, config.clusters, config.maxIterations,
@@ -97,10 +93,7 @@ export function mergeResidentKMeansPartials(
   right: Uint8Array,
   config: KMeansWireConfig,
 ): Uint8Array {
-  const fn = wasm.wcol_iterative_kmeans_merge;
-  const outputPtr = wasm.wcol_iterative_kmeans_output_ptr;
-  if (!fn || !outputPtr)
-    throw new Error("coordinator wasm is missing K-means merge exports");
+  const fn = plannerWasm(wasm, "wcol_iterative_kmeans_merge").wcol_iterative_kmeans_merge;
   return withWasmInput(wasm, [left, right], (ptr, lengths) => {
     const length = fn(
       ptr, lengths[0]!, ptr + lengths[0]!, lengths[1]!,
@@ -121,10 +114,7 @@ export function updateResidentKMeans(
   partial: Uint8Array,
   config: KMeansWireConfig,
 ): { state: Uint8Array; converged: boolean; inertia: number } {
-  const fn = wasm.wcol_iterative_kmeans_update;
-  const outputPtr = wasm.wcol_iterative_kmeans_output_ptr;
-  if (!fn || !outputPtr)
-    throw new Error("coordinator wasm is missing K-means update exports");
+  const fn = plannerWasm(wasm, "wcol_iterative_kmeans_update").wcol_iterative_kmeans_update;
   return withWasmInput(wasm, [state, partial], (ptr, lengths) => {
     const length = fn(
       ptr, lengths[0]!, ptr + lengths[0]!, lengths[1]!,
@@ -158,8 +148,7 @@ export function residentKMeansCentroids(
   state: Uint8Array,
   config: KMeansWireConfig,
 ): number[] {
-  const fn = wasm.wcol_iterative_kmeans_centroids_json;
-  if (!fn) throw new Error("coordinator wasm is missing K-means artifact export");
+  const fn = plannerWasm(wasm, "wcol_iterative_kmeans_centroids_json").wcol_iterative_kmeans_centroids_json;
   return withWasmInput(wasm, [state], (ptr, [length]) => {
     const outputLength = fn(ptr, length!, config.dimensions, config.clusters, config.maxIterations, config.tolerance);
     if (!outputLength) throw new Error(readWasmLastError(wasm, "K-means artifact serialization failed"));

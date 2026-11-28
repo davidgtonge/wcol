@@ -33,10 +33,6 @@ fn plan_aggregate(plan: &WcolPhysicalPlan) -> Option<(&[u32], &[AggExpr])> {
         OpKind::FinalAggregate {
             group_by,
             aggregates,
-        }
-        | OpKind::Aggregate {
-            group_by,
-            aggregates,
         } => Some((group_by.as_slice(), aggregates.as_slice())),
         OpKind::MetadataAggregate { aggregates, .. } => Some((&[][..], aggregates.as_slice())),
         _ => None,
@@ -201,8 +197,6 @@ pub fn export_steps(
     leaves: &[crate::formats::parquet::Leaf],
     target_row_group_rows: u32,
 ) -> Result<Vec<CoordinatorStep>, String> {
-    const INT64: i32 = 2;
-    const DOUBLE: i32 = 5;
     let (group_by, aggregates) = plan_aggregate(plan).ok_or("export plan has no aggregate")?;
     let mut steps = finalize_steps(plan).ok_or("export plan has no aggregate")??;
     let leaf = |column: u32| {
@@ -210,7 +204,8 @@ pub fn export_steps(
             .get(column as usize)
             .ok_or_else(|| format!("column {column} is not in the footer"))
     };
-    let float = |physical: i32| matches!(physical, 4 | 5);
+    use crate::ops::query::physical_type::{self, DOUBLE, INT64};
+    let float = physical_type::is_float;
     let mut export = Vec::with_capacity(columns.len());
     for result in columns {
         let index = result.column as usize;
@@ -236,7 +231,7 @@ pub fn export_steps(
                     let source = leaf(column)?;
                     if float(source.physical) {
                         (DOUBLE, 0, true)
-                    } else if matches!(source.physical, 1 | 2) {
+                    } else if physical_type::is_integer(source.physical) {
                         (INT64, 0, true)
                     } else {
                         return Err(format!("cannot export {} of a text column", result.name));
@@ -636,7 +631,7 @@ mod tests {
 
     fn frames(batch: &OwnedWcolBatch) -> Vec<u8> {
         let mut egress = RowBatchWcsEgress::new();
-        egress.push_batch(batch).unwrap();
+        egress.push_batch(batch.clone()).unwrap();
         egress.push_end().unwrap();
         let mut out = Vec::new();
         let mut buf = vec![0u8; 4096];

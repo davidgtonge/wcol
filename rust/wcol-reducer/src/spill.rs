@@ -10,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 use wcol_engine::exec::stream_pool::StreamPoolSession;
 use wcol_engine::spill::{SPILL_OP_RUN_COMMIT, SPILL_OP_RUN_PUT, SPILL_OP_RUN_READ};
 
+const MAX_OPEN_RUNS: usize = 64;
+
 /// One reducer's runs, under its own directory. Removed when the reducer is dropped.
 pub struct LocalSpill {
     dir: PathBuf,
@@ -38,7 +40,7 @@ impl LocalSpill {
             op => Err(format!("unsupported spill op {op}")),
         };
         session
-            .complete_spill(result.is_ok(), &[])
+            .complete_spill(result.is_ok())
             .map_err(|e| e.to_string())?;
         result
     }
@@ -54,37 +56,20 @@ impl LocalSpill {
                 part.byte_length
             ));
         }
-        let path = self.path(&part.key)?;
-        let file = match self.open.entry(part.key.clone()) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                entry.insert(
-                    OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .read(true)
-                        .open(&path)
-                        .map_err(|e| format!("open run {}: {e}", path.display()))?,
-                )
-            }
-        };
+        let mut file = self.run_file(&part.key)?;
         file.write_all(body)
             .map_err(|e| format!("write run {}: {e}", part.key))?;
-        self.bytes_written += body.len() as u64;
         if part.last {
             file.flush().map_err(|e| e.to_string())?;
         }
+        self.bytes_written += body.len() as u64;
         Ok(())
     }
 
     fn read(&mut self, session: &mut StreamPoolSession) -> Result<(), String> {
         let read = RunRead::decode(session.spill_append_bytes())?;
-        let file =
-            File::open(self.path(&read.key)?).map_err(|e| format!("run {}: {e}", read.key))?;
-        let len = read.length as usize;
+        let len = usize::try_from(read.length).map_err(|_| "spill read length overflow")?;
+        let file = self.run_file(&read.key)?;
         let slot = session
             .spill_run_read_slot(len)
             .map_err(|e| e.to_string())?;
@@ -99,6 +84,32 @@ impl LocalSpill {
         })?;
         self.bytes_read += len as u64;
         Ok(())
+    }
+
+    /// The open handle for run `key`, opened (and created) on first use. Writes append and
+    /// reads are positioned, so one handle serves both. At most [`MAX_OPEN_RUNS`] stay
+    /// open: a merge reads many runs in turn, and reopening a few is cheaper than running
+    /// out of descriptors.
+    fn run_file(&mut self, key: &str) -> Result<&File, String> {
+        if !self.open.contains_key(key) {
+            if self.open.len() >= MAX_OPEN_RUNS {
+                self.open.clear();
+            }
+            let path = self.path(key)?;
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .read(true)
+                .open(&path)
+                .map_err(|e| format!("open run {}: {e}", path.display()))?;
+            self.open.insert(key.to_string(), file);
+        }
+        self.open
+            .get(key)
+            .ok_or_else(|| format!("run {key} not open"))
     }
 
     /// A run key is a relative path the engine names (`wcol-spill/<partition>/run-N.bin`).

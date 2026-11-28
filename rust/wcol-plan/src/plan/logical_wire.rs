@@ -95,24 +95,6 @@ fn encode_op(op: &LogicalOp, out: &mut Vec<u8>) {
                 push_u64(out, *fetch);
             }
         }
-        LogicalOp::Join {
-            left,
-            right,
-            left_keys,
-            right_keys,
-        } => {
-            out.push(7);
-            encode_op(left, out);
-            encode_op(right, out);
-            push_u32(out, left_keys.len() as u32);
-            for column in left_keys {
-                push_u32(out, *column);
-            }
-            push_u32(out, right_keys.len() as u32);
-            for column in right_keys {
-                push_u32(out, *column);
-            }
-        }
     }
 }
 
@@ -185,26 +167,6 @@ fn decode_op(cur: &mut &[u8]) -> Result<LogicalOp, LogicalWireError> {
                 None
             };
             LogicalOp::Limit { input, skip, fetch }
-        }
-        7 => {
-            let left = Box::new(decode_op(cur)?);
-            let right = Box::new(decode_op(cur)?);
-            let left_count = read_u32(cur)? as usize;
-            let mut left_keys = Vec::with_capacity(left_count);
-            for _ in 0..left_count {
-                left_keys.push(read_u32(cur)?);
-            }
-            let right_count = read_u32(cur)? as usize;
-            let mut right_keys = Vec::with_capacity(right_count);
-            for _ in 0..right_count {
-                right_keys.push(read_u32(cur)?);
-            }
-            LogicalOp::Join {
-                left,
-                right,
-                left_keys,
-                right_keys,
-            }
         }
         _ => return Err(LogicalWireError::UnknownTag),
     })

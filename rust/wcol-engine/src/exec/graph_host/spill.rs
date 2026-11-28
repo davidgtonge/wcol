@@ -3,24 +3,12 @@
 use super::*;
 
 impl GraphHost {
-    pub fn spill_exec(&self) -> (u8, u64, u32, u32, i64, u8, u32) {
-        (
-            self.spill_op,
-            self.spill_session,
-            self.spill_max_rows,
-            self.spill_max_bytes,
-            self.spill_resume_seq,
-            self.spill_resume_started,
-            self.spill_append_len,
-        )
+    pub fn spill_op(&self) -> u8 {
+        self.spill_op
     }
 
     pub fn spill_append_bytes(&self) -> &[u8] {
         &self.spill_append_buf
-    }
-
-    pub fn spill_resume_key(&self) -> &[u8] {
-        &self.spill_resume_key
     }
 
     /// Where the host writes the pending run read. Valid until the next Wasm allocation, so
@@ -37,9 +25,14 @@ impl GraphHost {
         Ok(bridge.borrow_mut().run_read_slot(len).as_mut_ptr())
     }
 
-    pub fn complete_spill(&mut self, ok: bool, scan_page: &[u8]) -> WcolResult<()> {
+    /// Take the host's answer to the pending spill op. A failed host op (`ok == false`)
+    /// fails the session, so the next step reports it, and is not itself an error: the
+    /// host still holds the original I/O error and rethrows that.
+    pub fn complete_spill(&mut self, ok: bool) -> WcolResult<()> {
         if !ok {
-            return Err(WcolError::from("spill host operation failed"));
+            self.spill_op = 0;
+            self.fail_message("spill host operation failed");
+            return Ok(());
         }
         let Some(bridge) = self.core.spill_bridge.as_ref() else {
             return Err(WcolError::from("spill complete without session"));
@@ -50,19 +43,6 @@ impl GraphHost {
             return Err(WcolError::from("spill complete with no pending op"));
         }
         match op {
-            crate::spill::SPILL_OP_BEGIN => bridge.complete_begin().map_err(WcolError::msg)?,
-            crate::spill::SPILL_OP_APPEND => {
-                bridge.complete_append().map_err(WcolError::msg)?;
-                let released = self.spill_append_buf.len() as u32;
-                crate::ops::query::batch::note_spill_payload_release_inflight(released);
-                self.spill_append_buf = Vec::new();
-                self.spill_append_len = 0;
-            }
-            crate::spill::SPILL_OP_SCAN => {
-                let page = crate::spill::decode_scan_page(scan_page).map_err(WcolError::msg)?;
-                bridge.complete_scan(page).map_err(WcolError::msg)?;
-            }
-            crate::spill::SPILL_OP_END => bridge.complete_end().map_err(WcolError::msg)?,
             crate::spill::SPILL_OP_RUN_PUT => {
                 bridge.complete_run_put().map_err(WcolError::msg)?;
             }
@@ -70,9 +50,6 @@ impl GraphHost {
                 bridge.complete_run_commit().map_err(WcolError::msg)?;
             }
             crate::spill::SPILL_OP_RUN_READ => {
-                if !scan_page.is_empty() {
-                    return Err(WcolError::from("run read bytes belong in the read slot"));
-                }
                 bridge.complete_run_read().map_err(WcolError::msg)?;
             }
             _ => return Err(WcolError::from("unknown spill op")),
@@ -108,20 +85,8 @@ impl GraphHost {
     }
 
     pub(super) fn fill_spill_exec(&mut self, req: crate::spill::HostSpillRequest) {
-        if req.op == crate::spill::SPILL_OP_APPEND {
-            let len = req.append_bytes.len() as u32;
-            crate::ops::query::batch::note_spill_serialize(len, req.append_bytes.capacity() as u32);
-            crate::ops::query::batch::note_spill_payload_move_queued_to_inflight(len);
-        }
         self.spill_op = req.op;
-        self.spill_session = req.session;
-        self.spill_max_rows = req.max_rows;
-        self.spill_max_bytes = req.max_bytes;
-        self.spill_resume_seq = req.resume.seq;
-        self.spill_resume_started = u8::from(req.resume.started);
-        self.spill_resume_key = req.resume.key_blob;
         self.spill_append_buf = req.append_bytes;
-        self.spill_append_len = self.spill_append_buf.len() as u32;
         if req.op == crate::spill::SPILL_OP_RUN_PUT {
             if let Some(bridge) = self.core.spill_bridge.as_ref() {
                 self.spill_run_upload_mirror = std::mem::take(&mut bridge.borrow_mut().run_upload);

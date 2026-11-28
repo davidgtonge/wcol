@@ -6,6 +6,7 @@
 pub mod batch;
 pub mod float_key;
 pub mod hll;
+pub mod physical_type;
 
 use std::collections::BTreeMap;
 

@@ -5,6 +5,7 @@
  *   WCOL_SHUTDOWN_SECRET=… npx tsx scripts/cf-shutdown-dos.ts k-abc…
  */
 
+import { JOB_ID, jobIdsUnder } from "../cloudflare/src/job-id.ts";
 import { listR2Objects } from "./r2-cloudflare-api.ts";
 
 const BASE = process.env.WCOL_BASE_URL;
@@ -18,12 +19,7 @@ if (!SECRET) {
 
 async function discoverJobIds(): Promise<string[]> {
   const objects = await listR2Objects("wcol-hits-exports", "_jobs/", { limit: 1000 });
-  const ids = new Set<string>();
-  for (const object of objects) {
-    const match = object.key.match(/^_jobs\/(k-[a-f0-9]+)\//);
-    if (match) ids.add(match[1]!);
-  }
-  return [...ids].sort();
+  return jobIdsUnder(objects.map((object) => object.key));
 }
 
 async function shutdownBatch(jobIds: string[]): Promise<unknown> {
@@ -52,7 +48,7 @@ async function shutdownBatch(jobIds: string[]): Promise<unknown> {
   return body;
 }
 
-const explicit = process.argv.slice(2).filter((arg) => arg.startsWith("k-"));
+const explicit = process.argv.slice(2).filter((arg) => JOB_ID.test(arg));
 const jobIds = explicit.length ? explicit : await discoverJobIds();
 console.log(JSON.stringify({ event: "discovered", jobCount: jobIds.length, jobIds }, null, 2));
 

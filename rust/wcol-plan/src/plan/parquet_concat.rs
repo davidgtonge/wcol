@@ -1,14 +1,12 @@
-//! Query and standalone Parquet row-group concat planning.
+//! Planning the query finaliser's Parquet row-group concat.
 
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::plan::distributed::SourceVersion;
 use crate::plan::page_compaction::{
-    encode_page_compact_wire, plan_page_compaction, plan_preserve_row_group_concat,
-    validate_compaction_inputs, CompactionInputFile, PageCompactionPlan, PageCompactionPolicy,
+    encode_page_compact_wire, plan_preserve_row_group_concat, validate_compaction_inputs,
+    CompactionInputFile, PageCompactionPlan,
 };
-
-pub const DEFAULT_CONCAT_FOOTER_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 
 /// A committed shard object the finaliser reads in planner order.
 #[derive(Clone, Debug)]
@@ -28,75 +26,22 @@ impl CommittedParquetShard {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConcatPolicy {
-    /// When false, each source row group becomes one output row group (query finaliser default).
-    pub merge_row_groups: bool,
-    pub target_output_bytes: u64,
-    pub target_row_group_bytes: u64,
-    pub footer_budget_bytes: usize,
-}
-
-impl Default for ConcatPolicy {
-    fn default() -> Self {
-        Self {
-            merge_row_groups: false,
-            target_output_bytes: PageCompactionPolicy::default().target_output_bytes,
-            target_row_group_bytes: PageCompactionPolicy::default().target_row_group_bytes,
-            footer_budget_bytes: DEFAULT_CONCAT_FOOTER_BUDGET_BYTES,
-        }
-    }
-}
-
-impl ConcatPolicy {
-    pub fn query_finaliser() -> Self {
-        Self {
-            merge_row_groups: false,
-            ..Self::default()
-        }
-    }
-
-    pub fn standalone_compaction() -> Self {
-        Self {
-            merge_row_groups: true,
-            ..Self::default()
-        }
-    }
-}
-
-/// Plan a single opcode-11 program that concatenates shards in `inputs` order.
+/// Plan a single opcode-11 program that concatenates shards in `inputs` order, one output
+/// row group per source row group.
 pub fn concat_parquet_row_groups(
     source: SourceVersion,
     output_key: &str,
     shards: &[CommittedParquetShard],
-    policy: &ConcatPolicy,
 ) -> Result<(PageCompactionPlan, Vec<u8>), String> {
     if shards.is_empty() {
         return Err("concat requires at least one shard".to_string());
     }
     let inputs: Vec<CompactionInputFile> = shards.iter().map(|s| s.as_compaction_input()).collect();
     validate_compaction_inputs(&inputs)?;
-    if policy.merge_row_groups {
-        let compaction_policy = PageCompactionPolicy {
-            output_parts: 1,
-            target_output_bytes: policy.target_output_bytes,
-            target_row_group_bytes: policy.target_row_group_bytes,
-        };
-        let planned = plan_page_compaction(source, output_key, inputs, compaction_policy)?;
-        let part = planned
-            .parts
-            .first()
-            .ok_or_else(|| "compaction produced no part".to_string())?
-            .clone();
-        let leaves = &planned.inputs[0].plan.leaves;
-        let program = encode_page_compact_wire(&part, leaves)?;
-        Ok((planned, program))
-    } else {
-        let (part, planned) = plan_preserve_row_group_concat(source, output_key, inputs)?;
-        let leaves = &planned.inputs[0].plan.leaves;
-        let program = encode_page_compact_wire(&part, leaves)?;
-        Ok((planned, program))
-    }
+    let (part, planned) = plan_preserve_row_group_concat(source, output_key, inputs)?;
+    let leaves = &planned.inputs[0].plan.leaves;
+    let program = encode_page_compact_wire(&part, leaves)?;
+    Ok((planned, program))
 }
 
 /// Build an opcode-11 program that concatenates inputs in order (query finaliser, preserve row groups).
@@ -124,12 +69,7 @@ pub fn concat_program_from_footers(
             plan: plan.clone(),
         })
         .collect();
-    let (_, program) = concat_parquet_row_groups(
-        source,
-        "result.parquet",
-        &shards,
-        &ConcatPolicy::query_finaliser(),
-    )?;
+    let (_, program) = concat_parquet_row_groups(source, "result.parquet", &shards)?;
     Ok(program)
 }
 

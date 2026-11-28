@@ -18,7 +18,7 @@ import {
   type RunTaskParams,
 } from "./types.ts";
 import { admitObjectKey, traceObjectKey } from "./records.ts";
-import { outputBucketFor, runProgram, streamed } from "./program.ts";
+import { eventLoopYield, outputBucketFor, runProgram, streamed } from "./program.ts";
 
 function requireHashSession(holder: HashIngressHolder, params: HashAttemptParams) {
   const session = holder.session;
@@ -48,9 +48,6 @@ export async function prepareReducerOnNode(options: PrepareReducerOnNodeOptions)
     sources: params.sources,
     failTaskId: params.failTaskId,
     trace: params.trace,
-    openingConcurrency: params.openingConcurrency,
-    maxActiveIngress: params.maxActiveIngress,
-    ingressBytes: params.ingressBytes,
     etags: params.etags,
   };
   const inputLatch = createPoolInputLatch();
@@ -118,7 +115,7 @@ export async function prepareReducerOnNode(options: PrepareReducerOnNodeOptions)
               inputLatch: exportLatch,
               host: {
                 writePort: sink.writePort,
-                yield: () => new Promise((resolve) => setTimeout(resolve, 0)),
+                yield: eventLoopYield,
               },
             });
             await runReducer(async (_port, chunk) => {

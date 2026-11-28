@@ -125,9 +125,12 @@ impl Head {
                 _ => Method::Other,
             },
             target: request.path.unwrap_or("/").to_string(),
-            length: header("content-length")
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(0),
+            length: match header("content-length") {
+                Some(value) => value
+                    .parse()
+                    .map_err(|_| invalid("unparsable Content-Length"))?,
+                None => 0,
+            },
             chunked: header("transfer-encoding").is_some_and(|v| v.contains("chunked")),
             close: header("connection").is_some_and(|v| v == "close"),
             expect_continue: header("expect").is_some_and(|v| v == "100-continue"),
@@ -139,7 +142,9 @@ impl Head {
 fn read_head(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut head = Vec::new();
     loop {
-        if reader.read_until(b'\n', &mut head)? == 0 {
+        // Bounded before reading: a line with no newline must not grow `head` without limit.
+        let room = (MAX_HEAD_BYTES + 1).saturating_sub(head.len()) as u64;
+        if reader.by_ref().take(room).read_until(b'\n', &mut head)? == 0 {
             return if head.is_empty() {
                 Ok(None)
             } else {
@@ -233,4 +238,25 @@ fn write_reply(writer: &mut impl Write, reply: Reply) -> io::Result<()> {
 
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_head_without_newlines_stops_at_the_limit() {
+        let bytes = vec![b'a'; MAX_HEAD_BYTES * 4];
+        let mut reader = BufReader::new(&bytes[..]);
+        let err = read_head(&mut reader).unwrap_err();
+        assert_eq!(err.to_string(), "request head too large");
+    }
+
+    #[test]
+    fn an_unparsable_content_length_is_rejected() {
+        let head = b"PUT /input/0 HTTP/1.1\r\nContent-Length: ten\r\n\r\n";
+        assert!(Head::parse(head).is_err());
+        let head = b"PUT /input/0 HTTP/1.1\r\nContent-Length: 10\r\n\r\n";
+        assert_eq!(Head::parse(head).unwrap().length, 10);
+    }
 }

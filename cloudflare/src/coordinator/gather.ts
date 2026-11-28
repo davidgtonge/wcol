@@ -9,7 +9,10 @@ import { attemptKey, claimingReadAt, nextUnit } from "../../../src/runtime/coord
 import { concatBytes } from "../../../src/runtime/host/bytes.ts";
 import { runWcolEngine } from "../../../src/runtime/host/run-wcol-engine.ts";
 import { attachBytesInputs } from "../../../src/runtime/host/pool-streams.ts";
+import type { SourceReadAt } from "../../../src/runtime/host/stream-pool.ts";
 import { graphNodeStub, r2Bucket } from "../node/node.ts";
+import { eventLoopYield } from "../node/program.ts";
+import { jobLimits, parseJobRequest } from "./job-request.ts";
 import { loadWasm, outputBucket, pinnedFooters, planRequest, type Prepared, readSources } from "./plan.ts";
 import { attemptObjectKeyJobs } from "../../../src/runtime/host/parquet-attempt-key.ts";
 import { exportSink, type ExportObject } from "../../../src/runtime/host/hive-upload-sink.ts";
@@ -18,6 +21,7 @@ import { type GraphJobContext, type GraphJobRecord } from "./record.ts";
 import type { TaskFacts } from "./live.ts";
 
 type GraphTask = GraphPlan["tasks"][number];
+type Wasm = Awaited<ReturnType<typeof loadWasm>>;
 
 /** Pending tasks whose producers have all finished. A graph with none left is broken. */
 function readyTasks(plan: GraphPlan, pending: ReadonlySet<number>, outputs: ReadonlyMap<number, Uint8Array>): GraphTask[] {
@@ -26,6 +30,54 @@ function readyTasks(plan: GraphPlan, pending: ReadonlySet<number>, outputs: Read
   );
   if (ready.length === 0) throw new Error("execution graph has a cycle or a missing producer");
   return ready;
+}
+
+/**
+ * The gather scheduler: run `plan` wave by wave. Each wave is the tasks whose producers have
+ * finished, at most `maxActive` at once; each output stays in memory until its consumer runs.
+ * What a task does with its inputs (and where its output goes) is `run`'s.
+ */
+async function runWaves(
+  plan: GraphPlan,
+  maxActive: number,
+  run: (task: GraphTask, incoming: Uint8Array[]) => Promise<Uint8Array>,
+): Promise<Map<number, Uint8Array>> {
+  const outputs = new Map<number, Uint8Array>();
+  const pending = new Set(plan.tasks.map((task) => task.id));
+  const limit = createLimiter(maxActive);
+  while (pending.size > 0) {
+    const ready = readyTasks(plan, pending, outputs);
+    const wave = await Promise.all(
+      ready.map((task) =>
+        limit(async () => {
+          const incoming = edgesInto(task.id, plan.edges).map((edge) => outputs.get(edge.from)!);
+          return [task.id, await run(task, incoming)] as const;
+        }),
+      ),
+    );
+    for (const [taskId, bytes] of wave) {
+      outputs.set(taskId, bytes);
+      pending.delete(taskId);
+    }
+  }
+  return outputs;
+}
+
+/** One gather task where the plan put it: here (`COORDINATOR_SLOT`) or on its node. */
+function gatherTask(
+  ctx: GraphJobContext,
+  job: GraphJobRecord,
+  prepared: Prepared,
+  wasm: Wasm,
+  attempt: number,
+  failTaskId: number | undefined,
+  facts: Map<number, TaskFacts>,
+): (task: GraphTask, incoming: Uint8Array[]) => Promise<Uint8Array> {
+  const read = readSources(ctx.env, prepared.descriptor.sources);
+  return (task, incoming) =>
+    task.slot === COORDINATOR_SLOT
+      ? runGatherLocal(wasm, task.program, incoming, claimingReadAt(read, () => nextUnit(ctx.work, attemptKey(job.jobId, attempt), task.id)))
+      : runRemoteGather(ctx, job, prepared, attempt, failTaskId, task, incoming, facts);
 }
 
 /**
@@ -72,9 +124,10 @@ export async function runParquetGatherPrepared(
   ctx: GraphJobContext,
   job: GraphJobRecord,
   prepared: Prepared,
-  wasm: Awaited<ReturnType<typeof loadWasm>>,
+  wasm: Wasm,
   attempt: number,
   failTaskId: number | undefined,
+  maxActiveTasks: number,
   facts: Map<number, TaskFacts>,
 ): Promise<ObjectPart[]> {
   const plan = prepared.graph as Extract<ExecutionPlan, { kind: "graph" }>;
@@ -115,7 +168,7 @@ export async function runParquetGatherPrepared(
         onPoolReady: attachBytesInputs(inputs),
         host: {
           writePort: (port, chunk) => sink.writePort(port, chunk),
-          yield: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+          yield: eventLoopYield,
           readAt: inputs.length ? undefined : claimingReadAt(readSources(ctx.env, prepared.descriptor.sources), claimNext(taskId)),
         },
       });
@@ -126,43 +179,27 @@ export async function runParquetGatherPrepared(
     }
   };
 
+  const limit = createLimiter(maxActiveTasks);
   if (plan.edges.length === 0) {
     // Settle every task before failing: a task's RPC returns once its uploads end, so no
     // file of this attempt lands after the attempt (and its sweep), and a retry does not
     // run beside this attempt's remaining tasks.
     const settled = await Promise.allSettled(
-      plan.tasks.map((task) => uploadTask(task.id, task.slot, task.program, [])),
+      plan.tasks.map((task) => limit(() => uploadTask(task.id, task.slot, task.program, []))),
     );
     const failed = settled.find((result) => result.status === "rejected");
     if (failed) throw failed.reason;
     return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
   }
 
-  const outputs = new Map<number, Uint8Array>();
-  const pending = new Set(plan.tasks.map((task) => task.id));
+  // The root writes Parquet; every other task gathers bytes for it.
   const parts: ObjectPart[] = [];
-  while (pending.size > 0) {
-    const ready = readyTasks(plan, pending, outputs);
-    for (const task of ready) {
-      const incoming = edgesInto(task.id, plan.edges).map((edge) => outputs.get(edge.from)!);
-      if (task.id === plan.rootTaskId) {
-        parts.push(...(await uploadTask(task.id, task.slot, task.program, incoming)));
-        outputs.set(task.id, new Uint8Array());
-      } else {
-        const bytes =
-          task.slot === COORDINATOR_SLOT
-            ? await runGatherLocal(
-                wasm,
-                task.program,
-                incoming,
-                claimingReadAt(readSources(ctx.env, prepared.descriptor.sources), claimNext(task.id)),
-              )
-            : await runRemoteGather(ctx, job, prepared, attempt, failTaskId, task, incoming, facts);
-        outputs.set(task.id, bytes);
-      }
-      pending.delete(task.id);
-    }
-  }
+  const gather = gatherTask(ctx, job, prepared, wasm, attempt, failTaskId, facts);
+  await runWaves(plan, maxActiveTasks, async (task, incoming) => {
+    if (task.id !== plan.rootTaskId) return gather(task, incoming);
+    parts.push(...(await uploadTask(task.id, task.slot, task.program, incoming)));
+    return new Uint8Array();
+  });
   if (parts.length === 0) {
     throw new Error("parquet gather produced no uploaded shard");
   }
@@ -176,14 +213,16 @@ export async function runParquetGatherPrepared(
 export async function readLateRows(
   ctx: GraphJobContext,
   prepared: Prepared,
-  wasm: Awaited<ReturnType<typeof loadWasm>>,
+  wasm: Wasm,
   picked: Uint8Array,
   gather: (graph: GraphPlan) => Promise<Uint8Array>,
 ): Promise<string> {
   const { lateBody } = prepared.descriptor;
   if (prepared.plan.kind !== "json" || lateBody == null) throw new Error("not a late row job");
+  const late = parseJobRequest(lateBody, jobLimits(ctx.env));
+  if (late.kind === "invalid") throw new Error(`stored late row request is invalid: ${late.error}`);
   const footers = await pinnedFooters(ctx.env, prepared.descriptor.sources);
-  const read = planLateRead(wasm, planRequest(ctx.env, lateBody, footers), picked);
+  const read = planLateRead(wasm, planRequest(late.request, footers), picked);
   const rows = read.graph?.kind === "graph" ? await gather(read.graph) : new Uint8Array();
   return rowsByIdJson(
     wasm,
@@ -198,7 +237,7 @@ export async function runGatherPrepared(
   job: GraphJobRecord,
   prepared: Prepared,
   plan: GraphPlan,
-  wasm: Awaited<ReturnType<typeof loadWasm>>,
+  wasm: Wasm,
   attempt: number,
   failTaskId: number | undefined,
   timeline: StageTimeline,
@@ -208,39 +247,20 @@ export async function runGatherPrepared(
   if (plan.edges.some((edge) => edge.partition !== undefined)) {
     throw new Error("runGatherPrepared requires a graph without hash-partition edges");
   }
-  const read = readSources(ctx.env, prepared.descriptor.sources);
-  const claimNext = (taskId: number) => () => nextUnit(ctx.work, attemptKey(job.jobId, attempt), taskId);
-  const outputs = new Map<number, Uint8Array>();
-  const pending = new Set(plan.tasks.map((task) => task.id));
-  // Tasks whose producers are done are independent; run them together, bounded
-  // like hash scans. Each output stays in memory until its consumer runs.
-  const limit = createLimiter(maxActiveTasks);
-  while (pending.size > 0) {
-    const ready = readyTasks(plan, pending, outputs);
-    const wave = await Promise.all(ready.map((task) => limit(async () => {
-      const incoming = edgesInto(task.id, plan.edges).map((edge) => outputs.get(edge.from)!);
-      const bytes = await timeline.span("gatherTask", { taskId: task.id }, () =>
-        task.slot === COORDINATOR_SLOT
-          ? runGatherLocal(wasm, task.program, incoming, claimingReadAt(read, claimNext(task.id)))
-          : runRemoteGather(ctx, job, prepared, attempt, failTaskId, task, incoming, facts),
-      );
-      return [task.id, bytes] as const;
-    })));
-    for (const [taskId, bytes] of wave) {
-      outputs.set(taskId, bytes);
-      pending.delete(taskId);
-    }
-  }
+  const gather = gatherTask(ctx, job, prepared, wasm, attempt, failTaskId, facts);
+  const outputs = await runWaves(plan, maxActiveTasks, (task, incoming) =>
+    timeline.span("gatherTask", { taskId: task.id }, () => gather(task, incoming)),
+  );
   const root = outputs.get(plan.rootTaskId);
   if (!root) throw new Error("graph root produced no bytes");
   return root;
 }
 
 async function runGatherLocal(
-  wasm: Awaited<ReturnType<typeof loadWasm>>,
+  wasm: Wasm,
   program: Uint8Array,
   inputs: Uint8Array[],
-  readAt: (source: number, offset: number, length: number) => Promise<Uint8Array>,
+  readAt: SourceReadAt,
 ): Promise<Uint8Array> {
   const parts: Uint8Array[] = [];
   await runWcolEngine({
@@ -255,7 +275,7 @@ async function runGatherLocal(
       writePort: async (_port, chunk) => {
         parts.push(chunk);
       },
-      yield: () => new Promise((resolve) => setTimeout(resolve, 0)),
+      yield: eventLoopYield,
     },
   });
   return concatBytes(parts);

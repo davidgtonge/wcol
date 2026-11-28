@@ -1,7 +1,7 @@
 /**
  * Miniflare Durable Objects for rpc-stream-reject.test.ts.
  * A caller streams bytes into a callee RPC that refuses them without reading.
- * Measures whether the caller's call settles, for a throw versus a returned error.
+ * Reports whether the caller's call settles.
  */
 
 import { DurableObject } from "cloudflare:workers";
@@ -12,7 +12,6 @@ type RejectEnv = {
   CALLEE: {
     idFromName(name: string): unknown;
     get(id: unknown): {
-      rejectByThrowing(stream: ReadableStream<Uint8Array>): Promise<unknown>;
       rejectByReturning(stream: ReadableStream<Uint8Array>): Promise<unknown>;
       acceptAndRead(stream: ReadableStream<Uint8Array>): Promise<unknown>;
     };
@@ -24,11 +23,6 @@ type RejectEnv = {
 };
 
 export class Callee extends DurableObject<RejectEnv> {
-  async rejectByThrowing(stream: ReadableStream<Uint8Array>): Promise<unknown> {
-    void stream.cancel(new Error("rejected")).catch(() => undefined);
-    throw new Error("not the active node session");
-  }
-
   async rejectByReturning(stream: ReadableStream<Uint8Array>): Promise<unknown> {
     void stream.cancel(new Error("rejected")).catch(() => undefined);
     return { accepted: false, error: "not the active node session" };
@@ -56,12 +50,7 @@ export class Caller extends DurableObject<RejectEnv> {
       }
     })();
     // Stub methods are RPC proxies: call them directly, not via Function.prototype.call.
-    const sent =
-      mode === "throw"
-        ? callee.rejectByThrowing(pipe.readable)
-        : mode === "return"
-          ? callee.rejectByReturning(pipe.readable)
-          : callee.acceptAndRead(pipe.readable);
+    const sent = mode === "return" ? callee.rejectByReturning(pipe.readable) : callee.acceptAndRead(pipe.readable);
     const call = sent.then(
       (value) => ({ settled: true, value }),
       (error: unknown) => ({ settled: true, error: String(error) }),

@@ -8,7 +8,6 @@ import {
   WIRE_TAG_EXECUTION_GRAPH_V2,
   WIRE_TAG_METADATA_PARTIAL,
 } from "../src/runtime/coordinator/execution-graph.ts";
-import { completionAccepted } from "../src/runtime/coordinator/task-identity.ts";
 
 describe("execution graph wire", () => {
   it("decodes metadata partial tag 0", () => {
@@ -18,8 +17,7 @@ describe("execution graph wire", () => {
     new DataView(wire.buffer).setUint32(1, partial.byteLength, true);
     wire.set(partial, 5);
     const plan = decodeExecutionPlanWire(wire);
-    assert.equal(plan.kind, "metadata_partial");
-    if (plan.kind !== "metadata_partial") return;
+    assert.ok(plan.kind === "metadata_partial", plan.kind);
     assert.deepEqual(plan.partial, partial);
   });
 
@@ -44,23 +42,25 @@ describe("execution graph wire", () => {
     parts.push(0);
     const wire = new Uint8Array(parts);
     const plan = decodeExecutionPlanWire(wire);
-    assert.equal(plan.kind, "graph");
-    if (plan.kind !== "graph") return;
+    assert.ok(plan.kind === "graph", plan.kind);
     assert.equal(plan.rootTaskId, 0);
     assert.equal(plan.tasks[0]?.slot, COORDINATOR_SLOT);
     assert.equal(plan.edges.length, 0);
   });
 
-  it("decodes a partition id on tag 5 and leaves tag 4 whole-stream", () => {
+  it("decodes a partition id on tag 5 and leaves whole-stream and tag 4 edges unpartitioned", () => {
     const wire = graphWire(WIRE_TAG_EXECUTION_GRAPH_V2, 3);
     const plan = decodeExecutionPlanWire(wire);
-    assert.equal(plan.kind, "graph");
-    if (plan.kind !== "graph") return;
+    assert.ok(plan.kind === "graph", plan.kind);
     assert.equal(plan.edges[0]?.partition, 3);
     const whole = graphWire(WIRE_TAG_EXECUTION_GRAPH_V2, WHOLE_STREAM);
     const decoded = decodeExecutionPlanWire(whole);
-    if (decoded.kind !== "graph") return;
+    assert.ok(decoded.kind === "graph", decoded.kind);
     assert.equal(decoded.edges[0]?.partition, undefined);
+    const v1 = decodeExecutionPlanWire(graphWire(WIRE_TAG_EXECUTION_GRAPH_V1, 3));
+    assert.ok(v1.kind === "graph", v1.kind);
+    assert.equal(v1.edges.length, 1);
+    assert.equal(v1.edges[0]?.partition, undefined);
   });
 });
 
@@ -87,15 +87,10 @@ function graphWire(tag: number, partition: number): Uint8Array {
   return new Uint8Array(parts);
 }
 
-describe("task identity fencing", () => {
-  it("rejects stale attempts", () => {
-    assert.equal(
-      completionAccepted({ identity: { queryId: "q", taskId: 1, attempt: 2 }, result: null }, {
-        queryId: "q",
-        taskId: 1,
-        attempt: 1,
-      }),
-      false,
-    );
+describe("execution graph wire errors", () => {
+  it("rejects an unknown root output byte instead of defaulting it", () => {
+    const wire = graphWire(WIRE_TAG_EXECUTION_GRAPH_V2, 3);
+    wire[wire.length - 1] = 9;
+    assert.throws(() => decodeExecutionPlanWire(wire), /unknown root output 9/);
   });
 });

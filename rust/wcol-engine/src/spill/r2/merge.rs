@@ -141,15 +141,10 @@ impl HostR2SortedRunStore {
         *self
             .read_target_mut()
             .ok_or("run read queued before merge scan")? = Some((run_index, record_index));
-        let session = self.bridge.borrow().session_id();
         await_host(
             &mut self.bridge.borrow_mut(),
             HostSpillRequest {
                 op: SPILL_OP_RUN_READ,
-                session,
-                resume: SpillScanResume::default(),
-                max_rows: 0,
-                max_bytes: length,
                 append_bytes: encode_run_read_open(&plan)?,
             },
         )

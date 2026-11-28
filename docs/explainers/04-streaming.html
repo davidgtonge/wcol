@@ -68,7 +68,7 @@
         <div class="hero-stat"><strong>64 <small>KiB</small></strong><span>WCS PAYLOAD CAP</span></div>
         <div class="hero-stat"><strong>64 <small>KiB</small></strong><span>DEFAULT INPUT SLOT</span></div>
         <div class="hero-stat"><strong>128 <small>KiB</small></strong><span>DEFAULT OUTPUT SLOT</span></div>
-        <div class="hero-stat"><strong>100 <small>/ SIDE</small></strong><span>PORT LIMIT PER NODE</span></div>
+        <div class="hero-stat"><strong>128 <small>/ SIDE</small></strong><span>PORT LIMIT PER NODE</span></div>
       </div>
       <p class="hero-fine">A WCS frame is a logical unit; it can cross mailbox chunk boundaries. The slot sizes above are default host settings, not a requirement that a frame fit one slot.</p>
     </section>
@@ -122,7 +122,7 @@
 
     <section class="lifecycle-section shell" id="lifecycle"><div class="section-intro"><div class="eyebrow">03 / LATE ARRIVALS & ENDING INPUT</div><h2>Not attached is <span class="accent">not EOF.</span></h2><p>Distributed inputs arrive at different times. The stream pool must distinguish a port that may still attach, a stream that has reached EOF, and a producer that will never open an edge.</p></div><div class="lifecycle-grid"><div class="panel lifecycle-lab"><div class="panel-head"><div class="panel-heading"><span class="section-index">03A</span><h3>Input-port state machine</h3></div><span class="panel-tag">TRY TRANSITIONS</span></div><div class="lifecycle-content"><div class="port-tabs" id="port-tabs" role="group" aria-label="Select an input port"><button type="button" data-port="0" class="is-selected">PORT 00</button><button type="button" data-port="1">PORT 01</button><button type="button" data-port="2">PORT 02</button></div><div class="port-card"><div class="port-card-top"><span>SELECTED INPUT SLOT</span><span class="port-index" id="port-index">00</span></div><div class="port-state-label" id="port-state-label">EXPECTED / NOT ATTACHED</div><div class="port-states" id="port-states"></div><p class="port-explanation" id="port-explanation"></p></div><div class="port-actions"><button id="port-attach" type="button" class="secondary-btn">attachInput()</button><button id="port-eof" type="button" class="subtle-btn">EOF</button><button id="port-absent" type="button" class="subtle-btn">sealInput()</button><button id="port-abort" type="button" class="danger-btn">Abort</button></div><button id="port-reset" class="text-reset" type="button">↺ Reset all ports</button></div></div><div class="lifecycle-notes"><div class="note-card"><span class="note-number">01 / ATTACH</span><h3>It can arrive late.</h3><p><code>createPoolInputLatch()</code> stores pending attach/seal requests until the Wasm stream pool exists. There is no need to invent another fan-in buffer.</p></div><div class="note-card"><span class="note-number">02 / EOF</span><h3>A real stream has ended.</h3><p>An attached input finishes via <code>writer.close()</code>, which triggers <code>wcs_sp_in_end</code>. The reducer can distinguish this from a missing producer.</p></div><div class="note-card"><span class="note-number">03 / ABSENT</span><h3>No stream was produced.</h3><p><code>sealInput(port)</code> calls <code>wcs_sp_in_absent</code> only for a port that never attached. The graph can finish without waiting forever.</p></div></div></div></section>
 
-    <section class="principles-section shell"><div class="section-intro"><div class="eyebrow">04 / WHY THIS DESIGN WORKS</div><h2>Bounded by construction.</h2><p>The engineering constraints are part of the host API, not only comments in the query planner.</p></div><div class="principles-grid"><article class="principle"><span class="principle-n">01 / BACKPRESSURE</span><div class="principle-symbol">⇄</div><h3>A full slot stops the writer.</h3><p>Input writes wait for <code>wcs_sp_in_free</code>; output reads release with <code>wcs_sp_out_release</code>. A slow consumer eventually stops the producer without an unbounded queue.</p></article><article class="principle"><span class="principle-n">02 / NO BUSY POLL</span><div class="principle-symbol">◴</div><h3>Work wakes on events.</h3><p>Advancement is requested when slots change, reads complete, or host spill operations finish. The scheduler yields between batches rather than constantly spinning on a blocked graph.</p></article><article class="principle"><span class="principle-n">03 / CONCURRENT PIPELINES</span><div class="principle-symbol">↝</div><h3>Attach consumers early.</h3><p>Reducer outputs can be connected to a running finalizer before all scans end. Consumption can start as soon as bytes are emitted, instead of filling a pipe with no reader.</p></article></div><div class="source-footnote"><div><span class="source-label">IMPLEMENTATION BASIS</span><strong>Uploaded <code>host(4).zip</code></strong><p>Source paths include <code>stream-pool.ts</code>, <code>run-scan-stream-pool.ts</code>, <code>scan-edge-session.ts</code>, <code>shared-byte-pool.ts</code>, and <code>ports/rpc.ts</code>.</p></div><div><span class="source-label">SCOPE OF THIS DEMO</span><p>Scheduling, 32 KiB illustrative chunks, and per-tick rates are a teaching simulation. No Wasm module is executed here. The frame sizes, port caps, ownership transitions, and host API names reflect the supplied code.</p></div></div></section>
+    <section class="principles-section shell"><div class="section-intro"><div class="eyebrow">04 / WHY THIS DESIGN WORKS</div><h2>Bounded by construction.</h2><p>The engineering constraints are part of the host API, not only comments in the query planner.</p></div><div class="principles-grid"><article class="principle"><span class="principle-n">01 / BACKPRESSURE</span><div class="principle-symbol">⇄</div><h3>A full slot stops the writer.</h3><p>Input writes wait for <code>wcs_sp_in_free</code>; output reads release with <code>wcs_sp_out_release</code>. A slow consumer eventually stops the producer without an unbounded queue.</p></article><article class="principle"><span class="principle-n">02 / NO BUSY POLL</span><div class="principle-symbol">◴</div><h3>Work wakes on events.</h3><p>Advancement is requested when slots change, reads complete, or host spill operations finish. The scheduler yields between batches rather than constantly spinning on a blocked graph.</p></article><article class="principle"><span class="principle-n">03 / CONCURRENT PIPELINES</span><div class="principle-symbol">↝</div><h3>Attach consumers early.</h3><p>Reducer outputs can be connected to a running finalizer before all scans end. Consumption can start as soon as bytes are emitted, instead of filling a pipe with no reader.</p></article></div><div class="source-footnote"><div><span class="source-label">IMPLEMENTATION BASIS</span><strong>WCOL <code>src/runtime/host/</code></strong><p>Source paths include <code>stream-pool.ts</code>, <code>run-scan-stream-pool.ts</code>, <code>scan-edge-session.ts</code>, <code>shared-byte-pool.ts</code>, and <code>ports/rpc.ts</code>.</p></div><div><span class="source-label">SCOPE OF THIS DEMO</span><p>Scheduling, 32 KiB illustrative chunks, and per-tick rates are a teaching simulation. No Wasm module is executed here. The frame sizes, port caps, ownership transitions, and host API names reflect the WCOL source.</p></div></div></section>
   </main>
   <footer class="footer"><div class="shell footer-inner"><span class="footer-brand">wcol<span class="accent">/</span> <span>SYSTEMS EXPLAINER · 04</span></span><span>STREAMS · WASM MAILBOXES · BACKPRESSURE <span class="footer-separator">·</span> <a href="https://github.com/davidgtonge/wcol" target="_blank" rel="noreferrer noopener">GITHUB ↗</a></span></div></footer>
 <script>
@@ -558,55 +558,55 @@
     ).join("");
   }
 
-  // Source-grounded stages are excerpted or abbreviated from the uploaded code.
+  // Source-grounded stages are excerpted or abbreviated from the WCOL source.
   const journeyStages = [
     {
       label: "R2 ReadAt", kicker: "01 / RANGE READ", title: "Ask for only the needed bytes.",
       desc: "The GraphHost asks for a Parquet range. The TypeScript host starts an asynchronous ReadAt request, then completes the ticket back into Wasm. The Rust graph is woken when the bytes arrive.",
       fact: "ReadAt is offset + length. It is not the same as a forward-only WCS input stream.",
-      file: "host/stream-pool.ts", code: "const ticket = wasm.wcs_sp_read_at_ticket!(handle);\nconst offset = wasm.wcs_sp_read_at_offset!(handle);\nwasm.wcs_sp_take_read_at!(handle);\nstartRead(ticket, source, offset, readLen);",
+      file: "src/runtime/host/stream-pool.ts", code: "const ticket = wasm.wcs_sp_read_at_ticket!(handle);\nconst offset = wasm.wcs_sp_read_at_offset!(handle);\nwasm.wcs_sp_take_read_at!(handle);\nstartRead(ticket, source, offset, readLen);",
       visual: "R2 RANGE READ", caption: "An asynchronous ReadAt ticket returns bytes to Wasm." },
     {
       label: "Scan + WCS", kicker: "02 / RUST SCAN", title: "Decode, project, and frame the data.",
       desc: "Wasm decodes Parquet pages, applies the physical plan, partitions rows by destination, and emits WCS1 data. Frames stay bounded even when a logical batch is large.",
       fact: "WCS1 frame payloads are capped at 64 KiB. A transport chunk is not guaranteed to align with a frame boundary.",
-      file: "host/run-scan-stream-pool.ts", code: "graph: { program: options.program,\n         scratchBytes: options.scratchBytes },\noutputs: options.partitionCount,\nreadAt: options.readAt,",
+      file: "src/runtime/host/run-scan-stream-pool.ts", code: "graph: { program: options.program,\n         scratchBytes: options.scratchBytes },\noutputs: options.partitionCount,\nreadAt: options.readAt,",
       visual: "WCS1 / FRAME", caption: "A logical batch becomes many bounded frames." },
     {
       label: "Output slot", kicker: "03 / WASM EGRESS", title: "Read from one fixed output slot.",
       desc: "Each output port owns a bounded Wasm buffer. A JS pull copies the available bytes into an owned Uint8Array and explicitly releases the Rust slot. Until that release, the producer cannot overwrite it.",
       fact: "Default output slot: 128 KiB per port. Outputs may contain fragments of WCS frames.",
-      file: "host/stream-pool.ts", code: "const len = wasm.wcs_sp_out_len!(handle, port);\nconst copy = new Uint8Array(len);\ncopy.set(viewAt(wasm.memory, ptr, len));\ncontroller.enqueue(copy);\nwasm.wcs_sp_out_release!(handle, port);",
+      file: "src/runtime/host/stream-pool.ts", code: "const len = wasm.wcs_sp_out_len!(handle, port);\nconst copy = new Uint8Array(len);\ncopy.set(viewAt(wasm.memory, ptr, len));\ncontroller.enqueue(copy);\nwasm.wcs_sp_out_release!(handle, port);",
       visual: "OUTPUT / 128 KiB", caption: "Copy into JS ownership, then release the Wasm mailbox." },
     {
       label: "RPC stream", kicker: "04 / FIRST-BYTE EDGE", title: "Start an edge only when it has data.",
       desc: "The scanner forwards an output stream to a particular reducer. hashScanOutputStream waits for the first chunk before opening the body. A partition with no output need not open an empty RPC stream.",
       fact: "Backpressure stays attached to the ReadableStream: a reader must pull before more chunks drain.",
-      file: "host/stream-pool.ts", code: "const first = await reader.read();\nif (first.done || !first.value?.byteLength) return;\nconst body = new ReadableStream({\n  async pull(controller) { /* read next */ }\n});\nawait onFirstByte(body);",
+      file: "src/runtime/host/stream-pool.ts", code: "const first = await reader.read();\nif (first.done || !first.value?.byteLength) return;\nconst body = new ReadableStream({\n  async pull(controller) { /* read next */ }\n});\nawait onFirstByte(body);",
       visual: "RPC / BODY", caption: "A live ReadableStream crosses the transport boundary." },
     {
       label: "BYOB pump", kicker: "05 / JS INGRESS PUMP", title: "Pull only when the mailbox is free.",
       desc: "The receiving host attempts a BYOB reader and falls back to the default reader when necessary. It writes each returned view into the pool's WritableStream; backpressure naturally suspends the next read.",
       fact: "The current pump requests a 64 KiB BYOB buffer; it does not require a network chunk of exactly that size.",
-      file: "host/stream-pool.ts", code: "reader = source.getReader({ mode: 'byob' });\n// Fallback to source.getReader() if unsupported\nconst result = await reader.read(buffer);\nif (result.value?.byteLength)\n  await writer.write(result.value);",
+      file: "src/runtime/host/stream-pool.ts", code: "reader = source.getReader({ mode: 'byob' });\n// Fallback to source.getReader() if unsupported\nconst result = await reader.read(buffer);\nif (result.value?.byteLength)\n  await writer.write(result.value);",
       visual: "BYOB / 64 KiB", caption: "The host reader waits for space before feeding more bytes." },
     {
       label: "Input slot", kicker: "06 / WASM INGRESS", title: "The input mailbox is the backpressure boundary.",
       desc: "The host waits until wcs_sp_in_free returns true, copies at most one input slot's capacity, commits the number of bytes, and wakes the Rust scheduler. It cannot reuse the slot until Rust has consumed it.",
-      fact: "Default input slot: 64 KiB per port. One reducer supports up to 100 input ports, each independently backpressured.",
-      file: "host/stream-pool.ts", code: "await waitWhen(() => inputFree(port));\nconst n = Math.min(inputBytes, chunk.byteLength - offset);\nviewAt(wasm.memory, ptr, n).set(chunk.subarray(offset, offset+n));\nwasm.wcs_sp_in_commit!(handle, port, n);\nonSlotChange();",
+      fact: "Default input slot: 64 KiB per port. One reducer supports up to 128 input ports, each independently backpressured.",
+      file: "src/runtime/host/stream-pool.ts", code: "await waitWhen(() => inputFree(port));\nconst n = Math.min(inputBytes, chunk.byteLength - offset);\nviewAt(wasm.memory, ptr, n).set(chunk.subarray(offset, offset+n));\nwasm.wcs_sp_in_commit!(handle, port, n);\nonSlotChange();",
       visual: "INPUT / 64 KiB", caption: "Rust owns the slot until the next in_free notification." },
     {
       label: "GraphHost", kicker: "07 / ENGINE STEP", title: "Make progress—or wait for the next event.",
       desc: "GraphHost polls its operators. It may consume ingress, produce an output slot, request another ReadAt, or suspend on an R2 sorted-run spill operation. The TypeScript scheduler yields and wakes on I/O/slot changes; it does not spin merely because Rust is nonterminal.",
       fact: "A spill to R2 is host-mediated I/O, not an unbounded in-memory buffer.",
-      file: "host/stream-pool.ts", code: "const status = wasm.wcs_sp_step!(handle, 100);\nif (status & STEP_SPILL_EXEC) await onSpillExec(handle);\nif (status & STEP_PROGRESS) { /* continue */ }\n// ReadAt completions and slot changes call requestAdvance()",
+      file: "src/runtime/host/stream-pool.ts", code: "const status = wasm.wcs_sp_step!(handle, 100);\nif (status & STEP_SPILL_EXEC) await onSpillExec(handle);\nif (status & STEP_PROGRESS) { /* continue */ }\n// ReadAt completions and slot changes call requestAdvance()",
       visual: "POLL / WAKE", caption: "Only useful work or external events schedule another advance." },
     {
       label: "Finalizer", kicker: "08 / CONCURRENT CONSUMER", title: "The next stage is already listening.",
       desc: "Reducer output is attached to the finalizer during reducer preparation. Consumers do not wait for the entire reducer to finish before reading. sealInput marks ports that never opened; completed streams use normal EOF.",
       fact: "Early attachment removes the circular wait: producer completion must not be a prerequisite for downstream draining.",
-      file: "host/stream-pool.ts", code: "pool.attachInput(port, readable); // late-safe\n// producer streams and consumer run concurrently\npool.sealInput(port);          // never opened\nawait pool.finished;           // after all work drains",
+      file: "src/runtime/host/stream-pool.ts", code: "pool.attachInput(port, readable); // late-safe\n// producer streams and consumer run concurrently\npool.sealInput(port);          // never opened\nawait pool.finished;           // after all work drains",
       visual: "FINALIZER / LIVE", caption: "A bounded stream can be consumed before its producer completes." },
   ];
   let currentJourney = 0;

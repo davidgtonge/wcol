@@ -8,8 +8,7 @@ use crate::ir::{AggExpr, AggKind, CatalogColumn, ColumnKind};
 use crate::ops::query::PartialKeyPart;
 use crate::spill::{
     decode_run_put_open, decode_run_read_open, HostR2SortedRunStore, HostSpillBridge, SpillConfig,
-    SpillProgress, SPILL_OP_BEGIN, SPILL_OP_END, SPILL_OP_RUN_COMMIT, SPILL_OP_RUN_PUT,
-    SPILL_OP_RUN_READ,
+    SpillProgress, SPILL_OP_RUN_COMMIT, SPILL_OP_RUN_PUT, SPILL_OP_RUN_READ,
 };
 use crate::stream::partials::{partial_snapshot_from_state, PartialStateWcol};
 use crate::stream::{OwnedWcolBatch, SelectionMask};
@@ -70,8 +69,6 @@ fn service_host(
         .pending_request()
         .expect("spill host request");
     match request.op {
-        SPILL_OP_BEGIN => bridge.borrow_mut().complete_begin().unwrap(),
-        SPILL_OP_END => bridge.borrow_mut().complete_end().unwrap(),
         SPILL_OP_RUN_PUT => {
             let plan = decode_run_put_open(&request.append_bytes).unwrap();
             let body = bridge.borrow().run_upload.clone();

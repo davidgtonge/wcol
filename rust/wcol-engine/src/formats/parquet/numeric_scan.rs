@@ -1,16 +1,18 @@
 //! Bounded compressed ReadAt feed → PageEvent decode → i64 batches.
 
-use compact_parquet_thrift::pages::{page_layout, ColumnSpec, PageEvent, Physical, Value};
+use compact_parquet_thrift::pages::{
+    page_layout, ColumnSpec, Error as PageError, PageEvent, Physical, Value,
+};
 use compact_parquet_thrift::parquet::{page_header, PageHeader};
 
 use super::decode::{DecodeProgress, ScanLimits};
 use super::dictionary::{DictionaryStore, ValueRef};
-use super::page_cursor::{
-    inflate_page_body, owned_cursor_supports_data_page, ActivePlainPage, Flow, PageStep,
-};
+use super::page_cursor::{inflate_page_body, owned_cursor_supports_page, ActivePlainPage, Flow};
 use super::page_scratch::PageScratch;
 use super::schema::Leaf;
 use super::Error;
+use crate::stream::DictEntries;
+use std::sync::Arc;
 
 /// `(values, nulls)` copied out of one decoded batch.
 pub type OwnedValues<T> = (Vec<T>, Vec<u8>);
@@ -66,6 +68,31 @@ pub struct NumericScan {
     rows_emitted: u64,
     /// Bytes reserved for outstanding host ReadAt tickets (not yet delivered).
     read_reserved: usize,
+    pages_read: PagesRead,
+}
+
+/// Which pages of the chunk have started decoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PagesRead {
+    None,
+    Dictionary,
+    Data { dictionary: bool },
+}
+
+impl PagesRead {
+    fn has_dictionary(self) -> bool {
+        matches!(self, Self::Dictionary | Self::Data { dictionary: true })
+    }
+}
+
+/// Decode position, compared before and after a step to tell whether it moved.
+#[derive(PartialEq, Eq)]
+struct DecodeMark {
+    pending: usize,
+    read_at: usize,
+    fed_len: usize,
+    /// `(events emitted, plain offset)` of the active page.
+    page: Option<(u64, usize)>,
 }
 
 impl NumericScan {
@@ -242,6 +269,7 @@ impl NumericScan {
             expected_rows,
             rows_emitted: 0,
             read_reserved: 0,
+            pages_read: PagesRead::None,
         })
     }
 
@@ -267,6 +295,21 @@ impl NumericScan {
 
     pub fn dictionary(&self) -> &DictionaryStore {
         &self.dict
+    }
+
+    /// The chunk's dictionary as WCOL entries of the column's physical type.
+    pub fn dictionary_entries(&self) -> Result<DictEntries, Error> {
+        Ok(match self.leaf.physical {
+            4 | 5 => DictEntries::Float(Arc::from(self.dict.copy_float_entries()?)),
+            6 | 7 => {
+                let (offsets, bytes) = self.dict.copy_byte_entries()?;
+                DictEntries::Bytes {
+                    offsets: Arc::from(offsets),
+                    bytes: Arc::from(bytes),
+                }
+            }
+            _ => DictEntries::Int(Arc::from(self.dict.copy_int_entries()?)),
+        })
     }
 
     pub fn chunk_wants(&self) -> usize {
@@ -460,22 +503,8 @@ impl NumericScan {
         Ok(())
     }
 
-    pub fn progress(&self) -> DecodeProgress {
-        if self.pending_available() > 0 {
-            return DecodeProgress::BatchReady {
-                rows: self.pending_available(),
-            };
-        }
-        if self.decode_exhausted() {
-            return DecodeProgress::Finished;
-        }
-        if self.read_at < self.fed_len {
-            return DecodeProgress::Advanced;
-        }
-        DecodeProgress::NeedInput
-    }
-
-    /// Drive decode for up to `max_emit` rows (`0` = advance parser only, no row output).
+    /// Drive decode until up to `max_emit` rows are pending, the chunk is finished, or more
+    /// input is needed.
     pub fn poll(&mut self, max_emit: usize) -> Result<DecodeProgress, Error> {
         let mut scratch = std::mem::replace(&mut self.scratch, PageScratch::minimal());
         let progress = self.poll_with_scratch(max_emit, &mut scratch);
@@ -488,106 +517,36 @@ impl NumericScan {
         max_emit: usize,
         scratch: &mut PageScratch,
     ) -> Result<DecodeProgress, Error> {
-        if max_emit > self.limits.max_batch_rows {
+        if max_emit == 0 || max_emit > self.limits.max_batch_rows {
             return Err(Error::Message("batch row limit exceeds scan budget"));
         }
         for _ in 0..4096 {
-            if self.pending_available() > 0 && max_emit > 0 {
+            if self.pending_available() > 0 {
                 return Ok(DecodeProgress::BatchReady {
                     rows: self.pending_available().min(max_emit),
                 });
             }
             if self.decode_exhausted() {
-                self.check_row_budget()?;
                 return Ok(DecodeProgress::Finished);
-            }
-            if self.read_at >= self.fed_len && !self.chunk_complete() {
-                // A read still in flight holds the window: wait for it rather than call it too small.
-                if self.read_credit() > 0 || self.read_reserved > 0 {
-                    return Ok(DecodeProgress::NeedInput);
-                }
-                let progressed = self.drive_decode_with_scratch(0, scratch)?;
-                if progressed {
-                    continue;
-                }
-                return Err(Error::Message("compressed page exceeds memory budget"));
-            }
-
-            let emit_budget = if max_emit == 0 {
-                0
-            } else {
-                self.cap_chunk_emit(max_emit.saturating_sub(self.pending_available()))
-            };
-            let row_budget_met = matches!(
-                self.expected_rows,
-                Some(expected) if self.rows_emitted >= expected
-            );
-            let mut progressed = false;
-            if max_emit == 0 || emit_budget > 0 {
-                progressed = self.drive_decode_with_scratch(emit_budget, scratch)?;
-                if self.decode_exhausted() {
-                    self.check_row_budget()?;
-                    return Ok(DecodeProgress::Finished);
-                }
-                if self.pending_available() > 0 && max_emit > 0 {
-                    return Ok(DecodeProgress::BatchReady {
-                        rows: self.pending_available().min(max_emit),
-                    });
-                }
-            } else if row_budget_met {
-                progressed = self.drive_decode_with_scratch(0, scratch)?;
-                if self.parser_idle() {
-                    self.check_row_budget()?;
-                    return Ok(DecodeProgress::Finished);
-                }
-            }
-            if self.chunk_complete() && !self.parser_idle() {
-                if row_budget_met {
-                    progressed |= self.drive_decode_with_scratch(0, scratch)?;
-                    if self.parser_idle() {
-                        self.check_row_budget()?;
-                        return Ok(DecodeProgress::Finished);
-                    }
-                } else if max_emit == 0 {
-                    self.skip_chunk_padding_with_scratch(scratch)?;
-                    progressed = true;
-                }
-                if self.decode_exhausted() {
-                    self.check_row_budget()?;
-                    return Ok(DecodeProgress::Finished);
-                }
-                if progressed {
-                    continue;
-                }
-            }
-            if progressed {
-                if max_emit == 0 {
-                    return Ok(DecodeProgress::Advanced);
-                }
-                continue;
             }
             if self.parser_idle() {
                 self.check_row_budget()?;
+                return Ok(DecodeProgress::Finished);
             }
-            return Ok(DecodeProgress::NeedInput);
+            if self.drive_decode_with_scratch(max_emit, scratch)? {
+                self.check_rows_within_expected()?;
+                continue;
+            }
+            // Every byte of the chunk is here and none of it decodes: the chunk ends inside a page.
+            if self.chunk_complete() {
+                return Err(Error::Message("column chunk ends inside a page"));
+            }
+            if self.read_credit() > 0 || self.read_reserved > 0 {
+                return Ok(DecodeProgress::NeedInput);
+            }
+            return Err(Error::Message("compressed page exceeds memory budget"));
         }
         Err(Error::Message("column decode stalled with no progress"))
-    }
-
-    fn cap_chunk_emit(&self, want: usize) -> usize {
-        if want == 0 {
-            return 0;
-        }
-        let Some(expected) = self.expected_rows else {
-            return want;
-        };
-        let produced = self
-            .rows_emitted
-            .saturating_add(self.pending_available() as u64);
-        if produced >= expected {
-            return 0;
-        }
-        want.min((expected - produced) as usize)
     }
 
     /// Internal counters for stall diagnostics.
@@ -611,38 +570,24 @@ impl NumericScan {
     }
 
     fn check_row_budget(&self) -> Result<(), Error> {
-        if !self.parser_idle() {
-            return Ok(());
-        }
-        let Some(expected) = self.expected_rows else {
-            return Ok(());
-        };
-        if self.rows_emitted < expected {
-            return Err(Error::Message(
+        match self.expected_rows {
+            Some(expected) if self.rows_emitted < expected => Err(Error::Message(
                 "column chunk ended before the expected row count was decoded",
-            ));
+            )),
+            _ => self.check_rows_within_expected(),
         }
-        if self.rows_emitted > expected {
-            return Err(Error::Message(
-                "column chunk decoded more rows than expected",
-            ));
-        }
-        Ok(())
     }
 
-    fn skip_chunk_padding_with_scratch(&mut self, scratch: &mut PageScratch) -> Result<(), Error> {
-        if !self.chunk_complete() {
-            return Ok(());
+    fn check_rows_within_expected(&self) -> Result<(), Error> {
+        let produced = self
+            .rows_emitted
+            .saturating_add(self.pending_available() as u64);
+        match self.expected_rows {
+            Some(expected) if produced > expected => Err(Error::Message(
+                "column chunk decoded more rows than expected",
+            )),
+            _ => Ok(()),
         }
-        while self.read_at < self.fed_len {
-            if self.start_page_if_ready(0, scratch)? {
-                continue;
-            }
-            self.read_at = self.fed_len;
-            self.try_compact();
-            break;
-        }
-        Ok(())
     }
 
     pub fn decode_exhausted(&self) -> bool {
@@ -665,7 +610,7 @@ impl NumericScan {
         let rows = match self.poll(max_rows)? {
             DecodeProgress::BatchReady { rows } => rows,
             DecodeProgress::Finished => return Ok(None),
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => {
+            DecodeProgress::NeedInput => {
                 return Err(Error::Message("column decode blocked with no pending rows"));
             }
         };
@@ -724,7 +669,7 @@ impl NumericScan {
         let rows = match self.poll(max_rows)? {
             DecodeProgress::BatchReady { rows } => rows,
             DecodeProgress::Finished => return Ok(None),
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => {
+            DecodeProgress::NeedInput => {
                 return Err(Error::Message("column decode blocked with no pending rows"));
             }
         };
@@ -775,32 +720,15 @@ impl NumericScan {
         }
         values.clear();
         nulls.clear();
-        loop {
-            match self.poll(max_rows)? {
-                DecodeProgress::BatchReady { rows } => {
-                    let take = rows.min(max_rows);
-                    let start = self.pending_at;
-                    values.extend_from_slice(&self.pending[start..start + take]);
-                    nulls.extend_from_slice(&self.nulls[start..start + take]);
-                    self.advance_batch(take)?;
-                    return Ok(Some(take));
-                }
-                DecodeProgress::Finished => {
-                    self.check_row_budget()?;
-                    return Ok(None);
-                }
-                DecodeProgress::Advanced => continue,
-                DecodeProgress::NeedInput => {
-                    if !self.chunk_complete() {
-                        return Ok(None);
-                    }
-                    if self.parser_idle() {
-                        self.check_row_budget()?;
-                        return Ok(None);
-                    }
-                    continue;
-                }
+        match self.poll(max_rows)? {
+            DecodeProgress::BatchReady { rows } => {
+                let start = self.pending_at;
+                values.extend_from_slice(&self.pending[start..start + rows]);
+                nulls.extend_from_slice(&self.nulls[start..start + rows]);
+                self.advance_batch(rows)?;
+                Ok(Some(rows))
             }
+            DecodeProgress::Finished | DecodeProgress::NeedInput => Ok(None),
         }
     }
 
@@ -815,48 +743,32 @@ impl NumericScan {
         }
     }
 
+    /// Decode until `emit_budget` rows are pending or no step makes progress. Returns whether
+    /// anything moved.
     fn drive_decode_with_scratch(
         &mut self,
         emit_budget: usize,
         scratch: &mut PageScratch,
     ) -> Result<bool, Error> {
-        let before_pending = self.pending_available();
-        let before_read = self.read_at;
-        let before_fed = self.fed_len;
-        let before_active_events = self
-            .active_plain
-            .as_ref()
-            .map(|a| a.cursor.events_emitted());
-        if emit_budget == 0 {
-            for _ in 0..4096 {
-                if self.decode_exhausted() {
-                    break;
-                }
-                if self.read_at >= self.fed_len {
-                    break;
-                }
-                if !self.decode_step(0, scratch)? {
-                    break;
-                }
-            }
-        } else {
-            for _ in 0..4096 {
-                if self.pending_available() >= emit_budget {
-                    break;
-                }
-                if !self.decode_step(emit_budget, scratch)? {
-                    break;
-                }
+        let before = self.mark();
+        for _ in 0..4096 {
+            if self.pending_available() >= emit_budget || !self.decode_step(emit_budget, scratch)? {
+                break;
             }
         }
-        Ok(self.pending_available() != before_pending
-            || self.read_at != before_read
-            || self.fed_len != before_fed
-            || self
+        Ok(self.mark() != before)
+    }
+
+    fn mark(&self) -> DecodeMark {
+        DecodeMark {
+            pending: self.pending_available(),
+            read_at: self.read_at,
+            fed_len: self.fed_len,
+            page: self
                 .active_plain
                 .as_ref()
-                .map(|a| a.cursor.events_emitted())
-                != before_active_events)
+                .map(|a| (a.cursor.events_emitted(), a.cursor.plain_offset)),
+        }
     }
 
     fn decode_step(
@@ -864,65 +776,38 @@ impl NumericScan {
         emit_budget: usize,
         scratch: &mut PageScratch,
     ) -> Result<bool, Error> {
-        let before_pending = self.pending_available();
-        let before_read = self.read_at;
-        let before_fed = self.fed_len;
-        let before_active = self.active_plain.is_some();
-        let before_active_events = self
-            .active_plain
-            .as_ref()
-            .map(|a| a.cursor.events_emitted());
-        if let Some(mut active) = self.active_plain.take() {
-            let plain_before = active.cursor.plain_offset;
-            self.feed_active_plain_taken(&mut active, emit_budget, scratch)?;
-            if !active.cursor.page_complete() {
-                self.active_plain = Some(active);
-            }
-            let plain_after = self
-                .active_plain
-                .as_ref()
-                .map(|a| a.cursor.plain_offset)
-                .unwrap_or(plain_before);
-            return Ok(self.pending_available() != before_pending
-                || self.read_at != before_read
-                || self.fed_len != before_fed
-                || plain_after != plain_before
-                || self
-                    .active_plain
-                    .as_ref()
-                    .map(|a| a.cursor.events_emitted())
-                    != before_active_events);
-        } else {
-            let _ = self.start_page_if_ready(emit_budget, scratch)?;
+        let before = self.mark();
+        let Some(mut active) = self.active_plain.take() else {
+            self.start_page_if_ready(emit_budget, scratch)?;
+            return Ok(self.mark() != before);
+        };
+        self.feed_active_plain_taken(&mut active, emit_budget)?;
+        if !active.cursor.page_complete() {
+            self.active_plain = Some(active);
         }
-        Ok(self.pending_available() != before_pending
-            || self.read_at != before_read
-            || self.fed_len != before_fed
-            || self.active_plain.is_some() != before_active
-            || self
-                .active_plain
-                .as_ref()
-                .map(|a| a.cursor.events_emitted())
-                != before_active_events)
+        let moved = self.mark() != before;
+        // An owned page holds its whole body, so a page that cannot fill an empty batch is
+        // truncated. With rows pending, the batch byte budget may legitimately stop it.
+        if !moved && self.pending_available() == 0 {
+            return Err(Error::Message("page ended before its values"));
+        }
+        Ok(moved)
     }
 
     fn feed_active_plain_taken(
         &mut self,
         active: &mut ActivePlainPage,
         emit_budget: usize,
-        _scratch: &mut PageScratch,
     ) -> Result<(), Error> {
-        let max_new = if emit_budget == 0 {
-            0
+        let is_dict = active.is_dict;
+        // Dictionary entries are not rows; the dictionary byte budget bounds them instead.
+        let max_out = if is_dict {
+            usize::MAX
         } else {
             self.limits
                 .max_pending_rows
                 .saturating_sub(self.pending_available())
-        };
-        let max_out = if emit_budget == 0 {
-            usize::MAX
-        } else {
-            max_new.min(emit_budget)
+                .min(emit_budget)
         };
         if self.value_mode == ScanValueMode::PlainUtf8 {
             // Stop the page before the pending string bytes outgrow the batch budget.
@@ -934,27 +819,26 @@ impl NumericScan {
                 .saturating_sub(self.utf8_bytes.len());
             active.cursor.set_byte_budget(room, !pending_rows);
         }
-        let is_dict = active.is_dict;
         // Dictionary-id and PLAIN integer data pages: decode runs of values straight into the
         // pending buffers rather than one page event per row.
-        if !is_dict && emit_budget > 0 {
+        if !is_dict {
             let before = self.nulls.len();
             let bulk = match self.value_mode {
                 ScanValueMode::DictionaryIds => active.cursor.step_dictionary_ids(
                     &active.plain,
-                    max_out.min(emit_budget),
+                    max_out,
                     &mut self.pending_ids,
                     &mut self.nulls,
                 )?,
                 ScanValueMode::MaterializedI64 => active.cursor.step_plain_i64(
                     &active.plain,
-                    max_out.min(emit_budget),
+                    max_out,
                     &mut self.pending,
                     &mut self.nulls,
                 )?,
                 _ => None,
             };
-            if let Some(step) = bulk {
+            if bulk.is_some() {
                 let rows = (self.nulls.len() - before) as u64;
                 if self.pending_ids.len().max(self.pending.len()) > self.limits.max_pending_rows {
                     return Err(Error::Message("pending row budget exhausted"));
@@ -966,12 +850,10 @@ impl NumericScan {
                 if active.cursor.page_complete() {
                     self.try_compact();
                 }
-                return match step {
-                    PageStep::Emitted(_) | PageStep::Blocked | PageStep::PageComplete => Ok(()),
-                };
+                return Ok(());
             }
         }
-        let (step, visited, committed, mode) = {
+        let (visited, committed, mode) = {
             let mut handler = PageEventHandler {
                 is_dict,
                 value_mode: self.value_mode,
@@ -984,21 +866,17 @@ impl NumericScan {
                 nulls: &mut self.nulls,
                 pending_at: self.pending_at,
                 limits: self.limits,
-                emit_budget,
                 next_input_index: 0,
                 events_visited_this_pass: 0,
-                rows_emitted_this_pass: 0,
                 utf8_build: None,
             };
-            let step = active.cursor.step(&active.plain, max_out, |event| {
+            active.cursor.step(&active.plain, max_out, |event| {
                 handler.push_owned_event(event)
             })?;
-            let mode = handler.value_mode;
             (
-                step,
                 handler.events_visited_this_pass,
                 handler.next_input_index,
-                mode,
+                handler.value_mode,
             )
         };
         self.value_mode = mode;
@@ -1012,12 +890,8 @@ impl NumericScan {
                 self.dict.commit_dict_page()?;
             }
             self.try_compact();
-            return Ok(());
         }
-        match step {
-            PageStep::Emitted(_) | PageStep::Blocked => Ok(()),
-            PageStep::PageComplete => Ok(()),
-        }
+        Ok(())
     }
 
     fn begin_owned_page(
@@ -1028,8 +902,24 @@ impl NumericScan {
         is_dict: bool,
         emit_budget: usize,
         scratch: &mut PageScratch,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         use super::page_cursor::PageCursor;
+        if is_dict {
+            // Parquet allows one dictionary page, before every data page. A later one would
+            // replace entries that ids already handed out (and the batch dictionary) refer to.
+            if self.pages_read != PagesRead::None {
+                return Err(Error::Message(
+                    "column chunk has a dictionary page after its first page",
+                ));
+            }
+            self.pages_read = PagesRead::Dictionary;
+        } else {
+            self.pages_read = match self.pages_read {
+                PagesRead::None => PagesRead::Data { dictionary: false },
+                PagesRead::Dictionary => PagesRead::Data { dictionary: true },
+                data => data,
+            };
+        }
         let cursor = PageCursor::new(header, spec, &self.limits)?;
         let body_end = body.end;
         let plain = inflate_page_body(header, spec, self.codec, &self.compressed[body], scratch)?;
@@ -1039,46 +929,33 @@ impl NumericScan {
         if is_dict {
             self.dict.begin_dict_page();
         }
-        self.active_plain = Some(ActivePlainPage {
+        let mut active = ActivePlainPage {
             is_dict,
             plain,
             cursor,
-        });
-        if let Some(mut active) = self.active_plain.take() {
-            self.feed_active_plain_taken(&mut active, emit_budget, scratch)?;
-            if !active.cursor.page_complete() {
-                self.active_plain = Some(active);
-            }
+        };
+        self.feed_active_plain_taken(&mut active, emit_budget)?;
+        if !active.cursor.page_complete() {
+            self.active_plain = Some(active);
         }
-        Ok(self.active_plain.is_some())
+        Ok(())
     }
 
+    /// Start the next page once its header and body are resident.
     fn start_page_if_ready(
         &mut self,
         emit_budget: usize,
         scratch: &mut PageScratch,
-    ) -> Result<bool, Error> {
+    ) -> Result<(), Error> {
         self.try_compact();
         if self.read_at >= self.fed_len {
-            if self.read_credit() == 0
-                && self.read_reserved == 0
-                && !self.chunk_complete()
-                && self.fed_len > 0
-            {
-                return Err(Error::Message("compressed page exceeds memory budget"));
-            }
-            return Ok(false);
+            return self.wait_for_page();
         }
         let window = self.limits.budget.compressed_bytes;
         let tail = &self.compressed[self.read_at..self.fed_len];
         let (header, header_len) = match page_header(tail) {
             Ok(v) => v,
-            Err(compact_parquet_thrift::Error::EndOfInput) => {
-                if self.read_credit() == 0 && self.read_reserved == 0 && !self.chunk_complete() {
-                    return Err(Error::Message("compressed page exceeds memory budget"));
-                }
-                return Ok(false);
-            }
+            Err(compact_parquet_thrift::Error::EndOfInput) => return self.wait_for_page(),
             Err(e) => return Err(Error::Thrift(e)),
         };
         let page_values = page_value_count(&header)?;
@@ -1102,15 +979,11 @@ impl NumericScan {
         let body_end = body_start
             .checked_add(compressed)
             .ok_or(Error::Message("page size overflow"))?;
-        let page_on_disk = body_end.saturating_sub(self.read_at);
-        if page_on_disk > window {
+        if body_end - self.read_at > window {
             return Err(Error::Message("compressed page exceeds memory budget"));
         }
         if body_end > self.fed_len {
-            if self.read_credit() == 0 && self.read_reserved == 0 && !self.chunk_complete() {
-                return Err(Error::Message("compressed page exceeds memory budget"));
-            }
-            return Ok(false);
+            return self.wait_for_page();
         }
         if let Some(uncompressed) = header.uncompressed_size {
             let uncompressed = usize::try_from(uncompressed).unwrap_or(usize::MAX);
@@ -1128,52 +1001,44 @@ impl NumericScan {
         spec.max_page_bytes = self.limits.budget.codec_scratch_bytes;
         spec.max_page_values = self.limits.max_page_values;
         spec.max_value_bytes = 8 * 1024 * 1024;
-        if header.page_type != Some(2) && !self.dict.is_empty() {
+        let is_dict = header.page_type == Some(2);
+        // An empty dictionary page still installs a (zero-entry) dictionary: an all-NULL
+        // dictionary-encoded chunk writes one.
+        let has_dictionary = !is_dict && self.pages_read.has_dictionary();
+        if has_dictionary {
             let len = u32::try_from(self.dict.len())
                 .map_err(|_| Error::Message("dictionary longer than u32"))?;
             spec = spec.with_dictionary(len);
         }
-        let is_dict = header.page_type == Some(2);
         let layout = page_layout(header, spec).map_err(Error::Page)?;
-        let dictionary_data_page = !is_dict && !self.dict.is_empty();
-        let encoding_supported = page_values == 0
-            || owned_cursor_supports_data_page(physical, layout.encoding, dictionary_data_page);
-        if self.leaf.max_def <= 1
-            && encoding_supported
-            && matches!(
-                self.value_mode,
-                ScanValueMode::MaterializedI64
-                    | ScanValueMode::MaterializedF64
-                    | ScanValueMode::DictionaryIds
-                    | ScanValueMode::PlainUtf8
-            )
+        if page_values > 0 && !owned_cursor_supports_page(physical, layout.encoding, has_dictionary)
         {
-            match self.begin_owned_page(
-                header,
-                spec,
-                body_start..body_end,
-                is_dict,
-                emit_budget,
-                scratch,
-            ) {
-                Ok(paused) => {
-                    return Ok(paused
-                        || self.active_plain.is_some()
-                        || self.pending_available() > 0);
-                }
-                Err(Error::Message("page encoding not supported by owned cursor yet")) => {
-                    return Err(Error::Detail(format!(
-                        "page encoding {} is not supported",
-                        layout.encoding
-                    )));
-                }
-                Err(e) => return Err(e),
-            }
+            return Err(Error::Page(PageError::UnsupportedEncoding {
+                physical,
+                encoding: layout.encoding,
+            }));
         }
-        Err(Error::Detail(format!(
-            "page encoding {} is not supported",
-            layout.encoding
-        )))
+        self.begin_owned_page(
+            header,
+            spec,
+            body_start..body_end,
+            is_dict,
+            emit_budget,
+            scratch,
+        )
+    }
+
+    /// The next page is not resident yet. Waiting is fine while a read can still deliver it;
+    /// otherwise the page cannot fit the compressed window.
+    fn wait_for_page(&self) -> Result<(), Error> {
+        if self.read_credit() == 0
+            && self.read_reserved == 0
+            && !self.chunk_complete()
+            && self.fed_len > 0
+        {
+            return Err(Error::Message("compressed page exceeds memory budget"));
+        }
+        Ok(())
     }
 
     fn try_compact(&mut self) {
@@ -1198,11 +1063,8 @@ struct PageEventHandler<'a> {
     nulls: &'a mut Vec<u8>,
     pending_at: usize,
     limits: ScanLimits,
-    /// Max new rows to emit this page pass; `0` advances logical input without output.
-    emit_budget: usize,
     next_input_index: usize,
     events_visited_this_pass: u64,
-    rows_emitted_this_pass: usize,
     utf8_build: Option<Utf8Build>,
 }
 
@@ -1271,7 +1133,6 @@ impl PageEventHandler<'_> {
                         u32::try_from(self.utf8_bytes.len())
                             .map_err(|_| Error::Message("utf8 byte arena overflow"))?,
                     );
-                    self.rows_emitted_this_pass += 1;
                 }
                 Value::DictionaryId(id) => {
                     // Borrow the entry: `dict` and the output buffers are separate fields.
@@ -1287,7 +1148,6 @@ impl PageEventHandler<'_> {
                         u32::try_from(self.utf8_bytes.len())
                             .map_err(|_| Error::Message("utf8 byte arena overflow"))?,
                     );
-                    self.rows_emitted_this_pass += 1;
                 }
                 _ => {
                     return Err(Error::Message(
@@ -1392,14 +1252,13 @@ impl PageEventHandler<'_> {
         let mut flow = Flow::Continue;
         if self.is_dict {
             self.dict.on_dict_event(event)?;
-        } else if self.emit_budget > 0 {
+        } else {
             self.switch_on_plain(&event)?;
             match self.value_mode {
                 ScanValueMode::MaterializedI64 => {
                     if let Some((value, present)) = self.dict.data_row_for_numeric(event, true)? {
                         self.pending.push(value);
                         self.nulls.push(present);
-                        self.rows_emitted_this_pass += 1;
                         if self.pending.len() > self.limits.max_pending_rows {
                             return Err(Error::Message("pending row budget exhausted"));
                         }
@@ -1409,7 +1268,6 @@ impl PageEventHandler<'_> {
                     if let Some((value, present)) = self.dict.data_row_for_float(event)? {
                         self.pending_f64.push(value);
                         self.nulls.push(present);
-                        self.rows_emitted_this_pass += 1;
                         if self.pending_f64.len() > self.limits.max_pending_rows {
                             return Err(Error::Message("pending row budget exhausted"));
                         }
@@ -1419,7 +1277,6 @@ impl PageEventHandler<'_> {
                     if let Some((id, present)) = self.dict.data_dict_id_row(event)? {
                         self.pending_ids.push(id);
                         self.nulls.push(present);
-                        self.rows_emitted_this_pass += 1;
                         if self.pending_ids.len() > self.limits.max_pending_rows {
                             return Err(Error::Message("pending row budget exhausted"));
                         }

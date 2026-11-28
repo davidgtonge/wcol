@@ -44,7 +44,7 @@ pub(super) fn dict_values(batch: &OwnedWcolBatch) -> Vec<Option<Vec<u8>>> {
 pub(super) fn round_trip(batches: &[OwnedWcolBatch]) -> Vec<OwnedWcolBatch> {
     let mut egress = RowBatchWcsEgress::new();
     for batch in batches {
-        egress.push_batch(batch).unwrap();
+        egress.push_batch(batch.clone()).unwrap();
     }
     egress.push_end().unwrap();
     let wire = egress.drain_to_vec().unwrap();

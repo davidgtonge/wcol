@@ -3,7 +3,6 @@
 use super::*;
 
 pub(super) struct Side<'a> {
-    pub(super) scan: u32,
     pub(super) linear: &'a Linear,
     pub(super) partial: Option<&'a AggSpec>,
     /// Columns a hash exchange sends its reducers. Filter-only columns stay on the scan:
@@ -34,11 +33,11 @@ pub(super) fn build_ops(
     let export_row_group_rows = config.parquet_row_group_rows;
     let partition_columns = config.partition_columns.as_slice();
     let hash = &config.hash_aggregate;
-    // A node's rows are final only for a plain row scan. Below a join or an aggregate a
-    // per-node top-k would drop rows that still have to be matched or grouped.
-    let row_topk = match (&shape.input, &shape.aggregate) {
-        (Input::Scan(_), None) => row_topk_spec(&shape.after),
-        _ => None,
+    // A node's rows are final only for a plain row scan. Below an aggregate a per-node
+    // top-k would drop rows that still have to be grouped.
+    let row_topk = match &shape.aggregate {
+        None => row_topk_spec(&shape.after),
+        Some(_) => None,
     };
     let (local_export, coordinator_export) =
         export_placement(shape, export_row_group_rows, !partition_columns.is_empty())?;
@@ -55,38 +54,19 @@ pub(super) fn build_ops(
         estimated_row_bytes,
         metadata,
     )?;
-    let sides: Vec<Side<'_>> = match &shape.input {
-        Input::Scan(scan) => {
-            let partial = shape
-                .aggregate
-                .as_ref()
-                .filter(|agg| hash_parts.is_none() || scan_combines(agg, metadata, source_rows));
-            // Raw rows to reducers carry only the reducer columns; a combiner sends partials.
-            let raw_rows = hash_parts.as_ref().and(shape.aggregate.as_ref());
-            vec![Side {
-                scan: 0,
-                linear: scan,
-                partial,
-                exchange_columns: raw_rows.filter(|_| partial.is_none()).map(reducer_columns),
-            }]
-        }
-        Input::Join { left, right, .. } => vec![
-            Side {
-                scan: 0,
-                linear: left,
-                partial: None,
-                exchange_columns: None,
-            },
-            Side {
-                scan: 1,
-                linear: right,
-                partial: None,
-                exchange_columns: None,
-            },
-        ],
+    let partial = shape
+        .aggregate
+        .as_ref()
+        .filter(|agg| hash_parts.is_none() || scan_combines(agg, metadata, source_rows));
+    // Raw rows to reducers carry only the reducer columns; a combiner sends partials.
+    let raw_rows = hash_parts.as_ref().and(shape.aggregate.as_ref());
+    let side = Side {
+        linear: &shape.scan,
+        partial,
+        exchange_columns: raw_rows.filter(|_| partial.is_none()).map(reducer_columns),
     };
     let mut operators = Vec::new();
-    let mut producers = vec![Vec::new(); sides.len()];
+    let mut producers = Vec::new();
     for node in nodes {
         let fetch_ids: Vec<u32> = fetches
             .iter()
@@ -103,27 +83,22 @@ pub(super) fn build_ops(
                 Vec::new(),
             ))
         };
-        for (index, side) in sides.iter().enumerate() {
-            let groups = decode_groups(units, *node, side.scan);
-            if groups.is_empty() {
-                continue;
-            }
-            let output = lower_fragment(
-                &mut operators,
-                *node,
-                fetch_op,
-                groups,
-                side,
-                row_topk.as_ref(),
-                local_export.is_some(),
-            )?;
-            producers[index].push(output);
-        }
-    }
-    for (index, side) in sides.iter().enumerate() {
-        if !producers[index].is_empty() {
+        let groups = decode_groups(units, *node);
+        if groups.is_empty() {
             continue;
         }
+        let output = lower_fragment(
+            &mut operators,
+            *node,
+            fetch_op,
+            groups,
+            &side,
+            row_topk.as_ref(),
+            local_export.is_some(),
+        )?;
+        producers.push(output);
+    }
+    if producers.is_empty() {
         if !side.linear.columns.is_empty() {
             return Err(PlanError::Inconsistent);
         }
@@ -132,19 +107,16 @@ pub(super) fn build_ops(
             nodes[0],
             None,
             Vec::new(),
-            side,
+            &side,
             row_topk.as_ref(),
             local_export.is_some(),
         )?;
-        producers[index].push(output);
+        producers.push(output);
     }
 
     if let Some(row_group_rows) = local_export {
-        if producers[0].is_empty() {
-            return Err(PlanError::Inconsistent);
-        }
         let mut root = 0;
-        for output in producers[0].clone() {
+        for output in producers {
             let node = operators[output as usize].node;
             root = push(
                 &mut operators,
@@ -161,77 +133,43 @@ pub(super) fn build_ops(
         return Ok((operators, root));
     }
 
-    let mut current = match &shape.input {
-        Input::Scan(_) => {
-            let gathered = if let Some((keys, partitions)) = &hash_parts {
-                push(
-                    &mut operators,
-                    None,
-                    OpKind::HashExchange {
-                        keys: keys.clone(),
-                        partitions: *partitions,
-                        hash_version: crate::ops::WCOL_EXCHANGE_HASH_VERSION_DEFAULT,
-                    },
-                    producers[0].clone(),
-                )
-            } else if let Some((keys, partitions, splits)) = &range_parts {
-                push(
-                    &mut operators,
-                    None,
-                    OpKind::RangeExchange {
-                        keys: keys.clone(),
-                        partitions: *partitions,
-                        splits: splits.clone(),
-                    },
-                    producers[0].clone(),
-                )
-            } else {
-                gather(&mut operators, &producers[0])?
-            };
-            if let Some(agg) = &shape.aggregate {
-                push(
-                    &mut operators,
-                    None,
-                    OpKind::FinalAggregate {
-                        group_by: agg.group_by.clone(),
-                        aggregates: agg.aggregates.clone(),
-                    },
-                    vec![gathered],
-                )
-            } else {
-                gathered
-            }
-        }
-        Input::Join {
-            left_keys,
-            right_keys,
-            ..
-        } => {
-            let left = gather(&mut operators, &producers[0])?;
-            let right = gather(&mut operators, &producers[1])?;
-            let join = push(
-                &mut operators,
-                None,
-                OpKind::Join {
-                    left_keys: left_keys.clone(),
-                    right_keys: right_keys.clone(),
-                },
-                vec![left, right],
-            );
-            if let Some(agg) = &shape.aggregate {
-                push(
-                    &mut operators,
-                    None,
-                    OpKind::Aggregate {
-                        group_by: agg.group_by.clone(),
-                        aggregates: agg.aggregates.clone(),
-                    },
-                    vec![join],
-                )
-            } else {
-                join
-            }
-        }
+    let gathered = if let Some((keys, partitions)) = &hash_parts {
+        push(
+            &mut operators,
+            None,
+            OpKind::HashExchange {
+                keys: keys.clone(),
+                partitions: *partitions,
+                hash_version: crate::ops::WCOL_EXCHANGE_HASH_VERSION_DEFAULT,
+            },
+            producers,
+        )
+    } else if let Some((keys, partitions, splits)) = &range_parts {
+        push(
+            &mut operators,
+            None,
+            OpKind::RangeExchange {
+                keys: keys.clone(),
+                partitions: *partitions,
+                splits: splits.clone(),
+            },
+            producers,
+        )
+    } else {
+        gather(&mut operators, &producers)?
+    };
+    let mut current = if let Some(agg) = &shape.aggregate {
+        push(
+            &mut operators,
+            None,
+            OpKind::FinalAggregate {
+                group_by: agg.group_by.clone(),
+                aggregates: agg.aggregates.clone(),
+            },
+            vec![gathered],
+        )
+    } else {
+        gathered
     };
     for step in shape.after.iter().rev() {
         if range_parts.is_some() && matches!(step, After::Sort(_)) {
@@ -255,19 +193,17 @@ pub(super) fn build_ops(
             ),
         };
     }
-    if matches!(shape.input, Input::Scan(_)) && shape.aggregate.is_none() {
-        if let Input::Scan(scan) = &shape.input {
-            if let Some(columns) = scan.steps.iter().find_map(|step| match step {
-                Step::Project(columns) => Some(columns.clone()),
-                Step::Filter(_) => None,
-            }) {
-                current = push(
-                    &mut operators,
-                    None,
-                    OpKind::Project { columns },
-                    vec![current],
-                );
-            }
+    if shape.aggregate.is_none() {
+        if let Some(columns) = shape.scan.steps.iter().find_map(|step| match step {
+            Step::Project(columns) => Some(columns.clone()),
+            Step::Filter(_) => None,
+        }) {
+            current = push(
+                &mut operators,
+                None,
+                OpKind::Project { columns },
+                vec![current],
+            );
         }
         let kind = match coordinator_export {
             Some(target_row_group_rows) => SinkKind::Parquet {
@@ -294,10 +230,10 @@ pub(super) fn build_ops(
     Ok((operators, current))
 }
 
-pub(super) fn decode_groups(units: &[Unit], node: NodeId, scan: u32) -> Vec<DecodeGroup> {
+pub(super) fn decode_groups(units: &[Unit], node: NodeId) -> Vec<DecodeGroup> {
     units
         .iter()
-        .filter(|unit| unit.node == node && unit.scan == scan)
+        .filter(|unit| unit.node == node)
         .map(|unit| DecodeGroup {
             object_id: unit.object_id.clone(),
             row_group: unit.row_group,
@@ -313,7 +249,7 @@ pub(super) fn decode_groups(units: &[Unit], node: NodeId, scan: u32) -> Vec<Deco
 /// Scan, filter, and projection: one sink on each node, because those nodes already
 /// emit final rows. Aggregate, `ORDER BY`, or `LIMIT`: one sink on the coordinator,
 /// after the final reduction or global step. `partitionBy` is only legal on the
-/// distributed shape. Joins are not exported yet.
+/// distributed shape.
 pub(super) fn export_placement(
     shape: &Shape,
     export_row_group_rows: Option<u32>,
@@ -327,11 +263,6 @@ pub(super) fn export_placement(
         }
         return Ok((None, None));
     };
-    if matches!(shape.input, Input::Join { .. }) {
-        return Err(PlanError::Unsupported(
-            "parquet export does not run joins yet",
-        ));
-    }
     let single_writer = shape.aggregate.is_some()
         || shape
             .after

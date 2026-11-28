@@ -126,12 +126,6 @@ pub(super) fn fmt_kind(kind: &OpKind) -> String {
                 fmt_aggs(aggregates)
             )
         }
-        OpKind::Aggregate {
-            group_by,
-            aggregates,
-        } => {
-            format!("aggregate group={group_by:?} {}", fmt_aggs(aggregates))
-        }
         OpKind::Exchange => "exchange".into(),
         OpKind::HashExchange {
             keys,
@@ -143,10 +137,6 @@ pub(super) fn fmt_kind(kind: &OpKind) -> String {
             partitions,
             splits: _,
         } => format!("range_exchange keys={keys:?} partitions={partitions}"),
-        OpKind::Join {
-            left_keys,
-            right_keys,
-        } => format!("join left={left_keys:?} right={right_keys:?}"),
         OpKind::Sort { keys } => {
             let body = keys
                 .iter()

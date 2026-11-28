@@ -1,4 +1,4 @@
-//! Wasm FFI for stream-pool mailboxes (up to 100 ingress / 100 egress).
+//! Wasm FFI for stream-pool mailboxes (up to 128 ingress / 128 egress).
 //!
 //! # Safety
 //!
@@ -18,6 +18,15 @@ use crate::exec::stream_pool::StreamPoolSession;
 
 pub struct StreamPoolHandle(pub StreamPoolSession);
 
+/// Input and output slot sizes in bytes, from the host's KiB counts.
+fn slot_bytes(input_kib: u32, output_kib: u32) -> crate::error::WcolResult<(u32, u32)> {
+    let bytes = |kib: u32| {
+        kib.checked_mul(1024)
+            .ok_or_else(|| WcolError::msg(format!("stream pool slot of {kib} KiB exceeds 4 GiB")))
+    };
+    Ok((bytes(input_kib)?, bytes(output_kib)?))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn wcs_sp_open_echo(
     input_ports: u32,
@@ -25,12 +34,10 @@ pub unsafe extern "C" fn wcs_sp_open_echo(
     input_kib: u32,
     output_kib: u32,
 ) -> *mut StreamPoolHandle {
-    match StreamPoolSession::open_echo(
-        input_ports,
-        output_ports,
-        input_kib * 1024,
-        output_kib * 1024,
-    ) {
+    let opened = slot_bytes(input_kib, output_kib).and_then(|(input, output)| {
+        StreamPoolSession::open_echo(input_ports, output_ports, input, output)
+    });
+    match opened {
         Ok(session) => {
             clear_last_error();
             Box::into_raw(Box::new(StreamPoolHandle(session)))
@@ -58,15 +65,18 @@ pub unsafe extern "C" fn wcs_sp_open_graph(
         return ptr::null_mut();
     }
     let bytes = slice::from_raw_parts(program, program_len as usize);
-    match StreamPoolSession::open_graph(
-        bytes,
-        scratch_capacity as usize,
-        input_ports,
-        output_ports,
-        input_kib * 1024,
-        output_kib * 1024,
-        budget_share,
-    ) {
+    let opened = slot_bytes(input_kib, output_kib).and_then(|(input, output)| {
+        StreamPoolSession::open_graph(
+            bytes,
+            scratch_capacity as usize,
+            input_ports,
+            output_ports,
+            input,
+            output,
+            budget_share,
+        )
+    });
+    match opened {
         Ok(session) => {
             clear_last_error();
             crate::ops::query::batch::clear_spill_boundaries();
@@ -395,8 +405,7 @@ pub unsafe extern "C" fn wcs_sp_spill_run_upload_ptr(p: *mut StreamPoolHandle) -
     }
 }
 
-/// Buffer for the pending run read; null on error. Fill it, then `wcs_sp_spill_complete`
-/// with no scan bytes.
+/// Buffer for the pending run read; null on error. Fill it, then `wcs_sp_spill_complete`.
 #[no_mangle]
 pub unsafe extern "C" fn wcs_sp_spill_read_slot(p: *mut StreamPoolHandle, len: u32) -> *mut u8 {
     if p.is_null() {
@@ -415,21 +424,11 @@ pub unsafe extern "C" fn wcs_sp_spill_read_slot(p: *mut StreamPoolHandle, len: u
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wcs_sp_spill_complete(
-    p: *mut StreamPoolHandle,
-    ok: u32,
-    scan_ptr: *const u8,
-    scan_len: u32,
-) -> i32 {
+pub unsafe extern "C" fn wcs_sp_spill_complete(p: *mut StreamPoolHandle, ok: u32) -> i32 {
     if p.is_null() {
         return -1;
     }
-    let scan = if scan_ptr.is_null() || scan_len == 0 {
-        &[][..]
-    } else {
-        slice::from_raw_parts(scan_ptr, scan_len as usize)
-    };
-    match (*p).0.complete_spill(ok != 0, scan) {
+    match (*p).0.complete_spill(ok != 0) {
         Ok(()) => {
             clear_last_error();
             0

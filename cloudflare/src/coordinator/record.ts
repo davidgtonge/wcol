@@ -1,6 +1,6 @@
+/** Job records, their storage keys and limits. No R2 or SQLite calls. */
 import type { ContainerInstance } from "../node/containers.ts";
 import type { ReducerRuntime } from "../node/session.ts";
-import { parseReducerRequest, type ReducerRequest } from "./reducer-choice.ts";
 import type { JobSourceLocation } from "../../../src/runtime/coordinator/plan-dispatch.ts";
 import type { GraphJobSource, GraphTaskEnv } from "../node/node.ts";
 import type { R2Env, R2OutputBucket } from "../r2.ts";
@@ -8,8 +8,15 @@ import type { R2Env, R2OutputBucket } from "../r2.ts";
 /** Durable Object values stay small. Payloads move on the WCS stream, not in storage. */
 export const MAX_DO_VALUE_BYTES = 64 * 1024;
 
+/** A stored value's size: its JSON, with byte arrays (stored as bytes) at their length. */
 export function encodedValueBytes(value: unknown): number {
-  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  let binary = 0;
+  const text = JSON.stringify(value, (_key, field: unknown) => {
+    if (!ArrayBuffer.isView(field)) return field;
+    binary += field.byteLength;
+    return null;
+  });
+  return new TextEncoder().encode(text ?? "").byteLength + binary;
 }
 
 export function assertDoValue(key: string, value: unknown): void {
@@ -39,41 +46,18 @@ export function boundStorage<T extends PutStorage>(storage: T): T {
   });
 }
 
-/**
- * Host-level isolate knobs on `POST /jobs`. Not planner inputs: they bound
- * TypeScript fan-in and DO SQLite page cache, not the physical graph.
- */
-
-export type HostExecutionHints = {
-  /** Concurrent streams a reducer may hold. Default 8. */
-  maxActiveIngress?: number;
-  /** Where the job's hash reducers should run (`reducers`, `reducerInstance`). Default auto. */
-  reducers: ReducerRequest;
-};
-
-export function parseHostExecutionHints(body: unknown): HostExecutionHints {
-  const row = body != null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  const hints: HostExecutionHints = { reducers: parseReducerRequest(row) };
-  const ingress = Number(row.maxActiveIngress);
-  if (Number.isInteger(ingress) && ingress >= 1 && ingress <= 64) {
-    hints.maxActiveIngress = ingress;
-  }
-  return hints;
-}
-
-/**
- * Job identity and storage keys. No R2 or SQLite calls.
- */
-
-
 export type GraphJobEnv = GraphTaskEnv & {
   OUTPUT?: R2OutputBucket;
   /** Sync budget for `json` jobs, in ms (default 10 000). */
   WCOL_JOB_SYNC_MS?: string;
-  /** Upper bound on scan nodes per job (default 32). */
+  /** Upper bound on scan nodes per job (default 32); a request's `maxNodes` is clamped to it. */
   WCOL_MAX_NODES?: string;
-  /** `1` on celld, which holds a streamed RPC until its body ends (cloudflare/celld/README.md). */
-  WCOL_BUFFER_SCAN_EDGES?: string;
+  /** Largest explicit `hashReducers` a job may ask for (default 128). */
+  WCOL_MAX_REDUCERS?: string;
+  /** Largest container instance a job may ask for (default `standard-3`). */
+  WCOL_MAX_CONTAINER_INSTANCE?: string;
+  /** Comma-separated hostnames URL sources may name; unset refuses URL sources. */
+  WCOL_URL_SOURCE_HOSTS?: string;
   /** This worker's own coordinator namespace. */
   WCOL_COORDINATOR?: { idFromName(name: string): unknown; get(id: unknown, options?: { locationHint: string }): unknown };
   /** Node Worker deploy id; must match `wcol-node` for Wasm invalidation. */
@@ -89,11 +73,8 @@ export type GraphJobEnv = GraphTaskEnv & {
   WCOL_MAX_ACTIVE_INGRESS?: string;
   /** Concurrent hash-exchange scans (default 16). Does not bypass the scan window. */
   WCOL_MAX_ACTIVE_SCANS?: string;
-  /** Shared incoming buffer budget per consumer isolate (default 2 MiB). */
-  WCOL_INGRESS_BYTES?: string;
   WCOL_JSON_MAX_BYTES?: string;
   WCOL_DISPATCH_TRACE?: string;
-  WCOL_JOB_TEST_HOOKS?: string;
   /** No task-progress object newer than this is a stalled attempt. Default 90s. */
   WCOL_STALL_MS?: string;
 };
@@ -133,21 +114,15 @@ export type LiveAttempt = {
   sourceBytes: number;
 };
 
-export type PublishingRow = {
-  executionAttempt: number;
-  sourceKey: string;
-  destinationKey: string;
-};
-
 export type ModelTrainingSummary = { iterations: number; converged: boolean; inertia: number };
 
-const JOB_KINDS = new Set(["json", "parquet", "concat", "model"]);
+const JOB_KINDS = new Set(["json", "parquet", "model"]);
 const JOB_STATES = new Set(["accepted", "running", "completed", "failed"]);
 
 /** What `GET /jobs/:id` reports. Bounded: ids, states, keys and counts only. */
 export type GraphJobRecord = {
   jobId: string;
-  kind: "json" | "parquet" | "concat" | "model";
+  kind: "json" | "parquet" | "model";
   state: "accepted" | "running" | "completed" | "failed";
   executionAttempt: number;
   failedAttempts: number;
@@ -164,11 +139,9 @@ export type GraphJobRecord = {
   outputKey?: string;
   outputEtag?: string;
   error?: string;
-  /** Concat (or any shared key) whose R2 put is not yet recorded here. */
-  publishing?: PublishingRow;
   /** Set when a source has no etag and this job must not become a 202. */
   syncOnly?: boolean;
-  /** Host fan-in cap for this job. Omit to use `WCOL_MAX_ACTIVE_INGRESS`. */
+  /** Host fan-in cap for this job (`maxActiveIngress`). Omit to use `WCOL_MAX_ACTIVE_INGRESS`. */
   maxActiveIngress?: number;
   /** Where the job's hash reducers run. Omitted: node Durable Objects. */
   reducerRuntime?: ReducerRuntime;
@@ -194,7 +167,6 @@ export type JobDescriptor = {
   byteCap: number;
   bucket?: string;
   prefix?: string;
-  key?: string;
   kind: GraphJobRecord["kind"];
   modelName?: string;
   modelOptions?: { numClusters: number; maxIterations: number; seed: number; tolerance: number };
@@ -209,7 +181,6 @@ export const MAX_ATTEMPTS = 3;
 /** Attempt with no newer task progress object. Longer than the 2s progress throttle. */
 export const STALL_MS = 90_000;
 export const JSON_MAX_BYTES = 1_048_576;
-export const CONCAT_PUT_LIMIT = 5 * 1024 * 1024 * 1024;
 
 /** Storage boundary: required ledger fields. Optional fields stay as stored. */
 export function readJobRecord(value: unknown): GraphJobRecord | undefined {
@@ -231,11 +202,9 @@ export function requireJobRecord(value: unknown): GraphJobRecord {
 export const jobKey = (jobId: string) => `graph-job:${jobId}`;
 export const idempotencyKey = (key: string) => `graph-job-idempotency:${key}`;
 export const taskKey = (jobId: string, taskId: number) => `graph-job-task:${jobId}:${taskId}`;
-/** Legacy key when `digest` is omitted. A digest never overwrites another submission's graph. */
-export const graphObjectKey = (jobId: string, digest?: string) =>
-  digest ? `_jobs/${jobId}/graph-${digest}.bin` : `_jobs/${jobId}/graph.bin`;
-export const descriptorKey = (jobId: string, digest?: string) =>
-  digest ? `_jobs/${jobId}/descriptor-${digest}.json` : `_jobs/${jobId}/descriptor.json`;
+/** Content-addressed by the graph's digest: a second submission never overwrites the first's graph. */
+export const graphObjectKey = (jobId: string, digest: string) => `_jobs/${jobId}/graph-${digest}.bin`;
+export const descriptorKey = (jobId: string, digest: string) => `_jobs/${jobId}/descriptor-${digest}.json`;
 
 export function authoritativeManifestKey(jobId: string): string {
   return `_jobs/${jobId}/manifest.json`;
@@ -256,13 +225,6 @@ export function byteCap(env: GraphJobEnv): number {
 
 export function toTaskSource(location: JobSourceLocation): GraphJobSource {
   return "url" in location ? { url: location.url } : { bucket: location.bucket, key: location.key };
-}
-
-export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  // Every caller hashes bytes it owns (a program, a request body), backed by an ArrayBuffer;
-  // TypeScript types a bare Uint8Array as possibly shared, which `digest` does not accept.
-  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 /**

@@ -6,7 +6,7 @@ use crate::ir::{self, AggExpr, CatalogColumn, Predicate, SortKey};
 use crate::ops::query::batch::{BatchFilter, BatchQuery};
 use crate::ops::{AggregateOp, FilterOp};
 use crate::plan::sql_parser::{
-    parse_sql_v0, plan_query, Aggregate, Column, Filter, OrderKey, PlanError, QueryPlan, Scalar,
+    parse_sql_v0, plan_query, Aggregate, Column, Filter, OrderKey, QueryPlan, Scalar,
 };
 
 pub struct Needed {
@@ -101,7 +101,7 @@ fn bind(sql: &str, catalog: &[CatalogColumn]) -> Result<Bound, String> {
             kind: column.kind,
         })
         .collect();
-    let plan = plan_query(&query, &columns).map_err(plan_message)?;
+    let plan = plan_query(&query, &columns).map_err(|err| err.to_string())?;
     let referenced = referenced(&plan);
     Ok(Bound {
         predicates: plan.filters.iter().map(predicate_from_filter).collect(),
@@ -176,14 +176,6 @@ fn sort_key_from_order(key: OrderKey) -> SortKey {
         column: key.column,
         descending: key.desc,
         nulls_first: false,
-    }
-}
-
-fn plan_message(err: PlanError) -> String {
-    match err {
-        PlanError::Unsupported => "unsupported sql".to_string(),
-        PlanError::UnknownColumn => "unknown column".to_string(),
-        PlanError::TextForNumber => "a text literal is compared with a numeric column".to_string(),
     }
 }
 

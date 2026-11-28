@@ -9,8 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { clickbenchQueries } from "./clickbench-catalog.ts";
-
-const ROOT = path.resolve(import.meta.dirname, "..");
+import { ROOT } from "./harness.ts";
 const OUT = path.join(ROOT, "cloudflare/console/recordings");
 const POLL_MS = 1000;
 

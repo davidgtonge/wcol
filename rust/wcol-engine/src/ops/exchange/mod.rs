@@ -7,12 +7,10 @@ mod typed_hash;
 
 pub use crate::exec::operators::{demux_partition_stream, RowBatchWcsEgress, RowBatchWcsIngress};
 pub use crate::stream::OwnedWcolBatch;
-pub use hash_partition::{HashPartitionIo, HashPartitionOp, HashPartitionStats};
-pub use partitioning::{BatchPartitionPlan, ExchangePartitioning, HashPartitionPlan};
+pub use partitioning::{BatchPartitionPlan, HashPartitionPlan};
 pub use range_partition::RangePartitionPlan;
 pub use typed_hash::{
-    exchange_hash_seed, hash_row_keys_at, join_key_fingerprint_at, join_key_is_null,
-    join_keys_equal, partition_for_row, partition_index, CombinerRoute,
+    hash_row_keys_at, partition_for_row, partition_index, CombinerRoute,
     WCOL_EXCHANGE_HASH_VERSION_DEFAULT,
 };
 

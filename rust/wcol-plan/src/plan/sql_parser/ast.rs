@@ -65,7 +65,7 @@ pub enum Expr<'a> {
     Number(f64),
     Str(&'a str),
 
-    // Aggregates (v0)
+    // Aggregates
     Agg {
         func: AggFn,
         distinct: bool,
@@ -87,7 +87,7 @@ pub enum Expr<'a> {
     },
     Like {
         left: Box<Expr<'a>>,
-        pattern: Box<Expr<'a>>, // must be Str in v0
+        pattern: Box<Expr<'a>>, // must be Str
         negated: bool,
     },
     And(Box<Expr<'a>>, Box<Expr<'a>>),

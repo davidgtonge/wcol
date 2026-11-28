@@ -23,9 +23,6 @@ pub(super) fn range_exchange_for(
     if node_count < 2 {
         return Ok(None);
     }
-    if !matches!(shape.input, Input::Scan(_)) {
-        return Ok(None);
-    }
     if shape.aggregate.is_some() {
         return Ok(None);
     }
@@ -132,9 +129,6 @@ pub(super) fn hash_exchange_for(
     metadata: &ParquetMetadataCatalog,
 ) -> Result<Option<(Vec<u32>, u32)>, PlanError> {
     let leaf_physical = metadata.leaf_physical.as_slice();
-    if !matches!(shape.input, Input::Scan(_)) {
-        return Ok(None);
-    }
     let Some(agg) = &shape.aggregate else {
         return Ok(None);
     };

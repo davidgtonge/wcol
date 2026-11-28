@@ -10,44 +10,44 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: wcol
 
       - name: Rust toolchain
-        working-directory: wcol/rust
+        working-directory: rust
         # rust-toolchain.toml pins the version; rustup installs it on first use.
         run: |
           rustup show active-toolchain
           rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: wcol/rust
+          workspaces: rust
       - name: Binaryen (wasm-opt)
         run: sudo apt-get update && sudo apt-get install -y binaryen
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: wcol/package-lock.json
-
-      - name: Rust format and lint
-        working-directory: wcol
-        run: npm run lint:rust
-      - name: Rust tests
-        working-directory: wcol
-        run: npm run test:rust
 
       - name: Install
-        working-directory: wcol
         run: npm ci
+
+      - name: Rust format and lint
+        run: npm run lint:rust
+      # Includes the memory-plateau harness (`--features memory-plateau`).
+      - name: Rust tests
+        run: npm run test:rust
+      # tests/native-reducer.test.ts runs this binary as its hash reducers.
+      - name: Native reducer
+        run: cd rust && cargo build -p wcol-reducer
+
       - name: Build Wasm and Workers
-        working-directory: wcol
         run: |
           (cd rust && cargo fetch)
           npm run build
       - name: Typecheck
-        working-directory: wcol
         run: npm run typecheck
       - name: Tests
-        working-directory: wcol
         run: npm test
+      # The real coordinator and node Workers on Miniflare, against the committed 500k
+      # sample, with DuckDB as the oracle.
+      - name: ClickBench on Miniflare
+        run: npm run clickbench:local

@@ -1,17 +1,15 @@
 import type { HostBytes } from "./host-bytes.ts";
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import type { PoolWasm } from "./wasm-stream.ts";
 import { wasmMemoryU8 } from "./wasm.ts";
-import type { R2OutputBucket } from "../../../cloudflare/src/r2.ts";
+import type { R2OutputBucket } from "./ports/r2-bucket.ts";
 import type { PoolInputLatch } from "./pool-streams.ts";
-import type { ReadAtCallback, StreamPool } from "./stream-pool.ts";
+import type { SourceReadAt, StreamPool } from "./stream-pool.ts";
 import type { ResidentGraph } from "./resident-graph.ts";
-import type { StreamRunStats } from "./wasm-stream.ts";
 
 export type WcolHost = {
-  readAt?(source: number, offset: number, length: number): Uint8Array | Promise<Uint8Array>;
-  readPort?(port: number, maxLength: number): Promise<Uint8Array | null | "absent">;
-  abortOutputs?(): Promise<void>;
+  readAt?: SourceReadAt;
   writePort(port: number, bytes: Uint8Array): void | Promise<void>;
+  /** Not called by the runtime; kept until the node host stops passing it. */
   openPort?(port: number): void | Promise<void>;
   closePort?(port: number): void | Promise<void>;
   yield(): Promise<void>;
@@ -24,7 +22,7 @@ export type WcolHost = {
 };
 
 export type RunWcolEngineOptions = {
-  wasm: WcolStreamWasm;
+  wasm: PoolWasm;
   plan: Uint8Array;
   host: WcolHost;
   scratchBytes?: number;
@@ -44,7 +42,7 @@ export type RunWcolEngineOptions = {
   onPoolReady?: (pool: StreamPool) => void;
   /** Takes ownership of a planned resident graph after its initial load. */
   onResidentReady?: (graph: ResidentGraph) => void;
-  readAt?: ReadAtCallback;
+  readAt?: SourceReadAt;
   yieldToEventLoop?: () => Promise<void>;
   onProgress?: (info: {
     pollIterations: number;
@@ -123,11 +121,10 @@ export type MemGrowthSample = {
 
 const MEM_GROWTH_PHASES = ["unset", "scan", "wcs_ingress", "hash_aggregate", "spill_write", "spill_merge"] as const;
 
-export function readMemGrowth(wasm: WcolStreamWasm): MemGrowthSample[] | undefined {
-  if (!wasm.wcs_mem_growth_ptr || !wasm.wcs_mem_growth_len) return undefined;
-  const len = Number(wasm.wcs_mem_growth_len());
+export function readMemGrowth(wasm: PoolWasm): MemGrowthSample[] {
+  const len = wasm.wcs_mem_growth_len();
   if (!len) return [];
-  const ptr = Number(wasm.wcs_mem_growth_ptr());
+  const ptr = wasm.wcs_mem_growth_ptr();
   const bytes = wasmMemoryU8(wasm, ptr, len).slice();
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const stride = 11 * 8;
@@ -152,10 +149,9 @@ export function readMemGrowth(wasm: WcolStreamWasm): MemGrowthSample[] | undefin
   return rows;
 }
 
-export function readDictTraffic(wasm: WcolStreamWasm): DictTraffic | undefined {
-  if (!wasm.wcs_dict_traffic_ptr || !wasm.wcs_dict_traffic_len) return undefined;
-  const len = Number(wasm.wcs_dict_traffic_len());
-  const ptr = Number(wasm.wcs_dict_traffic_ptr());
+export function readDictTraffic(wasm: PoolWasm): DictTraffic | undefined {
+  const len = wasm.wcs_dict_traffic_len();
+  const ptr = wasm.wcs_dict_traffic_ptr();
   if (len < 72 || !ptr) return undefined;
   const bytes = wasmMemoryU8(wasm, ptr, len);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -177,30 +173,17 @@ export function readDictTraffic(wasm: WcolStreamWasm): DictTraffic | undefined {
   };
 }
 
-const SPILL_BOUNDARY_WORDS = 27;
-const SPILL_BOUNDARY_WORDS_V23 = 23;
+/** Rust `note_spill_boundary`: 27 little-endian u32 words per run. */
+const SPILL_BOUNDARY_STRIDE = 27 * 4;
 
-function spillBoundaryStride(byteLength: number): number {
-  const current = SPILL_BOUNDARY_WORDS * 4;
-  const v23 = SPILL_BOUNDARY_WORDS_V23 * 4;
-  if (byteLength >= current && byteLength % current === 0) return current;
-  if (byteLength >= v23 && byteLength % v23 === 0) return v23;
-  return current;
-}
-
-export function readSpillBoundaries(wasm: WcolStreamWasm): SpillBoundary[] | undefined {
-  if (!wasm.wcs_spill_boundary_len || !wasm.wcs_spill_boundary_ptr) return undefined;
-  const len = Number(wasm.wcs_spill_boundary_len());
+export function readSpillBoundaries(wasm: PoolWasm): SpillBoundary[] {
+  const len = wasm.wcs_spill_boundary_len();
   if (!len) return [];
-  const ptr = Number(wasm.wcs_spill_boundary_ptr());
-  const bytes = wasmMemoryU8(wasm, ptr, len).slice();
+  const bytes = wasmMemoryU8(wasm, wasm.wcs_spill_boundary_ptr(), len).slice();
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const stride = spillBoundaryStride(bytes.byteLength);
-  const wordsInRecord = stride / 4;
   const rows: SpillBoundary[] = [];
-  for (let offset = 0; offset + stride <= bytes.byteLength; offset += stride) {
-    const word = (index: number) =>
-      index < wordsInRecord ? view.getUint32(offset + index * 4, true) : 0;
+  for (let offset = 0; offset + SPILL_BOUNDARY_STRIDE <= bytes.byteLength; offset += SPILL_BOUNDARY_STRIDE) {
+    const word = (index: number) => view.getUint32(offset + index * 4, true);
     rows.push({
       run: word(0),
       wasmBefore: word(1),
@@ -234,4 +217,3 @@ export function readSpillBoundaries(wasm: WcolStreamWasm): SpillBoundary[] | und
   return rows;
 }
 
-export type { StreamRunStats };

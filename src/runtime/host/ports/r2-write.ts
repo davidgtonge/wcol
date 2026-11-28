@@ -1,3 +1,5 @@
+import type { R2UploadedPart } from "./r2-bucket.ts";
+
 /**
  * Format-agnostic multipart sink. It stores bytes and part receipts.
  * Callers decide when the byte stream is finished; this type does not
@@ -8,13 +10,15 @@ export const R2_PART_SIZE = 8 * 1024 * 1024;
 /** R2's smallest non-final part. */
 export const R2_MIN_PART_SIZE = 5 * 1024 * 1024;
 export const R2_MAX_PARTS = 10_000;
+/** Backoff before the second part attempt; it doubles for each one after. */
+const PART_RETRY_MS = 100;
 
-export type R2UploadedPart = {
-  partNumber: number;
-  etag: string;
-};
+export type { R2UploadedPart };
 
-/** One R2 multipart upload. Implementations talk to a bucket; they do not parse payloads. */
+/**
+ * One R2 multipart upload. Implementations talk to a bucket; they do not parse payloads.
+ * A part's `body` is a view of the writer's staging buffer, valid until `uploadPart` settles.
+ */
 export interface R2MultipartSession {
   create(key: string): Promise<string>;
   uploadPart(uploadId: string, partNumber: number, body: Uint8Array): Promise<string>;
@@ -30,17 +34,16 @@ export type R2MultipartSnapshot = {
   peakAccountedBytes: number;
 };
 
-/**
- * One staging buffer (8 MiB unless the caller picks another part size) and one part upload
- * at a time.
- * `write` resolves only after those bytes fit in the buffer, so a caller that
- * awaits it stops producing while a part is uploading.
- */
 export type ByteCharge = {
   charge(bytes: number): void;
   release(bytes: number): void;
 };
 
+/**
+ * One staging buffer (8 MiB unless the caller picks another part size) and one part upload
+ * at a time. `write` resolves only after those bytes fit in the buffer, so a caller that
+ * awaits it stops producing while a part is uploading.
+ */
 export class R2MultipartWritePort {
   private readonly buffer: Uint8Array;
   private stagingCharged: boolean;
@@ -99,7 +102,7 @@ export class R2MultipartWritePort {
   async finish(): Promise<void> {
     this.assertOpen();
     if (this.filled > 0) {
-      const body = this.buffer.slice(0, this.filled);
+      const body = this.buffer.subarray(0, this.filled);
       this.filled = 0;
       await this.putPart(body);
     }
@@ -124,10 +127,10 @@ export class R2MultipartWritePort {
     this.releaseStaging();
   }
 
+  /** Writes wait for this, so the staging buffer is not refilled while its part uploads. */
   private async flushFullPart(): Promise<void> {
-    const body = this.buffer.slice(0, this.partBytes);
     this.filled = 0;
-    await this.putPart(body);
+    await this.putPart(this.buffer.subarray(0, this.partBytes));
   }
 
   private async putPart(body: Uint8Array): Promise<void> {
@@ -146,6 +149,7 @@ export class R2MultipartWritePort {
       charged = this.account != null;
       let lastError: unknown;
       for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+        if (attempt > 1) await new Promise((resolve) => setTimeout(resolve, PART_RETRY_MS * 2 ** (attempt - 2)));
         try {
           const etag = await this.session.uploadPart(this.uploadId, number, body);
           this.parts.push({ partNumber: number, etag });
@@ -155,6 +159,8 @@ export class R2MultipartWritePort {
           return;
         } catch (error) {
           lastError = error;
+          // A TypeError or RangeError is a bad call, not a transient R2 failure.
+          if (error instanceof TypeError || error instanceof RangeError) break;
         }
       }
       this.inFlightBytes = 0;
@@ -192,58 +198,4 @@ export class R2MultipartWritePort {
     const accounted = this.filled + this.inFlightBytes;
     if (accounted > this.peakAccountedBytes) this.peakAccountedBytes = accounted;
   }
-}
-
-/** HTTP client for a Worker that owns the R2 binding. The body is opaque bytes. */
-export function workerR2Session(endpoint: string, token: string, key: string): R2MultipartSession {
-  const root = endpoint.replace(/\/$/, "");
-  const headers = { authorization: `Bearer ${token}` };
-
-  async function postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
-    const response = await fetch(`${root}${path}`, {
-      method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) throw new Error(`R2 ${path} failed (${response.status})`);
-    return (await response.json()) as Record<string, unknown>;
-  }
-
-  return {
-    async create(objectKey: string): Promise<string> {
-      const payload = await postJson("/uploads", { key: objectKey });
-      const uploadId = payload.uploadId;
-      if (typeof uploadId !== "string" || uploadId.length === 0) {
-        throw new Error("R2 create returned no upload id");
-      }
-      return uploadId;
-    },
-    async uploadPart(uploadId: string, partNumber: number, body: Uint8Array): Promise<string> {
-      const response = await fetch(`${root}/parts`, {
-        method: "PUT",
-        headers: {
-          ...headers,
-          "content-type": "application/octet-stream",
-          "x-object-key": key,
-          "x-upload-id": uploadId,
-          "x-part-number": String(partNumber),
-        },
-        // A part is bytes this writer owns; TypeScript types a bare Uint8Array as possibly
-        // shared memory, which a fetch body does not accept.
-        body: body as Uint8Array<ArrayBuffer>,
-      });
-      if (!response.ok) throw new Error(`R2 part ${partNumber} failed (${response.status})`);
-      const payload = (await response.json()) as { etag?: unknown };
-      if (typeof payload.etag !== "string" || payload.etag.length === 0) {
-        throw new Error(`R2 part ${partNumber} returned no etag`);
-      }
-      return payload.etag;
-    },
-    async complete(uploadId: string, parts: R2UploadedPart[]): Promise<void> {
-      await postJson("/complete", { key, uploadId, parts });
-    },
-    async abort(uploadId: string): Promise<void> {
-      await postJson("/abort", { key, uploadId });
-    },
-  };
 }

@@ -1,9 +1,12 @@
 /** Lease renewal for a running attempt, and the stall watchdog that rides on it. */
-import { ALARM_MS, type GraphJobContext, jobKey, LEASE_MS, readJobRecord, RENEW_MS, STALL_MS } from "./record.ts";
+import { createLimiter } from "../../../src/runtime/concurrency.ts";
+import { ALARM_MS, errorMessage, type GraphJobContext, jobKey, LEASE_MS, readJobRecord, RENEW_MS, STALL_MS } from "./record.ts";
 
+/** Progress records read at once; an attempt has one per task. */
+const PROGRESS_READS = 16;
+
+/** The newest task progress stamp of `attempt`; null with none yet, undefined when unreadable. */
 async function latestProgressAt(ctx: GraphJobContext, jobId: string, attempt: number): Promise<number | null | undefined> {
-  // celld: listing/getting progress objects while scans read the same local store deadlocks.
-  if (ctx.env.WCOL_BUFFER_SCAN_EDGES === "1") return undefined;
   const bucket = ctx.env.OUTPUT;
   if (!bucket?.list) return undefined;
   const prefix = `_jobs/${jobId}/a${attempt}/`;
@@ -19,13 +22,16 @@ async function latestProgressAt(ctx: GraphJobContext, jobId: string, attempt: nu
       cursor = page.cursor;
     }
     if (keys.length === 0) return null;
+    const limit = createLimiter(PROGRESS_READS);
     const stamps = await Promise.all(
-      keys.map(async (key) => {
-        const object = await bucket.get(key);
-        if (!object) return null;
-        const at = Number((JSON.parse(await object.text()) as { at?: unknown }).at);
-        return Number.isFinite(at) ? at : null;
-      }),
+      keys.map((key) =>
+        limit(async () => {
+          const object = await bucket.get(key);
+          if (!object) return null;
+          const at = Number((JSON.parse(await object.text()) as { at?: unknown }).at);
+          return Number.isFinite(at) ? at : null;
+        }),
+      ),
     );
     let newest: number | null = null;
     for (const at of stamps) {
@@ -51,9 +57,7 @@ export function startRenewal(ctx: GraphJobContext, jobId: string, attempt: numbe
   const stallMs = Number.isFinite(configured) && configured >= 1_000 ? configured : STALL_MS;
   const timer = setInterval(() => {
     if (stopped) return;
-    // celld: extra coordinator events during concurrent scan RPCs stall outbound calls.
-    if (ctx.env.WCOL_BUFFER_SCAN_EDGES === "1") return;
-    void ctx.transaction(async (txn) => {
+    const renewed = ctx.transaction(async (txn) => {
       if (stopped) return;
       const current = readJobRecord(await txn.get(jobKey(jobId)));
       if (stopped) return;
@@ -64,6 +68,10 @@ export function startRenewal(ctx: GraphJobContext, jobId: string, attempt: numbe
       await txn.put(jobKey(jobId), current);
       if (stopped) return;
       await txn.setAlarm?.(Date.now() + ALARM_MS);
+    });
+    // A missed renewal is retried on the next tick; the lease outlasts several of them.
+    renewed.catch((error: unknown) => {
+      console.warn(JSON.stringify({ event: "lease_renewal_failed", jobId, attempt, error: errorMessage(error) }));
     });
     if (fired) return;
     void (async () => {

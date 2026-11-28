@@ -11,8 +11,8 @@ mod decode_query_harness;
 use decode_query_harness::decode_query_to_json;
 use wcol::columns_for_sql;
 use wcol::formats::parquet::open_plan;
+use wcol::ops::query::CatalogColumn;
 use wcol::plan::logical::ColumnKind;
-use wcol::stream::schema::CatalogColumn;
 
 fn fixture_flat() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/flat.parquet")

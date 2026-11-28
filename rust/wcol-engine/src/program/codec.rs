@@ -22,6 +22,25 @@ pub fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+/// A `u32` count, then that many items. Every item is at least one byte, so a count beyond
+/// the input is corrupt: it is rejected before anything is allocated for it.
+pub fn read_list<T>(
+    cur: &mut &[u8],
+    mut item: impl FnMut(&mut &[u8]) -> Result<T, LogicalWireError>,
+) -> Result<Vec<T>, LogicalWireError> {
+    let count = read_u32(cur)? as usize;
+    if count > cur.len() {
+        return Err(LogicalWireError::UnexpectedEnd);
+    }
+    (0..count).map(|_| item(cur)).collect()
+}
+
+pub fn read_u8(cur: &mut &[u8]) -> Result<u8, LogicalWireError> {
+    let (&byte, rest) = cur.split_first().ok_or(LogicalWireError::UnexpectedEnd)?;
+    *cur = rest;
+    Ok(byte)
+}
+
 pub fn read_u32(cur: &mut &[u8]) -> Result<u32, LogicalWireError> {
     if cur.len() < 4 {
         return Err(LogicalWireError::UnexpectedEnd);
@@ -241,11 +260,7 @@ pub fn decode_predicate(cur: &mut &[u8]) -> Result<Predicate, LogicalWireError> 
             let column = read_u32(cur)?;
             let negated = *cur.first().ok_or(LogicalWireError::UnexpectedEnd)? != 0;
             *cur = &cur[1..];
-            let count = read_u32(cur)? as usize;
-            let mut values = Vec::with_capacity(count);
-            for _ in 0..count {
-                values.push(decode_literal(cur)?);
-            }
+            let values = read_list(cur, decode_literal)?;
             Predicate::In {
                 column,
                 values,
@@ -386,12 +401,7 @@ pub fn encode_scalar_list(values: &[Scalar], out: &mut Vec<u8>) {
 }
 
 pub fn decode_scalar_list(cur: &mut &[u8]) -> Result<Vec<Scalar>, LogicalWireError> {
-    let count = read_u32(cur)? as usize;
-    let mut out = Vec::with_capacity(count);
-    for _ in 0..count {
-        out.push(decode_scalar(cur)?);
-    }
-    Ok(out)
+    read_list(cur, decode_scalar)
 }
 
 #[cfg(test)]
@@ -422,5 +432,37 @@ mod varint_tests {
             read_var(&mut [0x80u8].as_slice()),
             Err(LogicalWireError::UnexpectedEnd)
         );
+    }
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+    use crate::program::coordinator::decode_coordinator_steps;
+    use crate::program::stream_program::PlanCursor;
+
+    #[test]
+    fn a_list_count_beyond_the_input_is_rejected_before_allocating() {
+        let mut wire = u32::MAX.to_le_bytes().to_vec();
+        wire.extend_from_slice(&[0; 8]);
+        assert_eq!(
+            read_list(&mut &wire[..], read_u32),
+            Err(LogicalWireError::UnexpectedEnd)
+        );
+        assert!(PlanCursor::new(&wire).list(PlanCursor::u32).is_err());
+        assert!(PlanCursor::new(&wire).catalog().is_err());
+        // Coordinator steps: version 1, then a huge step count.
+        let mut steps = vec![1];
+        steps.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_coordinator_steps(&steps).is_err());
+    }
+
+    #[test]
+    fn a_list_reads_its_items() {
+        let mut wire = Vec::new();
+        push_u32(&mut wire, 2);
+        push_u32(&mut wire, 7);
+        push_u32(&mut wire, 9);
+        assert_eq!(read_list(&mut &wire[..], read_u32), Ok(vec![7, 9]));
     }
 }

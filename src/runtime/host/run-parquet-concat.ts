@@ -2,11 +2,11 @@ import { runWcolEngine } from "./run-wcol-engine.ts";
 import { R2RangeSource, type R2RangeBucket } from "./ports/r2-read.ts";
 import { ParquetUploadSink } from "./parquet-upload-sink.ts";
 import type { R2MultipartSession } from "./ports/r2-write.ts";
-import type { WcolStreamWasm } from "./wasm-stream.ts";
+import type { PoolWasm } from "./wasm-stream.ts";
 
 /** Run an opcode-11 concat program: ReadAt sources are committed shard keys in order. */
 export async function runConcatProgram(options: {
-  wasm: WcolStreamWasm;
+  wasm: PoolWasm;
   program: Uint8Array;
   bucket: R2RangeBucket;
   sourceKeys: string[];
@@ -24,9 +24,12 @@ export async function runConcatProgram(options: {
       plan: options.program,
       scratchBytes: 1024 * 1024,
       layout: { inputs: 0, outputs: 1 },
-      readAt: (source, offset, length) => readers[source]!(Number(offset), length),
       host: {
-        readAt: (source, offset, length) => readers[source]!(offset, length),
+        readAt: (source, offset, length) => {
+          const read = readers[source];
+          if (!read) throw new Error(`concat ReadAt source ${source} out of range (${readers.length} shards)`);
+          return read(offset, length);
+        },
         writePort: sink.writePort,
         yield: () => new Promise((resolve) => setTimeout(resolve, 0)),
       },

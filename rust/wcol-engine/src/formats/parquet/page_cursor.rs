@@ -5,6 +5,7 @@ use compact_parquet_thrift::pages::{
     page_layout, ColumnSpec, Location, PageEvent, PageKind, PageLayout, Physical, Value,
 };
 use compact_parquet_thrift::parquet::PageHeader;
+use compact_parquet_thrift::values::Error as ValueError;
 use compact_parquet_thrift::values::{
     ByteArrayEvent, DeltaBinary, DeltaByteArrays, DeltaByteParts, DeltaLengthByteArrays,
     DictionaryIds, Levels, PlainBool, PlainValues, RleBool,
@@ -539,41 +540,25 @@ impl PageCursor {
     }
 }
 
-/// Whether [`PageCursor`] can decode this data page for the scan's value mode.
-pub fn owned_cursor_supports_data_page(
-    physical: Physical,
-    encoding: i32,
-    dictionary_ids: bool,
-) -> bool {
-    if dictionary_ids {
-        matches!(
-            (encoding, physical),
-            (0, Physical::Boolean)
-                | (0, Physical::Int32)
-                | (0, Physical::Int64)
-                | (0, Physical::Float)
-                | (0, Physical::Double)
-                | (0, Physical::ByteArray)
-                | (0, Physical::FixedByteArray(_))
-                | (3, Physical::Boolean)
-                | (2 | 8, _)
-        )
-    } else {
-        matches!(
-            (encoding, physical),
-            (0, Physical::Boolean)
-                | (0, Physical::Int32)
-                | (0, Physical::Int64)
-                | (0, Physical::Float)
-                | (0, Physical::Double)
-                | (0, Physical::ByteArray)
-                | (0, Physical::FixedByteArray(_))
-                | (3, Physical::Boolean)
-                | (5, Physical::Int32)
-                | (5, Physical::Int64)
-                | (6 | 7, Physical::ByteArray)
-        )
-    }
+/// Whether [`PageCursor`] decodes pages of this encoding. Dictionary ids need the chunk's
+/// dictionary page; any other encoding may follow it, since writers fall back from the
+/// dictionary part-way through a chunk.
+pub fn owned_cursor_supports_page(physical: Physical, encoding: i32, has_dictionary: bool) -> bool {
+    matches!(
+        (encoding, physical),
+        (
+            0,
+            Physical::Boolean
+                | Physical::Int32
+                | Physical::Int64
+                | Physical::Float
+                | Physical::Double
+                | Physical::ByteArray
+                | Physical::FixedByteArray(_)
+        ) | (3, Physical::Boolean)
+            | (5, Physical::Int32 | Physical::Int64)
+            | (6 | 7, Physical::ByteArray)
+    ) || (has_dictionary && matches!(encoding, 2 | 8))
 }
 
 fn emit_bytes(
@@ -662,10 +647,11 @@ impl PageCursor {
                 )
                 .map_err(|e| Error::Page(e.into()))?,
             ),
-            _ => {
-                return Err(Error::Message(
-                    "page encoding not supported by owned cursor yet",
-                ))
+            (encoding, physical) => {
+                return Err(Error::Page(PageError::UnsupportedEncoding {
+                    physical,
+                    encoding,
+                }))
             }
         })
     }
@@ -943,23 +929,27 @@ fn decode_delta<T: compact_parquet_thrift::values::DeltaInt>(
         };
         match decoded {
             (Ok(used), Ok(()), out) => return Ok((used, out)),
-            (Err(Error::Page(page)), _, _) if page_is_workspace(&page) => {
-                // `feed` maps workspace errors into Page; retry below when the message carries a size.
-                let _ = page;
-                widths.resize(widths.len().saturating_mul(2).max(128), 0);
-                if widths.len() > input.len().saturating_add(4096) {
-                    return Err(Error::Message("delta width workspace exceeded the page"));
-                }
-            }
-            (Err(e), _, _) => return Err(e),
+            (Err(err), _, _) => grow_delta_widths(&mut widths, err, input.len())?,
             (Ok(_), Err(e), _) => return Err(e),
         }
     }
 }
 
-fn page_is_workspace(err: &compact_parquet_thrift::pages::Error) -> bool {
-    let text = format!("{err:?}");
-    text.contains("Workspace")
+/// Size the miniblock-width workspace from a [`DeltaWorkspaceTooSmall`] error and retry;
+/// any other error is returned. The header's miniblock count bounds `needed`, but it is
+/// page input, so it is also capped by the page length.
+///
+/// [`DeltaWorkspaceTooSmall`]: compact_parquet_thrift::values::Error::DeltaWorkspaceTooSmall
+fn grow_delta_widths(widths: &mut Vec<u8>, err: Error, page_len: usize) -> Result<(), Error> {
+    let Error::Page(PageError::Value(ValueError::DeltaWorkspaceTooSmall { needed, .. })) = err
+    else {
+        return Err(err);
+    };
+    if needed <= widths.len() || needed > page_len.saturating_add(4096) {
+        return Err(Error::Message("delta width workspace exceeded the page"));
+    }
+    widths.resize(needed, 0);
+    Ok(())
 }
 
 fn decode_delta_bytes(
@@ -1014,13 +1004,7 @@ fn decode_delta_bytes(
         };
         match decoded {
             (Ok(used), Ok(()), out) => return Ok((used, out)),
-            (Err(Error::Page(page)), _, _) if page_is_workspace(&page) => {
-                widths.resize(widths.len().saturating_mul(2).max(128), 0);
-                if widths.len() > input.len().saturating_add(4096) {
-                    return Err(Error::Message("delta width workspace exceeded the page"));
-                }
-            }
-            (Err(e), _, _) => return Err(e),
+            (Err(err), _, _) => grow_delta_widths(&mut widths, err, input.len())?,
             (Ok(_), Err(e), _) => return Err(e),
         }
     }
@@ -1154,9 +1138,10 @@ fn snappy_decompress_into(body: &[u8], plain: &mut [u8], expected: usize) -> Res
                         .rev()
                         .fold(0usize, |acc, b| (acc << 8) | usize::from(*b));
                 }
-                let literal = literal + 1;
-                let src = body.get(at..at + literal).ok_or_else(corrupt)?;
-                out.get_mut(pos..pos + literal)
+                // A four-byte length can reach `usize::MAX` on wasm32: check every sum.
+                let literal = literal.checked_add(1).ok_or_else(corrupt)?;
+                let src = body.get(span(at, literal)?).ok_or_else(corrupt)?;
+                out.get_mut(span(pos, literal)?)
                     .ok_or_else(corrupt)?
                     .copy_from_slice(src);
                 at += literal;
@@ -1189,7 +1174,7 @@ fn snappy_decompress_into(body: &[u8], plain: &mut [u8], expected: usize) -> Res
                         )
                     }
                 };
-                if offset == 0 || offset > pos || pos + length > out.len() {
+                if offset == 0 || offset > pos || length > out.len() - pos {
                     return Err(corrupt());
                 }
                 let from = pos - offset;
@@ -1209,6 +1194,13 @@ fn snappy_decompress_into(body: &[u8], plain: &mut [u8], expected: usize) -> Res
         return Err(Error::Page(PageError::Truncated));
     }
     Ok(len)
+}
+
+fn span(start: usize, len: usize) -> Result<std::ops::Range<usize>, Error> {
+    let end = start
+        .checked_add(len)
+        .ok_or(Error::Message("snappy block is corrupt"))?;
+    Ok(start..end)
 }
 
 #[cfg(test)]
@@ -1247,6 +1239,7 @@ mod snappy_tests {
             &[2, 0x0c, b'a', b'b', b'c', b'd'],    // literal past the declared length
             &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff], // runaway varint
             &[3, 0x04, b'a', b'b'],                // short output
+            &[8, 0xfc, 0xff, 0xff, 0xff, 0xff],    // literal length at u32::MAX
         ] {
             assert!(decode(block, 8).is_err(), "{block:?}");
         }

@@ -181,14 +181,7 @@ impl GraphHost {
             read_at_ticket: 0,
             ring_capacity: capacity,
             spill_op: 0,
-            spill_session: 0,
-            spill_max_rows: 0,
-            spill_max_bytes: 0,
-            spill_resume_seq: 0,
-            spill_resume_started: 0,
-            spill_append_len: 0,
             spill_append_buf: Vec::new(),
-            spill_resume_key: Vec::new(),
             spill_run_upload_mirror: Vec::new(),
             error: None,
         })
@@ -199,9 +192,8 @@ impl GraphHost {
             aggregate.publish_growth_gauges();
         }
         let (wcs_pending, active_inputs) = self.ingress_gauges();
-        let host_spill = (self.spill_append_buf.capacity()
-            + self.spill_run_upload_mirror.capacity()
-            + self.spill_resume_key.capacity()) as u64;
+        let host_spill =
+            (self.spill_append_buf.capacity() + self.spill_run_upload_mirror.capacity()) as u64;
         crate::exec::mem_growth::set_ingress(wcs_pending, active_inputs, host_spill);
         crate::exec::mem_growth::observe(force);
     }

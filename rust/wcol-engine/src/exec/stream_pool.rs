@@ -1,4 +1,4 @@
-//! Fixed input mailboxes (up to 100) and logical output ports (up to 100)
+//! Fixed input mailboxes and logical output ports (up to 128 each, see below)
 //! backed by one bounded egress buffer per logical output port.
 
 use crate::error::{WcolError, WcolResult};
@@ -95,6 +95,12 @@ impl StreamPoolSession {
     ) -> WcolResult<Self> {
         Self::validate_counts(input_ports, output_ports)?;
         let mut host = open_wcol_plan_shared(program, scratch_capacity, budget_share)?;
+        if host.hash_partition_count() > output_ports {
+            return Err(WcolError::msg(format!(
+                "program writes {} hash partitions but the pool has {output_ports} output ports",
+                host.hash_partition_count()
+            )));
+        }
         host.enable_direct_port_egress();
         Self::open(
             input_ports,
@@ -192,10 +198,10 @@ impl StreamPoolSession {
         self.error.as_ref().map(WcolError::as_str)
     }
 
-    pub fn input_ptr(&self, port: u32) -> *mut u8 {
+    pub fn input_ptr(&mut self, port: u32) -> *mut u8 {
         self.inputs
-            .get(port as usize)
-            .map_or(std::ptr::null_mut(), |p| p.buf.data.as_ptr() as *mut u8)
+            .get_mut(port as usize)
+            .map_or(std::ptr::null_mut(), |p| p.buf.data.as_mut_ptr())
     }
 
     pub fn input_free(&self, port: u32) -> u32 {
@@ -579,20 +585,19 @@ impl StreamPoolSession {
         if host.hash_partition_count() > 0 {
             let parts = host.hash_partition_count() as usize;
             for part in 0..parts {
-                if outputs
-                    .get(part)
-                    .is_some_and(|o| o.full || o.buf.data.is_empty())
-                {
-                    if outputs.get(part).is_some_and(|o| o.buf.data.is_empty()) {
-                        return false;
-                    }
+                // `open_graph` checked the partition count against the output ports.
+                let Some(out) = outputs.get_mut(part) else {
+                    *error = Some(WcolError::from("hash partition has no output port"));
+                    return false;
+                };
+                if out.buf.data.is_empty() {
+                    return false;
+                }
+                if out.full || !host.hash_opened(part) {
                     continue;
                 }
-                if !host.hash_opened(part) {
-                    continue;
-                }
-                let cap = outputs[part].buf.data.len();
-                let n = match host.hash_write_partition(part, &mut outputs[part].buf.data[..cap]) {
+                let cap = out.buf.data.len();
+                let n = match host.hash_write_partition(part, &mut out.buf.data[..cap]) {
                     Ok(n) => n,
                     Err(e) => {
                         *error = Some(WcolError::msg(e.to_string()));
@@ -608,9 +613,9 @@ impl StreamPoolSession {
                     ));
                     return false;
                 }
-                outputs[part].buf.len = n;
-                outputs[part].len = n;
-                outputs[part].full = true;
+                out.buf.len = n;
+                out.len = n;
+                out.full = true;
                 return true;
             }
             return false;
@@ -631,7 +636,10 @@ impl StreamPoolSession {
         if !Self::publish_output(outputs, 0, &pending[..n], error) {
             return false;
         }
-        let _ = host.consume_output(n);
+        if let Err(err) = host.consume_output(n) {
+            *error = Some(err);
+            return false;
+        }
         true
     }
 
@@ -681,10 +689,7 @@ impl StreamPoolSession {
     }
 
     pub fn spill_op(&self) -> u8 {
-        self.graph_host()
-            .map(WcolSession::spill_exec)
-            .map(|s| s.0)
-            .unwrap_or(0)
+        self.graph_host().map(WcolSession::spill_op).unwrap_or(0)
     }
 
     pub fn spill_append_bytes(&self) -> &[u8] {
@@ -707,11 +712,11 @@ impl StreamPoolSession {
             .spill_run_read_slot(len)
     }
 
-    pub fn complete_spill(&mut self, ok: bool, scan_page: &[u8]) -> WcolResult<()> {
+    pub fn complete_spill(&mut self, ok: bool) -> WcolResult<()> {
         let Some(host) = self.graph_host_mut() else {
             return Err(WcolError::from("spill on echo session"));
         };
-        host.complete_spill(ok, scan_page)
+        host.complete_spill(ok)
     }
 }
 

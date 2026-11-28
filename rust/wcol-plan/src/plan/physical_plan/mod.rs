@@ -113,36 +113,19 @@ pub fn lower_to_physical(
         return build_metadata_plan(answer);
     }
 
-    let mut pending = Vec::new();
-    match &shape.input {
-        Input::Scan(scan) => pending.push(resolve(0, scan, metadata)?),
-        Input::Join { left, right, .. } => {
-            pending.push(resolve(0, left, metadata)?);
-            pending.push(resolve(1, right, metadata)?);
-        }
-    }
-    for unit in pending.iter_mut().flatten() {
+    let mut units = resolve(0, &shape.scan, metadata)?;
+    for unit in units.iter_mut() {
         unit.weight = unit_cost(&unit.drafts, config);
     }
-    let planned_bytes = pending
+    let planned_bytes = units
         .iter()
-        .flatten()
         .fold(0u64, |sum, unit| sum.saturating_add(unit.weight));
     let cap = (nodes.len() as u32).min(config.max_nodes).max(1);
     let mut capped = config.clone();
     capped.max_nodes = cap;
     // A scan node reads one object (its fetch and decode state is keyed by offset in that
     // object), so a table of several objects needs at least one node per object.
-    let objects = pending
-        .iter()
-        .map(|side| object_count(side))
-        .max()
-        .unwrap_or(1);
-    if objects > 1 && matches!(shape.input, Input::Join { .. }) {
-        return Err(PlanError::Unsupported(
-            "a join over a table of several objects",
-        ));
-    }
+    let objects = object_count(&units);
     if objects > cap as usize {
         return Err(PlanError::Unsupported(
             "the table has more objects than scan nodes",
@@ -151,11 +134,7 @@ pub fn lower_to_physical(
     let count = (planned_node_slots(planned_bytes, &capped) as usize).max(objects);
     let placed: Vec<NodeId> = nodes.iter().copied().take(count).collect();
     let nodes = placed.as_slice();
-    let mut units = Vec::new();
-    for mut side in pending {
-        place(&mut side, nodes);
-        units.extend(side);
-    }
+    place(&mut units, nodes);
 
     let logical_reads = number_reads(&mut units, nodes)?;
     let (fetches, piece_lists) = coalesce(&logical_reads, nodes, config)?;

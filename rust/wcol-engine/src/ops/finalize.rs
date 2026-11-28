@@ -188,22 +188,7 @@ fn push_aggregate_column(
                 _ => stat.max_i,
             })
             .collect();
-        if wide.iter().all(|value| i64::try_from(*value).is_ok()) {
-            batch.push_i64_column(column, wide.iter().map(|v| *v as i64).collect(), valid);
-        } else {
-            // A SUM past i64 (DuckDB's HUGEINT): exact decimal text, never a rounded float.
-            let mut offsets = vec![0u32];
-            let mut bytes = Vec::new();
-            for (value, present) in wide.iter().zip(&valid) {
-                if *present != 0 {
-                    bytes.extend_from_slice(value.to_string().as_bytes());
-                }
-                offsets
-                    .push(u32::try_from(bytes.len()).map_err(|_| "aggregate text exceeds 4 GiB")?);
-            }
-            batch.push_utf8_column(column, offsets, bytes, valid);
-        }
-        return Ok(());
+        return push_wide_integer_column(batch, column, &wide, valid);
     }
     let values = stats
         .iter()
@@ -222,6 +207,32 @@ fn push_aggregate_column(
         })
         .collect::<Result<_, String>>()?;
     batch.push_f64_column(column, values, valid);
+    Ok(())
+}
+
+/// An integer column that may outgrow `i64`: `i64` when every value fits, else exact
+/// decimal text (DuckDB's HUGEINT for a SUM), never a rounded float. The coordinator sort
+/// reads such text back as integers (`ops::sort`), so ORDER BY stays numeric.
+pub(crate) fn push_wide_integer_column(
+    batch: &mut OwnedWcolBatch,
+    column: u32,
+    values: &[i128],
+    valid: Vec<u8>,
+) -> Result<(), String> {
+    if values.iter().all(|value| i64::try_from(*value).is_ok()) {
+        batch.push_i64_column(column, values.iter().map(|v| *v as i64).collect(), valid);
+        return Ok(());
+    }
+    let mut offsets = Vec::with_capacity(values.len() + 1);
+    offsets.push(0u32);
+    let mut bytes = Vec::new();
+    for (value, present) in values.iter().zip(&valid) {
+        if *present != 0 {
+            bytes.extend_from_slice(value.to_string().as_bytes());
+        }
+        offsets.push(u32::try_from(bytes.len()).map_err(|_| "aggregate text exceeds 4 GiB")?);
+    }
+    batch.push_utf8_column(column, offsets, bytes, valid);
     Ok(())
 }
 

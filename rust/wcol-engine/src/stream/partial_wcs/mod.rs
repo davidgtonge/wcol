@@ -24,22 +24,12 @@ const VALUES_WHOLE_F64: u8 = 4;
 const NULLS_CONSTANT: u8 = 0;
 const NULLS_RAW: u8 = 1;
 
-/// WCS `FRAME_PARTIAL` body format (logical WCOL partial on the wire).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PartialWireFormat {
-    Unknown,
-    PwclV1,
-}
+/// Smallest encoded column: id, value tag, no value bytes (zero rows), null tag.
+const MIN_COLUMN_BYTES: usize = 6;
+/// Encoded aggregate spec: kind byte and column id.
+const AGG_BYTES: usize = 5;
 
-pub fn partial_wire_format(bytes: &[u8]) -> PartialWireFormat {
-    if bytes.len() >= 4 && &bytes[..4] == PWCL_MAGIC {
-        PartialWireFormat::PwclV1
-    } else {
-        PartialWireFormat::Unknown
-    }
-}
-
-/// Encode logical partial state for a WCS partial frame (primary I-03 wire format).
+/// Encode logical partial state for a WCS partial frame.
 pub fn partial_state_to_wcs_payload(state: &PartialStateWcol) -> Result<Vec<u8>, String> {
     if state.schema.version != PARTIAL_SCHEMA_VERSION {
         return Err("unsupported partial schema version".to_string());
@@ -126,6 +116,11 @@ fn decode_pwcl(bytes: &[u8]) -> Result<PartialStateWcol, String> {
     let group_key_float_mask = take_u32(bytes, &mut at)?;
     let group_key_string_mask = take_u32(bytes, &mut at)?;
     let agg_count = take_u32(bytes, &mut at)? as usize;
+    // Payloads arrive from other workers: bound every count by the bytes it needs before
+    // allocating for it.
+    if agg_count > remaining(bytes, at) / AGG_BYTES {
+        return Err("PWCL aggregate count exceeds payload".to_string());
+    }
     let mut aggs = Vec::with_capacity(agg_count);
     for _ in 0..agg_count {
         aggs.push(PartialAggSpec {
@@ -149,10 +144,7 @@ fn decode_pwcl(bytes: &[u8]) -> Result<PartialStateWcol, String> {
             if agg as usize >= aggs.len() {
                 return Err("PWCL sketch for a missing aggregate".to_string());
             }
-            let mut offsets = Vec::with_capacity(row_count + 1);
-            for _ in 0..=row_count {
-                offsets.push(take_u32(bytes, &mut at)?);
-            }
+            let offsets = take_offsets(bytes, &mut at, row_count)?;
             let len = take_u32(bytes, &mut at)? as usize;
             let body = bytes
                 .get(at..at.checked_add(len).ok_or("truncated PWCL sketches")?)
@@ -175,10 +167,7 @@ fn decode_pwcl(bytes: &[u8]) -> Result<PartialStateWcol, String> {
         let count = take_u32(bytes, &mut at)? as usize;
         for _ in 0..count {
             let key_index = take_u8(bytes, &mut at)?;
-            let mut offsets = Vec::with_capacity(row_count + 1);
-            for _ in 0..=row_count {
-                offsets.push(take_u32(bytes, &mut at)?);
-            }
+            let offsets = take_offsets(bytes, &mut at, row_count)?;
             let len = take_u32(bytes, &mut at)? as usize;
             let body = bytes
                 .get(at..at.checked_add(len).ok_or("truncated PWCL string keys")?)
@@ -322,8 +311,7 @@ fn whole_f64(bits: i64) -> Option<i64> {
 
 fn decode_columns(bytes: &[u8], at: &mut usize, rows: usize) -> Result<Vec<PartialColumn>, String> {
     let count = take_u32(bytes, at)? as usize;
-    // Bodies arrive from other workers: bound allocations by what the payload can hold.
-    if count > bytes.len() {
+    if count > remaining(bytes, *at) / MIN_COLUMN_BYTES {
         return Err("PWCL column count exceeds payload".to_string());
     }
     let mut columns = Vec::with_capacity(count);
@@ -412,6 +400,25 @@ fn take_varint(bytes: &[u8], at: &mut usize) -> Result<u64, String> {
         }
     }
     Err("PWCL varint is too long".to_string())
+}
+
+fn remaining(bytes: &[u8], at: usize) -> usize {
+    bytes.len().saturating_sub(at)
+}
+
+/// `rows + 1` little-endian `u32` offsets.
+fn take_offsets(bytes: &[u8], at: &mut usize, rows: usize) -> Result<Vec<u32>, String> {
+    let raw = take_bytes(
+        bytes,
+        at,
+        rows.checked_add(1)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or("PWCL rows overflow")?,
+    )?;
+    Ok(raw
+        .chunks_exact(4)
+        .map(|cell| u32::from_le_bytes(cell.try_into().unwrap()))
+        .collect())
 }
 
 fn take_bytes<'a>(bytes: &'a [u8], at: &mut usize, len: usize) -> Result<&'a [u8], String> {

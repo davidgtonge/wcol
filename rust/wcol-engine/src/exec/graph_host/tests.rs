@@ -402,3 +402,12 @@ fn dictionaries_leave_with_the_stream_that_installed_them() {
     pump(&mut host);
     assert_eq!(host.retained_dictionary_count(), 0);
 }
+
+#[test]
+fn a_failed_host_spill_fails_the_session_not_the_completion() {
+    let mut host = partial_host();
+    host.complete_spill(false).unwrap();
+    assert_eq!(host.spill_op(), 0);
+    assert!(matches!(host.poll(), Action::Failed));
+    assert_eq!(host.error(), Some("spill host operation failed"));
+}

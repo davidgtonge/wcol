@@ -144,14 +144,8 @@ fn drive_q3_ingest(
 
 fn assert_owned_ingest_zero_replays(run: &Q3MemoryRun) {
     assert_eq!(
-        run.replay.page_replay_count,
-        0,
-        "ingest replay should be zero with owned PageCursor (amplification {:.2})",
-        run.replay.replay_amplification(),
-    );
-    assert!(
-        run.replay.replay_amplification() <= 1.01,
-        "unexpected replay amplification: {:?}",
+        run.replay.page_replay_count, 0,
+        "ingest replay should be zero with owned PageCursor: {:?}",
         run.replay,
     );
 }
@@ -159,11 +153,8 @@ fn assert_owned_ingest_zero_replays(run: &Q3MemoryRun) {
 fn log_replay_metrics(run: &Q3MemoryRun) {
     let m = run.replay;
     eprintln!(
-        "memory_plateau: replay page_replays={} events_visited={} events_committed={} amplification={:.2}",
-        m.page_replay_count,
-        m.page_events_visited,
-        m.page_events_committed,
-        m.replay_amplification(),
+        "memory_plateau: replay page_replays={} events_visited={} events_committed={}",
+        m.page_replay_count, m.page_events_visited, m.page_events_committed,
     );
 }
 
@@ -278,7 +269,6 @@ fn flat_three_columns_batch_four_streaming() {
         }
         assert_eq!(rows, plan.rows as usize, "leaf {leaf_id}");
         let m = scan.replay_metrics();
-        eprintln!("leaf {leaf_id} replay amp {:.2}", m.replay_amplification());
         assert_eq!(
             m.page_replay_count, 0,
             "leaf {leaf_id} should use owned PageCursor (metrics {m:?})"

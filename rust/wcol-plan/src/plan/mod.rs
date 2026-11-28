@@ -4,7 +4,6 @@ pub mod bind;
 pub mod coordinator_fragment;
 pub mod distributed;
 pub mod execution_graph;
-pub mod footer_split;
 pub mod hash_group;
 pub mod host_ffi;
 pub mod job;
@@ -53,7 +52,7 @@ pub use job::{
     bind_partition_columns, manifest_object_key, parse_job_request, AttemptLog, AttemptReport,
     IdempotencyTable, JobRequest, NamedObject, ObjectLocation,
 };
-pub use logical_from_parser::{lower_query_plan, lower_sql_v0_to_logical, LowerQueryPlanError};
+pub use logical_from_parser::{lower_query_plan, lower_sql_v0_to_logical};
 pub use logical_wire::{decode_logical_plan, encode_logical_plan, LogicalWireError};
 pub use node_fragment::{
     decode_node_fragment, encode_node_fragment, encode_node_fragment_program, node_fragments,
@@ -71,10 +70,7 @@ pub use page_compaction::{
     CompactionInputFile, CopySegment, MergedColumnPlan, MergedRowGroupPlan, PageCompactionPartPlan,
     PageCompactionPartRecord, PageCompactionPlan, PageCompactionPolicy,
 };
-pub use parquet_concat::{
-    concat_parquet_row_groups, CommittedParquetShard, ConcatPolicy,
-    DEFAULT_CONCAT_FOOTER_BUDGET_BYTES,
-};
+pub use parquet_concat::{concat_parquet_row_groups, CommittedParquetShard};
 pub use physical_plan::{
     estimated_distinct_groups, hash_reducer_count, lower_to_physical, AggExpr, AggKind, ByteSpan,
     ChunkMeta, CmpOp, Compare, FetchPiece, FetchRequest, Literal, LogicalOp, LogicalRead, NodeId,

@@ -2,7 +2,7 @@
 
 Distributed SQL over Parquet on Cloudflare. A Rust engine, compiled to Wasm, runs inside Workers and Durable Objects. Native Rust reducers run in Cloudflare Containers when a query's group state is too large for Durable Objects.
 
-It runs ClickBench (100M rows, one 14.8 GB Parquet file in R2) with nothing running between queries. Each job wakes the Durable Objects it needs. They hibernate when the job ends, and any containers are destroyed.
+It runs 33 of the 43 ClickBench queries (100M rows, one 14.8 GB Parquet file in R2; see [Status](#status)) with nothing running between queries. Each job wakes the Durable Objects it needs. They hibernate when the job ends, and any containers are destroyed.
 
 ```text
 POST /jobs ─► coordinator DO ─► plans the SQL into a graph of tasks
@@ -36,7 +36,7 @@ Parquet's Thrift metadata and page decoding come from [`compact-parquet-thrift`]
 
 ## Build and test
 
-You need Node 22, the Rust toolchain pinned in `rust/rust-toolchain.toml` (rustup installs it), the `wasm32-unknown-unknown` target, and `wasm-opt` from Binaryen.
+You need Node 22.12 or newer (Wrangler's minimum), the Rust toolchain pinned in `rust/rust-toolchain.toml` (rustup installs it), the `wasm32-unknown-unknown` target, and `wasm-opt` from Binaryen.
 
 ```bash
 git clone https://github.com/davidgtonge/wcol.git && cd wcol
@@ -78,7 +78,21 @@ curl -X POST "$WCOL_BASE_URL/jobs" \
 
 ## Status
 
-WCOL is a research project, not a product. It plans one source table per query: joins, window functions and a few ClickBench queries (Q18, Q35, Q42) are not supported.
+WCOL is a research project, not a product. It plans one source table per query: joins and window functions are not supported.
+
+Of ClickBench's 43 queries (numbered Q0–Q42), 33 run, and `npm run clickbench:local` checks them against DuckDB (as does `npm run clickbench:cloudflare` with `CLICKBENCH_TSV=1`). They are listed in `scripts/clickbench-queries.tsv`, beside extra non-ClickBench probes. The planner does not support seven:
+
+| Query | Missing |
+|---|---|
+| Q18 | `extract(minute FROM ...)` |
+| Q27 | `length()`, `HAVING` |
+| Q28 | `REGEXP_REPLACE`, `length()`, `HAVING` |
+| Q34 | a constant in the `SELECT` list (`SELECT 1, URL, ...`) |
+| Q35 | arithmetic on a group key (`GROUP BY ClientIP - 1, ...`) |
+| Q39 | `CASE WHEN` |
+| Q42 | `DATE_TRUNC` |
+
+Q17, Q21 and Q22 plan but are not in the checked list: Q17 has `LIMIT` without `ORDER BY`, so any ten groups are a correct answer, and Q21 and Q22 (`MIN` of a string column) are not yet checked.
 
 Contributors, human or AI, should read [AGENTS.md](AGENTS.md), which sets out how the code is meant to be structured.
 

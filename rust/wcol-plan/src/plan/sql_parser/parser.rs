@@ -537,12 +537,18 @@ impl<'a> Parser<'a> {
 
         self.expect(TokKind::RParen)?;
 
-        // v0 strictness: SUM/AVG/MIN/MAX/APPROX_COUNT_DISTINCT cannot take Star
-        // DISTINCT only allowed with COUNT, not with approx_count_distinct (it's inherently distinct)
+        // SUM/AVG/MIN/MAX cannot take `*`, and only COUNT takes DISTINCT
+        // (approx_count_distinct is distinct by definition).
+        if func == AggFn::Count && distinct && matches!(arg, Expr::Star) {
+            return Err(ParseError {
+                msg: "COUNT(DISTINCT *) is not supported; name a column",
+                at: self.cur.start,
+            });
+        }
         if func != AggFn::Count {
             if distinct && func != AggFn::ApproxDistinct {
                 return Err(ParseError {
-                    msg: "DISTINCT only allowed with COUNT in v0",
+                    msg: "DISTINCT only allowed with COUNT",
                     at: self.cur.start,
                 });
             }

@@ -25,11 +25,6 @@ pub enum OpKind {
         group_by: Vec<u32>,
         aggregates: Vec<AggExpr>,
     },
-    /// Aggregates rows. Used when the input is a join result rather than partial states.
-    Aggregate {
-        group_by: Vec<u32>,
-        aggregates: Vec<AggExpr>,
-    },
     Exchange,
     /// Rows are hash-partitioned onto `partitions` reducers. Gather is [`OpKind::Exchange`].
     HashExchange {
@@ -37,15 +32,11 @@ pub enum OpKind {
         partitions: u32,
         hash_version: u32,
     },
-    /// Rows are range-partitioned for distributed global sort (Phase 2).
+    /// Rows are range-partitioned for distributed global sort.
     RangeExchange {
         keys: Vec<SortKey>,
         partitions: u32,
         splits: Vec<Vec<Scalar>>,
-    },
-    Join {
-        left_keys: Vec<u32>,
-        right_keys: Vec<u32>,
     },
     Sort {
         keys: Vec<SortKey>,

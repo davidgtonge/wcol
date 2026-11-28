@@ -1,7 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import { publishModel, publishParquet, publishedPointerMatches } from "../cloudflare/src/coordinator/publish.ts";
-import { rejectUnexecutable, type Prepared } from "../cloudflare/src/coordinator/plan.ts";
 import { graphObjectKey, type GraphJobRecord } from "../cloudflare/src/coordinator/record.ts";
 import { abortHashAttemptOnNode, acceptScanEdgeOnNode, refuseScanEdge } from "../cloudflare/src/node/reducer.ts";
 import { destinationForPort } from "../cloudflare/src/node/scan.ts";
@@ -110,19 +109,9 @@ describe("refused scan edges", () => {
 });
 
 describe("job publication", () => {
-  it("rejects concat and accepts a gather or hash graph", () => {
-    const concat = { plan: { kind: "concat" }, descriptor: { kind: "concat" }, graph: null } as Prepared;
-    assert.match(rejectUnexecutable(concat) ?? "", /concat output cannot execute/);
-    const gather = { plan: { kind: "json" }, descriptor: { kind: "json" }, graph: { edges: [{}] } } as unknown as Prepared;
-    assert.equal(rejectUnexecutable(gather), null);
-    const hashed = { plan: { kind: "parquet" }, descriptor: { kind: "parquet" }, graph: { edges: [{ partition: 0 }] } } as unknown as Prepared;
-    assert.equal(rejectUnexecutable(hashed), null);
-  });
-
   it("keeps each submission's graph at its own digest", () => {
     assert.equal(graphObjectKey("job", "abc"), "_jobs/job/graph-abc.bin");
     assert.notEqual(graphObjectKey("job", "abc"), graphObjectKey("job", "def"));
-    assert.equal(graphObjectKey("job"), "_jobs/job/graph.bin");
   });
 
   it("does not complete a job when the pointer conditional put loses", async () => {

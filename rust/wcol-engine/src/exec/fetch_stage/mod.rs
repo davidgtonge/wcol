@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::program::types::FetchPiece;
 use crate::program::{FetchRequest, LogicalRead};
 
 /// Host tickets for whole-plan fetches (distinct from decode slice tickets).
@@ -18,6 +19,52 @@ pub struct FetchStageMetrics {
     pub host_bytes: u64,
     /// Largest total of fetched bytes held at once, waiting for the decoder.
     pub peak_resident_bytes: u64,
+}
+
+/// Why a decode read cannot be served from loaded fetches yet.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SliceError {
+    /// A fetch the read needs has not arrived: load it, then retry the read.
+    #[error("fetch {fetch_id} not loaded")]
+    NotLoaded { fetch_id: u32 },
+    /// The fetch plan cannot serve this read; retrying will not help.
+    #[error("{0}")]
+    Plan(String),
+}
+
+impl SliceError {
+    fn plan(message: &str) -> Self {
+        Self::Plan(message.to_string())
+    }
+}
+
+/// The part of one fetch piece a read takes, in fetch-buffer coordinates.
+struct PieceTake {
+    fetch_id: u32,
+    in_fetch: u64,
+    len: u64,
+}
+
+impl PieceTake {
+    fn end_in_fetch(&self) -> u64 {
+        self.in_fetch.saturating_add(self.len)
+    }
+}
+
+/// The bytes of `piece` inside the read-relative range `[rel_start, rel_end)`, if any.
+fn piece_take(piece: &FetchPiece, rel_start: u64, rel_end: u64) -> Option<PieceTake> {
+    let piece_end = piece.read_offset.saturating_add(piece.length);
+    if piece_end <= rel_start || piece.read_offset >= rel_end {
+        return None;
+    }
+    let take_start = piece.read_offset.max(rel_start);
+    Some(PieceTake {
+        fetch_id: piece.fetch_id,
+        in_fetch: piece
+            .fetch_offset
+            .saturating_add(take_start - piece.read_offset),
+        len: piece_end.min(rel_end) - take_start,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,11 +177,8 @@ impl FetchStage {
         ticket >= FETCH_TICKET_BASE
     }
 
-    /// Move the fetch covering `offset` to the front of the load queue.
-    pub fn prioritize_fetch_covering(&mut self, offset: u64) {
-        let Some(fetch_id) = self.fetch_id_for_absolute(offset) else {
-            return;
-        };
+    /// Move `fetch_id` to the front of the load queue unless it is loaded or in flight.
+    pub fn prioritize_fetch(&mut self, fetch_id: u32) {
         if self.buffers.contains_key(&fetch_id) || self.in_flight.values().any(|id| *id == fetch_id)
         {
             return;
@@ -146,63 +190,64 @@ impl FetchStage {
         self.queue.push_front(index);
     }
 
-    /// Slice bytes for a decode ReadAt at absolute file `offset`.
-    pub fn slice_for_range(&mut self, offset: u64, length: u32) -> Result<Vec<u8>, String> {
-        let length = length as u64;
+    /// Slice bytes for a decode ReadAt at absolute file `offset`. Every piece is checked
+    /// before any is consumed: a read straddling a loaded fetch and one still on its way
+    /// must leave the loaded buffer and its remaining count untouched for the retry.
+    pub fn slice_for_range(&mut self, offset: u64, length: u32) -> Result<Vec<u8>, SliceError> {
+        let length = u64::from(length);
         if length == 0 {
             return Ok(Vec::new());
         }
         let end = offset
             .checked_add(length)
-            .ok_or_else(|| "read range overflow".to_string())?;
+            .ok_or_else(|| SliceError::plan("read range overflow"))?;
         let read = self
             .logical_reads
             .iter()
-            .find(|read| {
-                let read_end = read.offset.saturating_add(read.length);
-                offset >= read.offset && end <= read_end
-            })
-            .ok_or_else(|| format!("no logical read covers [{offset}, {end})"))?;
+            .find(|read| offset >= read.offset && end <= read.offset.saturating_add(read.length))
+            .ok_or_else(|| SliceError::Plan(format!("no logical read covers [{offset}, {end})")))?;
         if read.pieces.is_empty() {
-            return Err("logical read has no fetch pieces".to_string());
+            return Err(SliceError::plan("logical read has no fetch pieces"));
         }
-        let mut out = Vec::with_capacity(length as usize);
         let rel_start = offset - read.offset;
-        let rel_end = rel_start + length;
-        for piece in &read.pieces {
-            let piece_start = piece.read_offset;
-            let piece_end = piece.read_offset.saturating_add(piece.length);
-            if piece_end <= rel_start || piece_start >= rel_end {
-                continue;
-            }
-            let take_start = piece_start.max(rel_start);
-            let take_end = piece_end.min(rel_end);
-            let take_len = take_end - take_start;
+        let takes: Vec<PieceTake> = read
+            .pieces
+            .iter()
+            .filter_map(|piece| piece_take(piece, rel_start, rel_start + length))
+            .collect();
+        let covered: u64 = takes.iter().map(|take| take.len).sum();
+        if covered != length {
+            return Err(SliceError::Plan(format!(
+                "plan pieces did not cover decode read (got {covered} want {length})"
+            )));
+        }
+        for take in &takes {
             let buffer = self
                 .buffers
-                .get(&piece.fetch_id)
-                .ok_or_else(|| format!("fetch {} not loaded", piece.fetch_id))?;
-            let in_fetch = piece.fetch_offset.saturating_add(take_start - piece_start);
-            let end_in_fetch = in_fetch.saturating_add(take_len);
-            if end_in_fetch as usize > buffer.len() {
-                return Err("fetch buffer shorter than plan".to_string());
+                .get(&take.fetch_id)
+                .ok_or(SliceError::NotLoaded {
+                    fetch_id: take.fetch_id,
+                })?;
+            if take.end_in_fetch() > buffer.len() as u64 {
+                return Err(SliceError::plan("fetch buffer shorter than plan"));
             }
-            out.extend_from_slice(&buffer[in_fetch as usize..end_in_fetch as usize]);
-            let rem = self
-                .remaining_in_fetch
-                .get_mut(&piece.fetch_id)
-                .ok_or_else(|| "fetch remaining bytes missing".to_string())?;
-            *rem = rem.saturating_sub(take_len);
-            if *rem == 0 {
-                self.remaining_in_fetch.remove(&piece.fetch_id);
-                self.buffers.remove(&piece.fetch_id);
+            if !self.remaining_in_fetch.contains_key(&take.fetch_id) {
+                return Err(SliceError::plan("fetch remaining bytes missing"));
             }
         }
-        if out.len() as u64 != length {
-            return Err(format!(
-                "plan pieces did not cover decode read (got {} want {length})",
-                out.len()
-            ));
+        let mut out = Vec::with_capacity(length as usize);
+        for take in &takes {
+            let buffer = &self.buffers[&take.fetch_id];
+            out.extend_from_slice(&buffer[take.in_fetch as usize..take.end_in_fetch() as usize]);
+            let rem = self
+                .remaining_in_fetch
+                .get_mut(&take.fetch_id)
+                .ok_or_else(|| SliceError::plan("fetch remaining bytes missing"))?;
+            *rem = rem.saturating_sub(take.len);
+            if *rem == 0 {
+                self.remaining_in_fetch.remove(&take.fetch_id);
+                self.buffers.remove(&take.fetch_id);
+            }
         }
         Ok(out)
     }
@@ -373,16 +418,6 @@ impl FetchStage {
                 && !self.buffers.contains_key(&fetch.id)
                 && !self.in_flight.values().any(|id| *id == fetch.id)
         })
-    }
-
-    fn fetch_id_for_absolute(&self, offset: u64) -> Option<u32> {
-        self.fetches
-            .iter()
-            .find(|fetch| {
-                let end = fetch.offset.saturating_add(fetch.length);
-                offset >= fetch.offset && offset < end
-            })
-            .map(|fetch| fetch.id)
     }
 }
 

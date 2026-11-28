@@ -12,7 +12,7 @@ use crate::formats::parquet::RowGroupSpec;
 pub enum IngestMemoryProfile {
     #[default]
     ExecutionGroup = 0,
-    /// [`ScanMemoryBudget::q3_acceptance_restrictive`] per row group (I-09 gate).
+    /// [`ScanMemoryBudget::q3_acceptance_restrictive`] per row group.
     Q3Restrictive = 1,
 }
 

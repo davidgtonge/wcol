@@ -84,18 +84,6 @@ fn collect_batches(scan: &mut NumericScan, cap: usize) -> Vec<usize> {
                 scan.advance_batch(rows).unwrap();
                 out.push(rows);
             }
-            DecodeProgress::Advanced => {
-                for _ in 0..64 {
-                    if scan.decode_exhausted() {
-                        break;
-                    }
-                    match scan.poll(0).unwrap() {
-                        DecodeProgress::Finished | DecodeProgress::Advanced => continue,
-                        DecodeProgress::BatchReady { .. } => panic!("unexpected batch on drain"),
-                        DecodeProgress::NeedInput => panic!("unexpected NeedInput on drain"),
-                    }
-                }
-            }
             DecodeProgress::Finished => break,
             DecodeProgress::NeedInput => panic!("unexpected NeedInput"),
         }
@@ -248,18 +236,6 @@ fn collect_materialized_values(scan: &mut NumericScan, cap: usize) -> (Vec<usize
                 scan.advance_batch(rows).unwrap();
                 sizes.push(rows);
             }
-            DecodeProgress::Advanced => {
-                for _ in 0..64 {
-                    if scan.decode_exhausted() {
-                        break;
-                    }
-                    match scan.poll(0).unwrap() {
-                        DecodeProgress::Finished | DecodeProgress::Advanced => continue,
-                        DecodeProgress::BatchReady { .. } => panic!("unexpected batch on drain"),
-                        DecodeProgress::NeedInput => panic!("unexpected NeedInput on drain"),
-                    }
-                }
-            }
             DecodeProgress::Finished => break,
             DecodeProgress::NeedInput => panic!("unexpected NeedInput"),
         }
@@ -330,7 +306,7 @@ fn collect_f64(scan: &mut NumericScan, cap: usize) -> Vec<(f64, u8)> {
                 scan.advance_batch(rows).unwrap();
             }
             DecodeProgress::Finished => return out,
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => continue,
+            DecodeProgress::NeedInput => continue,
         }
     }
 }
@@ -400,7 +376,7 @@ fn plain_and_dictionary_f64_keep_nan_infinities_signed_zero_and_null() {
                 scan.advance_batch(rows).unwrap();
             }
             DecodeProgress::Finished => break,
-            DecodeProgress::Advanced | DecodeProgress::NeedInput => continue,
+            DecodeProgress::NeedInput => continue,
         }
     }
     let entries = scan.dictionary().copy_float_entries().unwrap();

@@ -118,7 +118,7 @@ fn parse_multiple_aggs_and_alias() {
 
 #[test]
 fn parse_offset_limit() {
-    // Parser expects OFFSET then LIMIT (v0)
+    // Parser expects OFFSET then LIMIT
     let sql = "SELECT URL FROM hits ORDER BY EventTime OFFSET 1000 LIMIT 10;";
     let q = parse_sql_v0(sql).unwrap();
     assert_eq!(q.offset, Some(1000));
@@ -319,6 +319,16 @@ fn rejects_malformed_string_literals() {
     }
     let q = parse_sql_v0("SELECT COUNT(*) FROM hits WHERE URL = 'é'").unwrap();
     assert!(q.where_.is_some());
+}
+
+#[test]
+fn rejects_joins() {
+    for sql in [
+        "SELECT COUNT(*) FROM hits JOIN users ON hits.UserID = users.UserID",
+        "SELECT COUNT(*) FROM hits, users",
+    ] {
+        assert!(parse_sql_v0(sql).is_err(), "accepted {sql}");
+    }
 }
 
 #[test]

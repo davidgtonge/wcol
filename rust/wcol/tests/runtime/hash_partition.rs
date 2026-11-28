@@ -1,10 +1,9 @@
-//! Milestone A: hash partition row conservation and deterministic routing.
+//! Hash exchange routing: row conservation and deterministic partitions.
 
 use std::sync::Arc;
 
-use wcol::exec::operator::{StreamProgress, WcolStreamItem};
 use wcol::ops::exchange::{
-    hash_row_keys_at, partition_index, HashPartitionIo, HashPartitionOp, HashPartitionPlan,
+    hash_row_keys_at, partition_index, split_owned_batch, BatchPartitionPlan, HashPartitionPlan,
     WCOL_EXCHANGE_HASH_VERSION_DEFAULT,
 };
 use wcol::stream::{DictionaryValues, OwnedWcolBatch};
@@ -22,62 +21,24 @@ fn composite_keys_differ_from_single_column() {
     assert_ne!(h0, h1);
 }
 
-fn run_batches(op: &mut HashPartitionOp, batches: Vec<OwnedWcolBatch>) -> u64 {
-    let parts = op.stats().row_counts.len();
-    let mut outs = vec![None; parts];
-    let mut iter = batches.into_iter();
-    let mut pending = iter.next().map(WcolStreamItem::from_row_batch);
-    let mut input_eof = false;
-    let mut emitted = 0u64;
-    loop {
-        let blocked = vec![false; parts];
-        let mut io = HashPartitionIo {
-            input: None,
-            input_slot: Some(&mut pending),
-            input_eof,
-            outputs: &mut outs,
-            outputs_blocked: &blocked,
-        };
-        match op.poll(&mut io).unwrap() {
-            StreamProgress::HaveOutput => {
-                for slot in outs.iter_mut() {
-                    if let Some(item) = slot.take() {
-                        emitted += item.batch().row_count() as u64;
-                    }
-                }
-            }
-            StreamProgress::NeedInput => {
-                if pending.is_none() && !input_eof {
-                    pending = iter.next().map(WcolStreamItem::from_row_batch);
-                    if pending.is_none() {
-                        input_eof = true;
-                    }
-                }
-            }
-            StreamProgress::Finished => break,
-            StreamProgress::Blocked => panic!("unexpected blocked"),
-            _ => {}
-        }
-    }
-    emitted
+fn split(plan: &HashPartitionPlan, batch: &OwnedWcolBatch) -> Vec<OwnedWcolBatch> {
+    split_owned_batch(&BatchPartitionPlan::Hash(plan.clone()), batch).unwrap()
 }
 
 #[test]
 fn row_conservation_multiple_batches() {
     let plan = HashPartitionPlan::new(vec![0], 4, WCOL_EXCHANGE_HASH_VERSION_DEFAULT).unwrap();
-    let mut op = HashPartitionOp::with_limits(plan, 8, 32).unwrap();
-    let inputs: Vec<OwnedWcolBatch> = (0..5)
-        .map(|chunk| {
-            let mut b = OwnedWcolBatch::empty();
-            let base = chunk * 10;
-            b.push_i64_column(0, (base..base + 10).collect(), vec![1; 10]);
-            b.set_row_count(10).unwrap();
-            b
-        })
-        .collect();
-    let emitted = run_batches(&mut op, inputs);
-    assert_eq!(emitted, 50);
-    assert_eq!(op.stats().row_counts.iter().sum::<u64>(), 50);
+    let mut per_partition = [0usize; 4];
+    for chunk in 0..5 {
+        let mut batch = OwnedWcolBatch::empty();
+        let base = chunk * 10;
+        batch.push_i64_column(0, (base..base + 10).collect(), vec![1; 10]);
+        batch.set_row_count(10).unwrap();
+        for (part, out) in split(&plan, &batch).iter().enumerate() {
+            per_partition[part] += out.row_count();
+        }
+    }
+    assert_eq!(per_partition.iter().sum::<usize>(), 50);
 }
 
 #[test]
@@ -100,14 +61,14 @@ fn dict_encoded_key_matches_plain_i64_partition() {
     );
     dict.set_row_count(1).unwrap();
 
-    let mut op1 = HashPartitionOp::for_keys(vec![7], 8).unwrap();
-    let mut op2 = HashPartitionOp::for_keys(vec![7], 8).unwrap();
-    run_batches(&mut op1, vec![plain]);
-    run_batches(&mut op2, vec![dict]);
-
-    let p_plain = op1.stats().row_counts.iter().position(|&c| c > 0).unwrap();
-    let p_dict = op2.stats().row_counts.iter().position(|&c| c > 0).unwrap();
-    assert_eq!(p_plain, p_dict);
+    let plan = HashPartitionPlan::new(vec![7], 8, WCOL_EXCHANGE_HASH_VERSION_DEFAULT).unwrap();
+    let occupied = |batch: &OwnedWcolBatch| {
+        split(&plan, batch)
+            .iter()
+            .position(|out| out.row_count() > 0)
+            .unwrap()
+    };
+    assert_eq!(occupied(&plain), occupied(&dict));
 }
 
 #[test]

@@ -16,14 +16,6 @@ impl BatchQuery {
             }
             return Ok(SpillProgress::Ready(()));
         }
-        let _flush = crate::exec::trace::guard("flush", self.live_group_len() as u64);
-        crate::exec::phase::mark(
-            crate::exec::phase::FLUSH_ENTER,
-            0,
-            self.live_group_len() as u32,
-            0,
-            u32::try_from(self.resident_state_bytes()).unwrap_or(u32::MAX),
-        );
         if self.spill_flush_at == 0 {
             let live_before = crate::formats::parquet::alloc_track::snapshot().live_bytes;
             reset_flush_probe(live_before.min(u32::MAX as usize) as u32);
@@ -139,11 +131,6 @@ impl BatchQuery {
                 merge_scan_begins,
                 merge_steps,
             });
-            let (queued, inflight) = spill_payload_pair();
-            debug_assert!(
-                queued == 0 && inflight == 0,
-                "spill payload retained after flush run (queued={queued}, inflight={inflight})"
-            );
         }
         spill_pull!(self.drain_spill_finish_runs());
         if let Some(spill) = self.spill.as_ref() {

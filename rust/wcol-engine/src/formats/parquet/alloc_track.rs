@@ -62,6 +62,18 @@ mod tracking {
             }
             ptr
         }
+
+        // Forwarded so dlmalloc can grow a block in place: the default realloc copies into a
+        // new block, keeping old and new alive together and raising peak memory. It costs
+        // about 96 KB of Wasm (dlmalloc's realloc), which the node budget allows for.
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            let grown = INNER.realloc(ptr, layout, new_size);
+            if !grown.is_null() {
+                sub(layout.size());
+                add(new_size);
+            }
+            grown
+        }
     }
 
     #[global_allocator]
